@@ -1,0 +1,4 @@
+{
+    "GROK_API_KEY": "your-grok-api-key-here",
+    "GROK_API_URL": "https://api.x.ai/v1/chat/completions"
+}
