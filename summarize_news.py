@@ -14,12 +14,11 @@ with open('config.json', 'r', encoding='utf-8') as f:
 
 def get_article_content(url):
     try:
-        response = requests.get(url, timeout=10)
+        response = requests.get(url, timeout=10, verify=False)  # 禁用SSL验证
         # 检查响应状态码，如果是错误状态码则直接返回空字符串
         if response.status_code in [403, 404] or response.status_code >= 500:
             print(f"Skipping due to HTTP error {response.status_code} for URL: {url}")
             return ""
-        response = requests.get(url, timeout=10)
         soup = BeautifulSoup(response.text, 'html.parser')
         # 移除脚本和样式元素
         for script in soup(["script", "style"]):
@@ -54,8 +53,9 @@ def generate_summary(text, prompt_type='article'):
             'Content-Type': 'application/json'
         }
         
-        prompt = f"请用中文总结以下{'文章' if prompt_type == 'article' else '讨论'}的主要内容（100字左右）：\n{text}"
-        
+        prompt = f"请用中文总结以下{'文章' if prompt_type == 'article' else '讨论'}的主要内容（100字左右）：\n{text},如果你认为这个文章并没有正确读取，请返回空字符串。"
+        '''你是一个专业的文章摘要助手。请用中文总结以下文章的主要内容（100字左右）并且根据文章翻译标题为中文'''
+        #如果文章摘要为空，或者不符合，使用上述promote粘贴文章内容到grok中，让grok帮你翻译标题，然后再生成文章摘要。
         data = {
             'messages': [
                 {
@@ -119,7 +119,7 @@ def process_news():
                 }
                 
                 # 将原标题和文章摘要一起提供给翻译模型
-                translation_prompt = f"请根据以下信息翻译标题：\n原标题：{title}\n文章摘要：{content_summary}\n请给出最准确、通顺的中文标题翻译,翻译的标题直接返回结果，无需添加任何额外内容。"
+                translation_prompt = f"请根据以下信息翻译标题：\n原标题：{title}\n文章摘要：{content_summary}\n请给出最准确、通顺的中文标题翻译,翻译的标题直接返回结果，无需添加任何额外内容，如果文章摘要为空，或者不符合，请直接返回空。"
                 
                 data = {
                     'messages': [
