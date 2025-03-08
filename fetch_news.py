@@ -3,6 +3,7 @@ from bs4 import BeautifulSoup
 import sqlite3
 import os
 from datetime import datetime
+import urllib.parse
 
 def create_database():
     conn = sqlite3.connect('hacknews.db')
@@ -19,8 +20,33 @@ def create_database():
         created_at TIMESTAMP
     )
     ''')
+    
+    # 创建过滤域名表
+    cursor.execute('''
+    CREATE TABLE IF NOT EXISTS filtered_domains (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        domain TEXT UNIQUE,
+        reason TEXT,
+        created_at TIMESTAMP
+    )
+    ''')
+    
     conn.commit()
     conn.close()
+
+def extract_domain(url):
+    """从URL中提取域名"""
+    try:
+        parsed_url = urllib.parse.urlparse(url)
+        domain = parsed_url.netloc
+        return domain
+    except:
+        return ""
+
+def is_domain_filtered(domain, cursor):
+    """检查域名是否在过滤列表中"""
+    cursor.execute('SELECT id FROM filtered_domains WHERE domain = ?', (domain,))
+    return cursor.fetchone() is not None
 
 def fetch_news():
     url = 'https://news.ycombinator.com/front'
@@ -31,6 +57,10 @@ def fetch_news():
     titles = soup.find_all('span', class_='titleline')
     subtext = soup.find_all('td', class_='subtext')
     
+    # 连接数据库获取过滤域名
+    conn = sqlite3.connect('hacknews.db')
+    cursor = conn.cursor()
+    
     for idx, (title, sub) in enumerate(zip(titles, subtext)):
         if idx >= 10:  # 只获取前10条新闻
             break
@@ -38,6 +68,12 @@ def fetch_news():
         title_link = title.find('a')
         news_title = title_link.text
         news_url = title_link['href']
+        
+        # 提取域名并检查是否被过滤
+        domain = extract_domain(news_url)
+        if domain and is_domain_filtered(domain, cursor):
+            print(f"跳过被过滤的域名: {domain}, 标题: {news_title}")
+            continue
         
         # 获取discuss链接
         discuss_link = sub.find('a', string=lambda text: text and 'comment' in text.lower())
@@ -53,6 +89,7 @@ def fetch_news():
             'discuss_url': discuss_url
         })
     
+    conn.close()
     return news_items
 
 def save_to_database(news_items):
@@ -73,6 +110,51 @@ def save_to_database(news_items):
             ''', (item['title'], item['news_url'], item['discuss_url'], datetime.now()))
     conn.commit()
     conn.close()
+
+def add_filtered_domain(domain, reason=""):
+    """添加一个需要过滤的域名"""
+    conn = sqlite3.connect('hacknews.db')
+    cursor = conn.cursor()
+    try:
+        cursor.execute('''
+        INSERT INTO filtered_domains (domain, reason, created_at)
+        VALUES (?, ?, ?)
+        ''', (domain, reason, datetime.now()))
+        conn.commit()
+        print(f"成功添加过滤域名: {domain}")
+    except sqlite3.IntegrityError:
+        print(f"域名 {domain} 已在过滤列表中")
+    finally:
+        conn.close()
+
+def remove_filtered_domain(domain):
+    """从过滤列表中移除一个域名"""
+    conn = sqlite3.connect('hacknews.db')
+    cursor = conn.cursor()
+    cursor.execute('DELETE FROM filtered_domains WHERE domain = ?', (domain,))
+    if cursor.rowcount > 0:
+        print(f"成功移除过滤域名: {domain}")
+    else:
+        print(f"域名 {domain} 不在过滤列表中")
+    conn.commit()
+    conn.close()
+
+def list_filtered_domains():
+    """列出所有被过滤的域名"""
+    conn = sqlite3.connect('hacknews.db')
+    cursor = conn.cursor()
+    cursor.execute('SELECT domain, reason, created_at FROM filtered_domains ORDER BY created_at DESC')
+    domains = cursor.fetchall()
+    conn.close()
+    
+    if not domains:
+        print("过滤列表为空")
+    else:
+        print("当前过滤的域名列表:")
+        for domain, reason, created_at in domains:
+            print(f"域名: {domain}, 原因: {reason}, 添加时间: {created_at}")
+    
+    return domains
 
 def main():
     create_database()

@@ -23,3 +23,6 @@ ENV/
 .vscode/
 *.swp
 *.swo
+
+# dbclint 配置文件
+hacknews.sqbpro
