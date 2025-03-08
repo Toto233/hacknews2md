@@ -4,6 +4,10 @@ import requests
 from bs4 import BeautifulSoup
 from datetime import datetime
 import json
+import urllib3
+
+# 禁用SSL证书验证警告
+urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
 # 初始化Grok API配置
 # 从配置文件加载API密钥和URL
@@ -53,8 +57,8 @@ def generate_summary(text, prompt_type='article'):
             'Content-Type': 'application/json'
         }
         
-        prompt = f"请用中文总结以下{'文章' if prompt_type == 'article' else '讨论'}的主要内容（100字左右）：\n{text},如果你认为这个文章并没有正确读取，请返回空字符串。"
-        '''你是一个专业的文章摘要助手。请用中文总结以下文章的主要内容（100字左右）并且根据文章翻译标题为中文'''
+        prompt = f"请用中文总结以下{'文章' if prompt_type == 'article' else '讨论'}的主要内容（130字左右）：\n{text},如果你认为这个文章并没有正确读取，请返回空字符串。"
+        '''你是一个专业的文章摘要助手。请用中文总结以下文章的主要内容（130字左右）并且根据文章翻译标题为中文'''
         #如果文章摘要为空，或者不符合，使用上述promote粘贴文章内容到grok中，让grok帮你翻译标题，然后再生成文章摘要。
         data = {
             'messages': [

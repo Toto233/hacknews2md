@@ -11,13 +11,13 @@ def generate_markdown():
     FROM news 
     WHERE content_summary IS NOT NULL 
     AND discuss_summary IS NOT NULL
-    AND created_at > datetime('now', '-0.5 day')
+    AND created_at > datetime('now', '-0.5 day', 'localtime')
     ORDER BY created_at DESC
     ''')
     news_items = cursor.fetchall()
     
     # 生成markdown内容
-    markdown_content = f"# Hacker News 摘要 ({datetime.now().strftime('%Y-%m-%d %H:%M')})\n"
+    markdown_content = f"# Hacker News 摘要 ({datetime.now().strftime('%Y-%m-%d')})\n"
     
     for idx, (title, title_chs, news_url, discuss_url, content_summary, discuss_summary) in enumerate(news_items, 1):
         # 标题部分：中文标题(英文标题)
