@@ -4,6 +4,7 @@ import sqlite3
 import os
 from datetime import datetime
 import urllib.parse
+import time
 
 def create_database():
     conn = sqlite3.connect('hacknews.db')
@@ -50,7 +51,28 @@ def is_domain_filtered(domain, cursor):
 
 def fetch_news():
     url = 'https://news.ycombinator.com/front'
-    response = requests.get(url)
+    headers = {
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+        'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
+        'Accept-Language': 'zh-CN,zh;q=0.9,en;q=0.8',
+        'Connection': 'keep-alive'
+    }
+    
+    max_retries = 3
+    retry_delay = 2  # 重试间隔秒数
+    
+    for attempt in range(max_retries):
+        try:
+            response = requests.get(url, headers=headers, timeout=10)
+            response.raise_for_status()
+            break
+        except (requests.RequestException) as e:
+            if attempt == max_retries - 1:
+                print(f"获取新闻失败: {e}")
+                return []
+            print(f"第{attempt + 1}次尝试失败，{retry_delay}秒后重试...")
+            time.sleep(retry_delay)
+    
     soup = BeautifulSoup(response.text, 'html.parser')
     
     news_items = []

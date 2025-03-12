@@ -3,6 +3,8 @@ config.json
 
 # Markdown文件
 hacknews_summary*.md
+mds/
+
 # Python缓存文件
 __pycache__/
 *.py[cod]

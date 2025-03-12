@@ -42,7 +42,7 @@ def get_discussion_content(url):
         response = requests.get(url, timeout=10)
         soup = BeautifulSoup(response.text, 'html.parser')
         comments = soup.find_all('div', class_='comment')
-        text = '\n'.join([comment.get_text(strip=True) for comment in comments[:5]])  # 只获取前5条评论
+        text = '\n'.join([comment.get_text(strip=True) for comment in comments[:10]])  # 只获取前10条评论
         return text[:3000]  # 限制文本长度
     except Exception as e:
         print(f"Error fetching discussion content: {e}")
@@ -57,14 +57,21 @@ def generate_summary(text, prompt_type='article'):
             'Content-Type': 'application/json'
         }
         
-        prompt = f"请用中文总结以下{'文章' if prompt_type == 'article' else '讨论'}的主要内容（130字左右）：\n{text},如果你认为这个文章并没有正确读取，请返回空字符串。"
-        '''你是一个专业的文章摘要助手。请用中文总结以下文章的主要内容（130字左右）并且根据文章翻译标题为中文'''
-        #如果文章摘要为空，或者不符合，使用上述promote粘贴文章内容到grok中，让grok帮你翻译标题，然后再生成文章摘要。
+        # 为文章和评论使用不同的提示语
+        if prompt_type == 'article':
+            prompt = f"请用中文总结以下文章的主要内容（250字左右）：\n{text}\n如果你认为这个文章并没有正确读取，请返回空字符串。总结不能生硬的截断，如果字数不够一句话，就调整输出内容。"
+        else:  # 评论提示语
+            prompt = f"请用中文总结以下讨论中的讨论内容（250字左右）：\n{text}\n如果讨论内容不充分或无法理解，请返回空字符串。总结不能生硬的截断，如果字数不够一句话，就调整输出内容。"
+        
+        # 移除未使用的多行注释
+        # 系统提示也根据类型调整
+        system_content = '你是一个专业的文章摘要助手。' if prompt_type == 'article' else '你是一个专业的讨论内容分析助手。'
+        
         data = {
             'messages': [
                 {
                     'role': 'system',
-                    'content': '你是一个专业的文章摘要助手。'
+                    'content': system_content
                 },
                 {
                     'role': 'user',
