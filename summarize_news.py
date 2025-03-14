@@ -59,12 +59,10 @@ def generate_summary(text, prompt_type='article'):
         
         # 为文章和评论使用不同的提示语
         if prompt_type == 'article':
-            prompt = f"请用中文总结以下文章的主要内容（250字左右）：\n{text}\n如果你认为这个文章并没有正确读取，请返回空字符串。总结不能生硬的截断，如果字数不够一句话，就调整输出内容。"
+            prompt = f"请用中文总结以下文章的主要内容（200-250字左右）：\n{text}\n如果你认为这个文章并没有正确读取，请返回空字符串。总结不能生硬的截断，如果字数不够一句话，就调整输出内容。"
         else:  # 评论提示语
-            prompt = f"请用中文总结以下讨论中的讨论内容（250字左右）：\n{text}\n如果讨论内容不充分或无法理解，请返回空字符串。总结不能生硬的截断，如果字数不够一句话，就调整输出内容。"
+            prompt = f"请用中文总结以下讨论中的讨论内容（200-250字左右）：\n{text}\n如果讨论内容不充分或无法理解，请返回空字符串。总结不能生硬的截断，如果字数不够一句话，就调整输出内容。"
         
-        # 移除未使用的多行注释
-        # 系统提示也根据类型调整
         system_content = '你是一个专业的文章摘要助手。' if prompt_type == 'article' else '你是一个专业的讨论内容分析助手。'
         
         data = {
@@ -88,7 +86,13 @@ def generate_summary(text, prompt_type='article'):
         response_json = response.json()
         
         if response.status_code == 200 and 'choices' in response_json:
-            return response_json['choices'][0]['message']['content'].strip()
+            summary = response_json['choices'][0]['message']['content'].strip()
+            
+            # 直接分割句子并返回除最后一句外的所有句子
+            sentences = summary.split('。')
+            if len(sentences) > 1:
+                return '。'.join(sentences[:-1]) + '。'
+            return summary
         else:
             print(f"Error from Grok API: {response.text}")
             return ""
