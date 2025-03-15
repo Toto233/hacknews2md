@@ -5,6 +5,8 @@ import os
 from datetime import datetime
 import urllib.parse
 import time
+# 导入归档模块
+from archive_news import archive_old_news
 
 def create_database():
     conn = sqlite3.connect('hacknews.db')
@@ -180,6 +182,9 @@ def list_filtered_domains():
 
 def main():
     create_database()
+    # 先执行归档操作，清理旧数据
+    archive_old_news()
+    # 然后获取新闻
     news_items = fetch_news()
     save_to_database(news_items)
     print(f'Successfully fetched and saved {len(news_items)} news items.')
