@@ -1,4 +1,8 @@
 requests
 beautifulsoup4
 sqlite3
+<<<<<<< HEAD
 colorama
+=======
+be4
+>>>>>>> ec771337ec8d679e572a9ab53bfb870ab48d98b1
