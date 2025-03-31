@@ -54,6 +54,16 @@ python generate_markdown.py
 - 注意控制 API 调用频率，避免超出限制
 - 注意，由于某些网站会屏蔽抓取，导致生成的摘要为空
 
+# 添加关键字
+python d:\python\hacknews\manage_keywords.py add 敏感词1
+
+# 列出所有关键字
+python d:\python\hacknews\manage_keywords.py list
+
+# 删除关键字
+python d:\python\hacknews\manage_keywords.py remove 敏感词1
+
+
 ## 贡献指南
 欢迎提交 Issue 和 Pull Request 来帮助改进项目。在提交代码前，请确保：
 - 代码符合 PEP 8 规范
