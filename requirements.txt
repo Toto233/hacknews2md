@@ -3,3 +3,4 @@ beautifulsoup4
 sqlite3
 colorama
 be4
+google-genai

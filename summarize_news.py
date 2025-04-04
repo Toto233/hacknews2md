@@ -11,25 +11,33 @@ import colorama
 # 禁用SSL证书验证警告
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
-# 初始化Grok API配置
+# 初始化LLM API配置
 # 从配置文件加载API密钥和URL
 with open('config.json', 'r', encoding='utf-8') as f:
     config = json.load(f)
+    # GROK配置
     GROK_API_KEY = config.get('GROK_API_KEY')
     GROK_API_URL = config.get('GROK_API_URL', 'https://api.x.ai/v1/chat/completions')
+    
+    # GEMINI配置
+    GEMINI_API_KEY = config.get('GEMINI_API_KEY')
+    GEMINI_API_URL = config.get('GEMINI_API_URL', 'https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent')
+    
+    # 默认LLM设置
+    DEFAULT_LLM = config.get('DEFAULT_LLM', 'grok')  # 默认使用grok，可选值: grok, gemini
 
 # 初始化colorama以支持控制台彩色输出
 colorama.init()
 
+# 删除重复的代码
 # 禁用SSL证书验证警告
-urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
+# urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
-# 初始化Grok API配置
-# 从配置文件加载API密钥和URL
-with open('config.json', 'r', encoding='utf-8') as f:
-    config = json.load(f)
-    GROK_API_KEY = config.get('GROK_API_KEY')
-    GROK_API_URL = config.get('GROK_API_URL', 'https://api.x.ai/v1/chat/completions')
+# 删除重复的配置加载
+# with open('config.json', 'r', encoding='utf-8') as f:
+#     config = json.load(f)
+#     GROK_API_KEY = config.get('GROK_API_KEY')
+#     GROK_API_URL = config.get('GROK_API_URL', 'https://api.x.ai/v1/chat/completions')
 
 def create_or_update_table():
     """创建或更新数据库表结构"""
@@ -143,45 +151,119 @@ def get_discussion_content(url):
         print(f"Error fetching discussion content: {e}")
         return ""
 
-def generate_summary(text, prompt_type='article'):
+def generate_summary(text, prompt_type='article', llm_type=None):
+    """
+    生成摘要，支持不同的LLM模型
+    
+    Args:
+        text: 需要总结的文本
+        prompt_type: 'article'或'discussion'
+        llm_type: 使用的LLM类型，None表示使用默认设置
+    
+    Returns:
+        生成的摘要文本
+    """
     if not text:
         return ""
+    
+    # 如果未指定LLM类型，使用默认设置
+    if llm_type is None:
+        llm_type = DEFAULT_LLM
+    
+    # 为文章和评论使用不同的提示语
+    if prompt_type == 'article':
+        prompt = f"将以下英文新闻用简洁准确的中文总结，200到250字。专业、简洁，符合中文新闻报道习惯。乐观、生动、对任何新鲜事都感兴趣。目标读者为一群爱好科技和 对有意思生活充满好奇的中文读者。请翻译并总结以下英文新闻的核心内容，突出背景、事件和影响，保留重要细节与数据，避免过多赘述。\n{text}\n如果你认为这个文章并没有正确读取，请返回空字符串。"
+        system_content = '你是一名专业的中文新闻编辑，擅长精准流畅地翻译和总结英文新闻。'
+    else:  # 评论提示语
+        prompt = f"下方的英文讨论为hacknews论坛的内容，返回文字中以论坛代替\"hacknews论坛\"，将以下英文讨论用简洁准确的中文总结，200到250字。尽量多的介绍不同讨论者的言论，避免对单个评论过多赘述。：\n{text}\n如果讨论内容不充分或无法理解，请返回空字符串。"
+        system_content = '你是一个专业的讨论内容分析助手，擅长中文新闻编辑，擅长精准流畅地翻译和总结英文评论。'
+    
     try:
-        headers = {
-            'Authorization': f'Bearer {GROK_API_KEY}',
-            'Content-Type': 'application/json'
-        }
+        # 根据LLM类型选择不同的API调用方式
+        if llm_type.lower() == 'grok':
+            return generate_summary_grok(prompt, system_content)
+        elif llm_type.lower() == 'gemini':
+            return generate_summary_gemini(prompt, system_content)
+        else:
+            print(f"不支持的LLM类型: {llm_type}，使用默认的Grok")
+            return generate_summary_grok(prompt, system_content)
+    except Exception as e:
+        print(f"生成摘要时出错: {e}")
+        # 如果主要LLM失败，尝试使用备用LLM
+        try:
+            backup_llm = 'gemini' if llm_type.lower() == 'grok' else 'grok'
+            print(f"尝试使用备用LLM: {backup_llm}")
+            if backup_llm == 'grok':
+                return generate_summary_grok(prompt, system_content)
+            else:
+                return generate_summary_gemini(prompt, system_content)
+        except Exception as e2:
+            print(f"备用LLM也失败了: {e2}")
+            return ""
+
+def generate_summary_grok(prompt, system_content):
+    """使用Grok API生成摘要"""
+    if not GROK_API_KEY:
+        print("错误: GROK_API_KEY未设置")
+        return ""
+    
+    headers = {
+        'Authorization': f'Bearer {GROK_API_KEY}',
+        'Content-Type': 'application/json'
+    }
+    
+    data = {
+        'messages': [
+            {
+                'role': 'system',
+                'content': system_content
+            },
+            {
+                'role': 'user',
+                'content': prompt
+            }
+        ],
+        'model': 'grok-2-latest',
+        'temperature': 0.7,
+        'max_tokens': 200,
+        'stream': False
+    }
+    
+    response = requests.post(GROK_API_URL, headers=headers, json=data, verify=True)
+    response_json = response.json()
+    
+    if response.status_code == 200 and 'choices' in response_json:
+        summary = response_json['choices'][0]['message']['content'].strip()
         
-        # 为文章和评论使用不同的提示语
-        if prompt_type == 'article':
-            prompt = f"将以下英文新闻用简洁准确的中文总结，200到250字。专业、简洁，符合中文新闻报道习惯。乐观、生动、对任何新鲜事都感兴趣。目标读者为一群爱好科技和 对有意思生活充满好奇的中文读者。请翻译并总结以下英文新闻的核心内容，突出背景、事件和影响，保留重要细节与数据，避免过多赘述。\n{text}\n如果你认为这个文章并没有正确读取，请返回空字符串。"
-        else:  # 评论提示语
-            prompt = f"将以下英文讨论用简洁准确的中文总结，200到250字。专业、简洁，符合中文新闻报道习惯。乐观、生动、对任何新鲜事都感兴趣。目标读者为一群爱好科技和 对有意思生活充满好奇的中文读者。请翻译并总结以下英文新闻的核心内容，突出背景、事件和影响，保留重要细节与数据，避免过多赘述。：\n{text}\n如果讨论内容不充分或无法理解，请返回空字符串。"
+        # 直接分割句子并返回除最后一句外的所有句子
+        sentences = summary.split('。')
+        if len(sentences) > 1:
+            return '。'.join(sentences[:-1]) + '。'
+        return summary
+    else:
+        print(f"Grok API错误: {response.text}")
+        return ""
+
+def generate_summary_gemini(prompt, system_content):
+    """使用Gemini API生成摘要"""
+    if not GEMINI_API_KEY:
+        print("错误: GEMINI_API_KEY未设置")
+        return ""
+    
+    try:
+        # 尝试使用Google官方API
+        from google import generativeai as genai
         
-        system_content = '你是一名专业的中文新闻编辑，擅长精准流畅地翻译和总结英文新闻。' if prompt_type == 'article' else '你是一个专业的讨论内容分析助手，擅长中文新闻编辑，擅长精准流畅地翻译和总结英文新闻。'
+        genai.configure(api_key=GEMINI_API_KEY)
+        model = genai.GenerativeModel('gemini-2.0-flash')
         
-        data = {
-            'messages': [
-                {
-                    'role': 'system',
-                    'content': system_content
-                },
-                {
-                    'role': 'user',
-                    'content': prompt
-                }
-            ],
-            'model': 'grok-2-latest',
-            'temperature': 0.7,
-            'max_tokens': 200,
-            'stream': False
-        }
+        # 合并system_content和prompt
+        full_prompt = f"{system_content}\n\n{prompt}"
         
-        response = requests.post(GROK_API_URL, headers=headers, json=data, verify=True)
-        response_json = response.json()
+        response = model.generate_content(full_prompt)
         
-        if response.status_code == 200 and 'choices' in response_json:
-            summary = response_json['choices'][0]['message']['content'].strip()
+        if hasattr(response, 'text'):
+            summary = response.text.strip()
             
             # 直接分割句子并返回除最后一句外的所有句子
             sentences = summary.split('。')
@@ -189,12 +271,165 @@ def generate_summary(text, prompt_type='article'):
                 return '。'.join(sentences[:-1]) + '。'
             return summary
         else:
-            print(f"Error from Grok API: {response.text}")
+            print("Gemini API返回格式错误")
             return ""
-    except Exception as e:
-        print(f"Error generating summary: {e}")
+    except ImportError:
+        # 如果没有安装Google API库，使用REST API
+        headers = {
+            'Content-Type': 'application/json'
+        }
+        
+        params = {
+            'key': GEMINI_API_KEY
+        }
+        
+        data = {
+            'contents': [
+                {
+                    'parts': [
+                        {
+                            'text': f"{system_content}\n\n{prompt}"
+                        }
+                    ]
+                }
+            ],
+            'generationConfig': {
+                'temperature': 0.7,
+                'maxOutputTokens': 200
+            }
+        }
+        
+        response = requests.post(
+            GEMINI_API_URL, 
+            headers=headers, 
+            params=params,
+            json=data
+        )
+        
+        if response.status_code == 200:
+            response_json = response.json()
+            if 'candidates' in response_json and len(response_json['candidates']) > 0:
+                summary = response_json['candidates'][0]['content']['parts'][0]['text'].strip()
+                
+                # 直接分割句子并返回除最后一句外的所有句子
+                sentences = summary.split('。')
+                if len(sentences) > 1:
+                    return '。'.join(sentences[:-1]) + '。'
+                return summary
+        
+        print(f"Gemini API错误: {response.text}")
         return ""
 
+# 修改翻译标题的部分，支持不同的LLM
+def translate_title(title, content_summary, llm_type=None):
+    """
+    翻译标题，支持不同的LLM模型
+    
+    Args:
+        title: 原始标题
+        content_summary: 文章摘要，提供上下文
+        llm_type: 使用的LLM类型，None表示使用默认设置
+    
+    Returns:
+        翻译后的标题
+    """
+    if not title or not content_summary:
+        return ""
+    
+    # 如果未指定LLM类型，使用默认设置
+    if llm_type is None:
+        llm_type = DEFAULT_LLM
+    
+    translation_prompt = f"请根据以下信息翻译标题：\n原标题：{title}\n文章摘要：{content_summary}\n请给出最准确、通顺的中文标题翻译,翻译的标题直接返回结果，无需添加任何额外内容，如果文章摘要为空，或者不符合，请直接返回空。"
+    system_content = '你是一个专业的翻译助手，需要根据文章上下文提供准确的标题翻译。'
+    
+    try:
+        # 根据LLM类型选择不同的API调用方式
+        if llm_type.lower() == 'grok':
+            headers = {
+                'Authorization': f'Bearer {GROK_API_KEY}',
+                'Content-Type': 'application/json'
+            }
+            
+            data = {
+                'messages': [
+                    {
+                        'role': 'system',
+                        'content': system_content
+                    },
+                    {
+                        'role': 'user',
+                        'content': translation_prompt
+                    }
+                ],
+                'model': 'grok-2-latest',
+                'temperature': 0.7,
+                'max_tokens': 200,
+                'stream': False
+            }
+            
+            response = requests.post(GROK_API_URL, headers=headers, json=data, verify=True)
+            response_json = response.json()
+            
+            if response.status_code == 200 and 'choices' in response_json:
+                return response_json['choices'][0]['message']['content'].strip()
+        elif llm_type.lower() == 'gemini':
+            try:
+                from google import generativeai as genai
+                
+                genai.configure(api_key=GEMINI_API_KEY)
+                model = genai.GenerativeModel('gemini-2.0-flash')
+                
+                # 合并system_content和prompt
+                full_prompt = f"{system_content}\n\n{translation_prompt}"
+                
+                response = model.generate_content(full_prompt)
+                
+                if hasattr(response, 'text'):
+                    return response.text.strip()
+            except ImportError:
+                # 如果没有安装Google API库，使用REST API
+                headers = {
+                    'Content-Type': 'application/json'
+                }
+                
+                params = {
+                    'key': GEMINI_API_KEY
+                }
+                
+                data = {
+                    'contents': [
+                        {
+                            'parts': [
+                                {
+                                    'text': f"{system_content}\n\n{translation_prompt}"
+                                }
+                            ]
+                        }
+                    ],
+                    'generationConfig': {
+                        'temperature': 0.7,
+                        'maxOutputTokens': 200
+                    }
+                }
+                
+                response = requests.post(
+                    GEMINI_API_URL, 
+                    headers=headers, 
+                    params=params,
+                    json=data
+                )
+                
+                if response.status_code == 200:
+                    response_json = response.json()
+                    if 'candidates' in response_json and len(response_json['candidates']) > 0:
+                        return response_json['candidates'][0]['content']['parts'][0]['text'].strip()
+    except Exception as e:
+        print(f"翻译标题时出错: {e}")
+    
+    return ""
+
+# 修改process_news函数，使用新的翻译函数
 def process_news():
     conn = sqlite3.connect('hacknews.db')
     cursor = conn.cursor()
@@ -248,40 +483,10 @@ def process_news():
         cursor.execute('SELECT title_chs FROM news WHERE id = ?', (news_id,))
         result = cursor.fetchone()
         if not result[0] and content_summary:
-            try:
-                headers = {
-                    'Authorization': f'Bearer {GROK_API_KEY}',
-                    'Content-Type': 'application/json'
-                }
-                
-                translation_prompt = f"请根据以下信息翻译标题：\n原标题：{title}\n文章摘要：{content_summary}\n请给出最准确、通顺的中文标题翻译,翻译的标题直接返回结果，无需添加任何额外内容，如果文章摘要为空，或者不符合，请直接返回空。"
-                
-                data = {
-                    'messages': [
-                        {
-                            'role': 'system',
-                            'content': '你是一个专业的翻译助手，需要根据文章上下文提供准确的标题翻译。'
-                        },
-                        {
-                            'role': 'user',
-                            'content': translation_prompt
-                        }
-                    ],
-                    'model': 'grok-2-latest',
-                    'temperature': 0.7,
-                    'max_tokens': 200,
-                    'stream': False
-                }
-                
-                response = requests.post(GROK_API_URL, headers=headers, json=data, verify=True)
-                response_json = response.json()
-                
-                if response.status_code == 200 and 'choices' in response_json:
-                    title_chs = response_json['choices'][0]['message']['content'].strip()
-                    cursor.execute('UPDATE news SET title_chs = ? WHERE id = ?', (title_chs, news_id))
-                    print(f"Translated title for news {title}")
-            except Exception as e:
-                print(f"Error translating title: {e}")
+            title_chs = translate_title(title, content_summary)
+            if title_chs:
+                cursor.execute('UPDATE news SET title_chs = ? WHERE id = ?', (title_chs, news_id))
+                print(f"已翻译标题: {title}")
         
         # 检查摘要中是否包含违法关键字
         content_illegal_keywords = check_illegal_content(content_summary, illegal_keywords)
@@ -310,14 +515,18 @@ def process_news():
     conn.close()
 
 def main():
-    if not GROK_API_KEY:
-        print("Error: GROK_API_KEY config variable is not set")
+    # 检查API密钥是否设置
+    if DEFAULT_LLM.lower() == 'grok' and not GROK_API_KEY:
+        print("错误: GROK_API_KEY配置变量未设置")
+        return
+    elif DEFAULT_LLM.lower() == 'gemini' and not GEMINI_API_KEY:
+        print("错误: GEMINI_API_KEY配置变量未设置")
         return
     
     # 确保表结构正确
     create_or_update_table()
     process_news()
-    print("Finished processing all news items.")
+    print("所有新闻项目处理完成。")
 
 if __name__ == '__main__':
     main()
