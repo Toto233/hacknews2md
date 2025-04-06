@@ -172,10 +172,10 @@ def generate_summary(text, prompt_type='article', llm_type=None):
     
     # 为文章和评论使用不同的提示语
     if prompt_type == 'article':
-        prompt = f"将以下英文新闻用简洁准确的中文总结，200到250字。专业、简洁，符合中文新闻报道习惯。乐观、生动、对任何新鲜事都感兴趣。目标读者为一群爱好科技和 对有意思生活充满好奇的中文读者。请翻译并总结以下英文新闻的核心内容，突出背景、事件和影响，保留重要细节与数据，避免过多赘述。\n{text}\n如果你认为这个文章并没有正确读取，请返回空字符串。"
+        prompt = f"将以下英文新闻用简洁准确的中文总结，200到250字。专业、简洁，符合中文新闻报道习惯。乐观、生动、对任何新鲜事都感兴趣。目标读者为一群爱好科技和 对有意思生活充满好奇的中文读者。请翻译并总结以下英文新闻的核心内容，突出背景、事件和影响，保留重要细节与数据，避免过多赘述。\n{text}\n如果你认为这个文章并没有正确读取，请只返回null，不要返回任何其他文字。"
         system_content = '你是一名专业的中文新闻编辑，擅长精准流畅地翻译和总结英文新闻。'
     else:  # 评论提示语
-        prompt = f"下方的英文讨论为hacknews论坛的内容，返回文字中以论坛代替\"hacknews论坛\"，将以下英文讨论用简洁准确的中文总结，200到250字。尽量多的介绍不同讨论者的言论，避免对单个评论过多赘述。：\n{text}\n如果讨论内容不充分或无法理解，请返回空字符串。"
+        prompt = f"下方的英文讨论为hacknews论坛的内容，返回文字中以论坛代替\"hacknews论坛\"，将以下英文讨论用简洁准确的中文总结，200到250字。尽量多的介绍不同讨论者的言论，避免对单个评论过多赘述。：\n{text}\n如果讨论内容不充分或无法理解，请返回null，不要返回任何其他文字。"
         system_content = '你是一个专业的讨论内容分析助手，擅长中文新闻编辑，擅长精准流畅地翻译和总结英文评论。'
     
     try:
@@ -235,6 +235,11 @@ def generate_summary_grok(prompt, system_content):
     if response.status_code == 200 and 'choices' in response_json:
         summary = response_json['choices'][0]['message']['content'].strip()
         
+        # 检查是否返回了"null"
+        if summary.lower() == "null":
+            print("Grok API返回null，认为没有有效内容")
+            return ""
+        
         # 直接分割句子并返回除最后一句外的所有句子
         sentences = summary.split('。')
         if len(sentences) > 1:
@@ -264,6 +269,11 @@ def generate_summary_gemini(prompt, system_content):
         
         if hasattr(response, 'text'):
             summary = response.text.strip()
+            
+            # 检查是否返回了"null"
+            if summary.lower() == "null":
+                print("Gemini API返回null，认为没有有效内容")
+                return ""
             
             # 直接分割句子并返回除最后一句外的所有句子
             sentences = summary.split('。')
@@ -310,6 +320,11 @@ def generate_summary_gemini(prompt, system_content):
             response_json = response.json()
             if 'candidates' in response_json and len(response_json['candidates']) > 0:
                 summary = response_json['candidates'][0]['content']['parts'][0]['text'].strip()
+                
+                # 检查是否返回了"null"
+                if summary.lower() == "null":
+                    print("Gemini REST API返回null，认为没有有效内容")
+                    return ""
                 
                 # 直接分割句子并返回除最后一句外的所有句子
                 sentences = summary.split('。')
@@ -372,7 +387,12 @@ def translate_title(title, content_summary, llm_type=None):
             response_json = response.json()
             
             if response.status_code == 200 and 'choices' in response_json:
-                return response_json['choices'][0]['message']['content'].strip()
+                translated_title = response_json['choices'][0]['message']['content'].strip()
+                # 检查是否返回了"null"
+                if translated_title.lower() == "null":
+                    print(f"Grok API翻译标题返回null，认为没有有效翻译: {title}")
+                    return ""
+                return translated_title
         elif llm_type.lower() == 'gemini':
             try:
                 from google import generativeai as genai
@@ -386,7 +406,12 @@ def translate_title(title, content_summary, llm_type=None):
                 response = model.generate_content(full_prompt)
                 
                 if hasattr(response, 'text'):
-                    return response.text.strip()
+                    translated_title = response.text.strip()
+                    # 检查是否返回了"null"
+                    if translated_title.lower() == "null":
+                        print(f"Gemini API翻译标题返回null，认为没有有效翻译: {title}")
+                        return ""
+                    return translated_title
             except ImportError:
                 # 如果没有安装Google API库，使用REST API
                 headers = {
@@ -423,7 +448,12 @@ def translate_title(title, content_summary, llm_type=None):
                 if response.status_code == 200:
                     response_json = response.json()
                     if 'candidates' in response_json and len(response_json['candidates']) > 0:
-                        return response_json['candidates'][0]['content']['parts'][0]['text'].strip()
+                        translated_title = response_json['candidates'][0]['content']['parts'][0]['text'].strip()
+                        # 检查是否返回了"null"
+                        if translated_title.lower() == "null":
+                            print(f"Gemini REST API翻译标题返回null，认为没有有效翻译: {title}")
+                            return ""
+                        return translated_title
     except Exception as e:
         print(f"翻译标题时出错: {e}")
     
