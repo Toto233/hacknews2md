@@ -18,6 +18,9 @@ with open('config.json', 'r', encoding='utf-8') as f:
     # GROK配置
     GROK_API_KEY = config.get('GROK_API_KEY')
     GROK_API_URL = config.get('GROK_API_URL', 'https://api.x.ai/v1/chat/completions')
+    GROK_MODEL = config.get('GROK_MODEL', 'grok-3-beta')
+    GROK_TEMPERATURE = config.get('GROK_TEMPERATURE', 0.7)
+    GROK_MAX_TOKENS = config.get('GROK_MAX_TOKENS', 200)
     
     # GEMINI配置
     GEMINI_API_KEY = config.get('GEMINI_API_KEY')
@@ -142,7 +145,10 @@ def get_discussion_content(url):
     if not url:
         return ""
     try:
-        response = requests.get(url, timeout=10)
+        headers = {
+            'User-Agent': 'Mozilla/5.0 (iPhone; CPU iPhone OS 13_2_3 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/13.0.3 Mobile/15E148 Safari/604.1'
+        }
+        response = requests.get(url, timeout=10, headers=headers)
         soup = BeautifulSoup(response.text, 'html.parser')
         comments = soup.find_all('div', class_='comment')
         text = '\n'.join([comment.get_text(strip=True) for comment in comments[:10]])  # 只获取前10条评论
@@ -223,9 +229,9 @@ def generate_summary_grok(prompt, system_content):
                 'content': prompt
             }
         ],
-        'model': 'grok-2-latest',
-        'temperature': 0.7,
-        'max_tokens': 200,
+        'model': GROK_MODEL,
+        'temperature': GROK_TEMPERATURE,
+        'max_tokens': GROK_MAX_TOKENS,
         'stream': False
     }
     
@@ -377,9 +383,9 @@ def translate_title(title, content_summary, llm_type=None):
                         'content': translation_prompt
                     }
                 ],
-                'model': 'grok-2-latest',
-                'temperature': 0.7,
-                'max_tokens': 200,
+                'model': GROK_MODEL,
+                'temperature': GROK_TEMPERATURE,
+                'max_tokens': GROK_MAX_TOKENS,
                 'stream': False
             }
             

@@ -42,7 +42,8 @@ def generate_markdown():
         headline_reason = ""
     
     # 生成markdown内容
-    markdown_content = f"# Hacker News 摘要 ({datetime.now().strftime('%Y-%m-%d')})\n\n"
+    # 修复：使用元组索引访问title_chs，而不是作为属性访问
+    markdown_content = f"# {sorted_news_items[0][1] if sorted_news_items and sorted_news_items[0][1] else ''} | Hacker News 摘要 ({datetime.now().strftime('%Y-%m-%d')})\n\n"
     
     # 添加副标题（如果有）
     if headline_reason:

@@ -8,6 +8,9 @@ def load_llm_config():
         # GROK配置
         GROK_API_KEY = config.get('GROK_API_KEY')
         GROK_API_URL = config.get('GROK_API_URL', 'https://api.x.ai/v1/chat/completions')
+        GROK_MODEL = config.get('GROK_MODEL', 'grok-3-beta')
+        GROK_TEMPERATURE = config.get('GROK_TEMPERATURE', 0.7)
+        GROK_MAX_TOKENS = config.get('GROK_MAX_TOKENS', 800)
         
         # GEMINI配置
         GEMINI_API_KEY = config.get('GEMINI_API_KEY')
@@ -19,7 +22,10 @@ def load_llm_config():
         return {
             'grok': {
                 'api_key': GROK_API_KEY,
-                'api_url': GROK_API_URL
+                'api_url': GROK_API_URL,
+                'model': GROK_MODEL,
+                'temperature': GROK_TEMPERATURE,
+                'max_tokens': GROK_MAX_TOKENS
             },
             'gemini': {
                 'api_key': GEMINI_API_KEY,
@@ -92,9 +98,9 @@ def evaluate_with_grok(prompt, config):
                 'content': prompt
             }
         ],
-        'model': 'grok-2-latest',
-        'temperature': 0.7,
-        'max_tokens': 800,
+        'model': config['model'],
+        'temperature': config['temperature'],
+        'max_tokens': config['max_tokens'],
         'response_format': {"type": "json_object"}
     }
     
