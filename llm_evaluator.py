@@ -50,9 +50,7 @@ def evaluate_news_attraction(news_items):
     
     # 修改提示，强调返回JSON格式
     prompt = f"""请评价以下新闻标题和摘要的吸引力，给每个新闻一个1-10的分数（10分最吸引人）。
-考虑因素：标题的新颖性、内容的重要性、科技创新程度、对读者的实用价值。
-同时，请选出最吸引人的一条新闻，作为今日头条。
-
+考虑因素：标题的新颖性、内容的重要性、科技创新程度、对读者的实用价值。同时，请选出最吸引人的一条新闻，作为今日头条。
 请严格按照以下JSON格式返回结果，不要添加任何其他文本或解释：
 {{
   "ratings": [
@@ -63,7 +61,7 @@ def evaluate_news_attraction(news_items):
   "top_headline": 2,
   "headline_reason": "这条新闻最吸引人的原因..."
 }}
-
+,一定要确保返回的内容仅有一个完整的json对象，不要添加任何其他文本或解释。也不要有不完整的json对象。
 新闻列表:
 {titles_text}
 """
@@ -87,6 +85,10 @@ def evaluate_with_grok(prompt, config):
         'Content-Type': 'application/json'
     }
     
+    # 确保prompt中的特殊字符被正确处理
+    # 移除可能导致JSON解析错误的控制字符
+    clean_prompt = ''.join(char for char in prompt if ord(char) >= 32 or char in '\n\r\t')
+    
     data = {
         'messages': [
             {
@@ -95,7 +97,7 @@ def evaluate_with_grok(prompt, config):
             },
             {
                 'role': 'user',
-                'content': prompt
+                'content': clean_prompt
             }
         ],
         'model': config['model'],
@@ -105,25 +107,36 @@ def evaluate_with_grok(prompt, config):
     }
     
     try:
-        response = requests.post(config['api_url'], headers=headers, json=data, verify=True)
+        # 使用json.dumps确保数据格式正确
+        json_data = json.dumps(data)
+        response = requests.post(config['api_url'], headers=headers, data=json_data, verify=True)
         response_json = response.json()
         
         if response.status_code == 200 and 'choices' in response_json:
             result_text = response_json['choices'][0]['message']['content'].strip()
-            print(f"Grok API评价结果: {result_text}")
-            result = json.loads(result_text)
+            print(f"Grok API评价结果:【 {result_text}】")
             
-            # 提取评分和头条
-            ratings = result.get('ratings', [])
-            top_headline = result.get('top_headline')
-            headline_reason = result.get('headline_reason', '')
-            
-            # 转换为(id, score)元组列表
-            rating_tuples = [(item['id'], item['score']) for item in ratings]
-            
-            return rating_tuples, headline_reason
+            try:
+                result = json.loads(result_text)
+                
+                # 提取评分和头条
+                ratings = result.get('ratings', [])
+                top_headline = result.get('top_headline')
+                headline_reason = result.get('headline_reason', '')
+                
+                # 转换为(id, score)元组列表
+                rating_tuples = [(item['id'], item['score']) for item in ratings]
+                
+                return rating_tuples, headline_reason
+            except json.JSONDecodeError as e:
+                print(f"无法解析Grok返回的JSON: {e}")
+                print(f"原始返回内容: {result_text[:100]}...")
+                return [], ""
     except Exception as e:
         print(f"Grok API评价失败: {e}")
+        # 打印更详细的错误信息以便调试
+        import traceback
+        traceback.print_exc()
     
     return [], ""
 
