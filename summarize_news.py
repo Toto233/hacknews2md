@@ -361,8 +361,8 @@ def translate_title(title, content_summary, llm_type=None):
     if llm_type is None:
         llm_type = DEFAULT_LLM
     
-    translation_prompt = f"请根据以下信息翻译标题：\n原标题：{title}\n文章摘要：{content_summary}\n请给出最准确、通顺的中文标题翻译,翻译的标题直接返回结果，无需添加任何额外内容，如果文章摘要为空，或者不符合，请直接返回空。"
-    system_content = '你是一个专业的翻译助手，需要根据文章上下文提供准确的标题翻译。'
+    translation_prompt = f"请根据以下信息翻译标题：\n原标题：{title}\n文章摘要：{content_summary}\n请给出最有冲击力、最通顺的中文标题翻译,标题可以不直译,翻译的标题直接返回结果，无需添加任何额外内容，如果文章摘要为空，或者不符合，请直接返回空。"
+    system_content = '你是一个专业的新闻编辑，需要根据文章上下文提供有冲击力的标题翻译。'
     
     try:
         # 根据LLM类型选择不同的API调用方式
