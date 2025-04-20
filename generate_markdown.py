@@ -47,10 +47,12 @@ def generate_markdown():
     
     # 添加副标题（如果有）
     if headline_reason:
-        markdown_content += f"## 今日亮点\n\n{headline_reason}\n\n---\n\n"
+        markdown_content += f"## 今日亮点\n\n{headline_reason}\n\n"
     
     # 生成新闻内容
     for idx, (title, title_chs, news_url, discuss_url, content_summary, discuss_summary) in enumerate(sorted_news_items, 1):
+        markdown_content += "---\n\n"
+
         # 标题部分：中文标题(英文标题)
         display_title = f"{title_chs} ({title})" if title_chs else title
         markdown_content += f"## {idx}. {display_title}\n\n"
@@ -67,7 +69,6 @@ def generate_markdown():
             if discuss_summary:
                 markdown_content += f"{discuss_summary}\n\n"
         
-        markdown_content += "---\n\n"
     conn.close()
     
     # 生成markdown文件
