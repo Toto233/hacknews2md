@@ -7,6 +7,17 @@ import json
 import urllib3
 import re
 import colorama
+from urllib.parse import urljoin, urlparse
+import time
+import brotli  # 添加brotli支持
+from PIL import Image
+import io
+import mimetypes
+import hashlib
+import chardet
+import gzip
+import zlib
+from io import BytesIO
 
 # 禁用SSL证书验证警告
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
@@ -56,6 +67,8 @@ def create_or_update_table():
         cursor.execute('ALTER TABLE news ADD COLUMN article_content TEXT')
     if 'discussion_content' not in columns:
         cursor.execute('ALTER TABLE news ADD COLUMN discussion_content TEXT')
+    if 'largest_image' not in columns:
+        cursor.execute('ALTER TABLE news ADD COLUMN largest_image TEXT')
     
     # 创建违法关键字表
     cursor.execute('''
@@ -122,24 +135,281 @@ def highlight_keywords(text, keywords):
     
     return highlighted_text
 
-def get_article_content(url):
+def handle_compressed_content(content, encoding):
+    """处理压缩的内容
+    
+    Args:
+        content: 压缩的内容
+        encoding: 压缩类型 (gzip, deflate等)
+        
+    Returns:
+        解压后的内容
+    """
     try:
-        response = requests.get(url, timeout=10, verify=False)  # 禁用SSL验证
-        # 检查响应状态码，如果是错误状态码则直接返回空字符串
-        if response.status_code in [403, 404] or response.status_code >= 500:
-            print(f"Skipping due to HTTP error {response.status_code} for URL: {url}")
-            return ""
-        soup = BeautifulSoup(response.text, 'html.parser')
-        # 移除脚本和样式元素
-        for script in soup(["script", "style"]):
-            script.decompose()
-        # 获取正文内容
-        text = soup.get_text(strip=True)
-        # 简单处理文本，限制长度
-        return text[:3000]  # 限制文本长度以控制API调用成本
+        if encoding == 'gzip':
+            return gzip.decompress(content)
+        elif encoding == 'deflate':
+            import zlib
+            return zlib.decompress(content)
+        return content
     except Exception as e:
-        print(f"Error fetching article content: {e}")
-        return ""
+        print(f"解压内容失败: {str(e)}")
+        return content
+
+def get_article_content(url, title):
+    """获取文章内容和最大的图片
+    
+    Args:
+        url: 文章URL
+        title: 文章标题
+        
+    Returns:
+        tuple: (文章内容, 图片URL, 图片保存路径)
+    """
+    headers = {
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36',
+        'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8',
+        'Accept-Language': 'zh-CN,zh;q=0.9,en;q=0.8',
+        'Accept-Encoding': 'gzip, deflate',  # 移除 br
+        'Connection': 'keep-alive',
+        'Cache-Control': 'max-age=0',
+        'Upgrade-Insecure-Requests': '1'
+    }
+    
+    try:
+        response = requests.get(url, headers=headers, verify=False)
+        print("\n调试信息:")
+        print(f"状态码: {response.status_code}")
+        print(f"原始编码: {response.encoding}")
+        print(f"Content-Type: {response.headers.get('Content-Type', 'unknown')}")
+        print(f"Content-Encoding: {response.headers.get('Content-Encoding', 'none')}")
+        
+        if response.status_code == 200:
+            # 使用原始内容创建BeautifulSoup对象
+            soup = BeautifulSoup(response.content, 'html.parser')
+            print(f"页面标题: {soup.title.string if soup.title else 'No title'}")
+            
+            # 查找最大的图片
+            images = []
+            for img in soup.find_all('img'):
+                print(f"\n找到图片标签: {img}")
+                src = img.get('src')
+                if not src:
+                    continue
+                    
+                # 处理相对URL
+                if not src.startswith(('http://', 'https://')):
+                    src = urljoin(url, src)
+                print(f"处理后的图片URL: {src}")
+                
+                # 获取图片尺寸属性
+                width = img.get('width', '0')
+                height = img.get('height', '0')
+                
+                # 尝试从style属性获取尺寸
+                style = img.get('style', '')
+                if style:
+                    width_match = re.search(r'width:\s*(\d+)px', style)
+                    height_match = re.search(r'height:\s*(\d+)px', style)
+                    if width_match and height_match:
+                        width = width_match.group(1)
+                        height = height_match.group(1)
+                
+                try:
+                    width = int(width)
+                    height = int(height)
+                except ValueError:
+                    width = height = 0
+                
+                print(f"HTML/CSS尺寸: {width}x{height}")
+                
+                # 如果没有尺寸信息，尝试下载图片获取实际尺寸
+                if width * height == 0:
+                    try:
+                        print(f"尝试下载图片: {src}")
+                        img_response = requests.get(src, headers=headers, verify=False, timeout=5)
+                        if img_response.status_code == 200:
+                            img_data = BytesIO(img_response.content)
+                            with Image.open(img_data) as img_obj:
+                                width, height = img_obj.size
+                                print(f"实际图片尺寸: {width}x{height}")
+                    except Exception as e:
+                        print(f"获取图片尺寸失败: {str(e)}")
+                        continue
+                
+                # 只添加有效尺寸的图片
+                if width * height > 0:
+                    images.append({
+                        'url': src,
+                        'size': width * height
+                    })
+                    print(f"添加图片: {src}, 尺寸: {width}x{height}")
+            
+            # 按尺寸排序并选择最大的图片
+            if images:
+                largest_image = max(images, key=lambda x: x['size'])
+                image_url = largest_image['url']
+                print(f"\n选择最大图片: {image_url}, 尺寸: {largest_image['size']}")
+                
+                # 保存图片
+                image_path = save_article_image(image_url, url, title)
+                if image_path:
+                    print(f"图片已保存到: {image_path}")
+            
+            # 现在处理文章内容
+            # 处理压缩内容
+            content = response.content
+            if 'Content-Encoding' in response.headers:
+                content = handle_compressed_content(content, response.headers['Content-Encoding'])
+            
+            # 尝试检测编码
+            if not response.encoding or response.encoding.lower() == 'utf-8':
+                detected = chardet.detect(content)
+                if detected and detected['encoding']:
+                    response.encoding = detected['encoding']
+                    print(f"检测到编码: {detected['encoding']}")
+            
+            # 重新解析内容以获取文本
+            soup = BeautifulSoup(content, 'html.parser')
+            
+            # 移除不需要的元素
+            for tag in soup.find_all(['script', 'style', 'nav', 'footer', 'header']):
+                tag.decompose()
+            
+            # 获取文章内容
+            article_content = ''
+            article_tag = soup.find('article')
+            if article_tag:
+                article_content = article_tag.get_text(strip=True)
+            else:
+                # 尝试从其他常见容器中获取内容
+                main_content = soup.find(['main', 'div[role="main"]', '.content', '#content'])
+                if main_content:
+                    article_content = main_content.get_text(strip=True)
+            
+            if images:
+                return article_content, image_url, image_path
+            return article_content, None, None
+            
+        else:
+            print(f"请求失败: {response.status_code} {response.reason}")
+            return None, None, None
+            
+    except Exception as e:
+        print(f"处理文章时出错: {str(e)}")
+        return None, None, None
+
+def save_article_image(image_url, referer_url, title=None):
+    """保存文章图片
+    
+    Args:
+        image_url: 图片URL
+        referer_url: 来源页面URL
+        title: 文章标题，用于生成文件名
+        
+    Returns:
+        str: 保存的图片路径，如果保存失败则返回None
+    """
+    headers = {
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36',
+        'Accept': 'image/avif,image/webp,image/apng,image/svg+xml,image/*,*/*;q=0.8',
+        'Accept-Encoding': 'gzip, deflate, br',
+        'Referer': referer_url
+    }
+    
+    try:
+        response = requests.get(image_url, headers=headers, verify=False, stream=True)
+        if response.status_code == 200:
+            # 检查Content-Type
+            content_type = response.headers.get('Content-Type', '').lower()
+            if not content_type.startswith('image/'):
+                print(f"不是有效的图片类型: {content_type}")
+                return None
+            
+            # 根据Content-Type获取扩展名
+            ext = get_extension_from_content_type(content_type)
+            if not ext:
+                print(f"无法确定图片扩展名: {content_type}")
+                return None
+            
+            # 创建日期目录 (yyyymmdd格式)
+            today = datetime.now()
+            date_dir = os.path.join('images', f"{today.year:04d}{today.month:02d}{today.day:02d}")
+            if not os.path.exists(date_dir):
+                os.makedirs(date_dir)
+            
+            # 生成文件名
+            if title:
+                # 清理标题，移除不合法的文件名字符，替换空格为下划线
+                clean_title = re.sub(r'[<>:"/\\|?*]', '', title)
+                clean_title = clean_title.replace(' ', '_')
+                clean_title = re.sub(r'_{2,}', '_', clean_title)  # 将多个连续下划线替换为单个
+                clean_title = clean_title[:50]  # 限制标题长度
+                
+                # 检查是否已存在同名文件
+                index = 1
+                while True:
+                    if index == 1:
+                        filename = f"{clean_title}{ext}"
+                    else:
+                        filename = f"{clean_title}_{index}{ext}"
+                    
+                    full_path = os.path.join(date_dir, filename)
+                    if not os.path.exists(full_path):
+                        break
+                    index += 1
+            else:
+                # 如果没有标题，使用URL的MD5作为文件名
+                filename = hashlib.md5(image_url.encode()).hexdigest() + ext
+                full_path = os.path.join(date_dir, filename)
+            
+            # 保存图片
+            with open(full_path, 'wb') as f:
+                for chunk in response.iter_content(chunk_size=8192):
+                    if chunk:
+                        f.write(chunk)
+            
+            # 验证图片
+            try:
+                with Image.open(full_path) as img:
+                    width, height = img.size
+                    if width < 100 or height < 100:
+                        print(f"图片太小: {width}x{height}")
+                        os.remove(full_path)
+                        return None
+                    return full_path
+            except Exception as e:
+                print(f"验证图片时出错: {str(e)}")
+                if os.path.exists(full_path):
+                    os.remove(full_path)
+                return None
+                
+        return None
+    except Exception as e:
+        print(f"下载图片时出错: {str(e)}")
+        return None
+
+def get_extension_from_content_type(content_type):
+    """根据Content-Type获取文件扩展名
+    
+    Args:
+        content_type: HTTP Content-Type
+        
+    Returns:
+        str: 文件扩展名（包含点号）
+    """
+    content_type = content_type.lower()
+    if 'jpeg' in content_type or 'jpg' in content_type:
+        return '.jpg'
+    elif 'png' in content_type:
+        return '.png'
+    elif 'gif' in content_type:
+        return '.gif'
+    elif 'webp' in content_type:
+        return '.webp'
+    elif 'svg' in content_type:
+        return '.svg'
+    return None
 
 def get_discussion_content(url):
     if not url:
@@ -478,7 +748,7 @@ def process_news():
     
     # 获取需要处理的新闻
     cursor.execute('''
-    SELECT id, title, news_url, discuss_url, article_content, discussion_content 
+    SELECT id, title, news_url, discuss_url, article_content, discussion_content, largest_image 
     FROM news 
     WHERE title_chs IS NULL OR title_chs = '' 
        OR article_content IS NULL 
@@ -489,21 +759,34 @@ def process_news():
     news_items = cursor.fetchall()
     
     for item in news_items:
-        news_id, title, news_url, discuss_url, article_content, discussion_content = item
+        news_id, title, news_url, discuss_url, article_content, discussion_content, largest_image = item
         
         # 如果原始内容为空，则获取
         if not article_content and news_url:
-            article_content = get_article_content(news_url)
-            cursor.execute('UPDATE news SET article_content = ? WHERE id = ?', (article_content, news_id))
-            print(f"获取文章内容: {title}")
+            print(f"\n处理文章: {title}")
+            print(f"URL: {news_url}")
+            article_content, image_url, image_path = get_article_content(news_url, title)
+            
+            if article_content:
+                cursor.execute('UPDATE news SET article_content = ? WHERE id = ?', 
+                             (article_content, news_id))
+                
+                if image_url:
+                    cursor.execute('UPDATE news SET largest_image = ? WHERE id = ?',
+                                 (image_url, news_id))
+                    print(f"已保存图片URL: {image_url}")
+                    if image_path:
+                        print(f"图片已保存到: {image_path}")
+            
+            conn.commit()
+            print(f"文章内容已更新")
         
         if not discussion_content and discuss_url:
+            print(f"\n获取讨论内容: {title}")
             discussion_content = get_discussion_content(discuss_url)
-            cursor.execute('UPDATE news SET discussion_content = ? WHERE id = ?', (discussion_content, news_id))
-            print(f"获取讨论内容: {title}")
-        
-        # 提交保存原始内容
-        conn.commit()
+            cursor.execute('UPDATE news SET discussion_content = ? WHERE id = ?', 
+                         (discussion_content, news_id))
+            conn.commit()
         
         # 生成摘要，只处理非空内容
         content_summary = ""
@@ -521,8 +804,9 @@ def process_news():
         if not result[0] and content_summary:
             title_chs = translate_title(title, content_summary)
             if title_chs:
-                cursor.execute('UPDATE news SET title_chs = ? WHERE id = ?', (title_chs, news_id))
-                print(f"已翻译标题: {title}")
+                cursor.execute('UPDATE news SET title_chs = ? WHERE id = ?', 
+                             (title_chs, news_id))
+                print(f"已翻译标题: {title_chs}")
         
         # 检查摘要中是否包含违法关键字
         content_illegal_keywords = check_illegal_content(content_summary, illegal_keywords)
@@ -545,10 +829,12 @@ def process_news():
             WHERE id = ?
             ''', (content_summary, discuss_summary, news_id))
             
-            print(f"处理完成: {title}")
+            print(f"摘要已更新: {title}")
+            
+        conn.commit()
     
-    conn.commit()
     conn.close()
+    print("\n所有新闻处理完成")
 
 def main():
     # 检查API密钥是否设置
