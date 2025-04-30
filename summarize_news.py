@@ -69,6 +69,11 @@ def create_or_update_table():
         cursor.execute('ALTER TABLE news ADD COLUMN discussion_content TEXT')
     if 'largest_image' not in columns:
         cursor.execute('ALTER TABLE news ADD COLUMN largest_image TEXT')
+    # 添加新的图片字段
+    if 'image_2' not in columns:
+        cursor.execute('ALTER TABLE news ADD COLUMN image_2 TEXT')
+    if 'image_3' not in columns:
+        cursor.execute('ALTER TABLE news ADD COLUMN image_3 TEXT')
     
     # 创建违法关键字表
     cursor.execute('''
@@ -157,14 +162,14 @@ def handle_compressed_content(content, encoding):
         return content
 
 def get_article_content(url, title):
-    """获取文章内容和最大的图片
+    """获取文章内容和最大的3张图片
     
     Args:
         url: 文章URL
         title: 文章标题
         
     Returns:
-        tuple: (文章内容, 图片URL, 图片保存路径)
+        tuple: (文章内容, [图片URL列表], [图片保存路径列表])
     """
     headers = {
         'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36',
@@ -189,23 +194,29 @@ def get_article_content(url, title):
             soup = BeautifulSoup(response.content, 'html.parser')
             print(f"页面标题: {soup.title.string if soup.title else 'No title'}")
             
-            # 查找最大的图片
+            # 查找所有图片
             images = []
+            seen_srcs = set()
             for img in soup.find_all('img'):
                 print(f"\n找到图片标签: {img}")
                 src = img.get('src')
                 if not src:
                     continue
-                    
                 # 处理相对URL
                 if not src.startswith(('http://', 'https://')):
                     src = urljoin(url, src)
+                # 跳过SVG图片
+                if src.lower().endswith('.svg'):
+                    print(f"跳过SVG图片: {src}")
+                    continue
+                if src in seen_srcs:
+                    print(f"跳过重复图片URL: {src}")
+                    continue
+                seen_srcs.add(src)
                 print(f"处理后的图片URL: {src}")
-                
                 # 获取图片尺寸属性
                 width = img.get('width', '0')
                 height = img.get('height', '0')
-                
                 # 尝试从style属性获取尺寸
                 style = img.get('style', '')
                 if style:
@@ -214,15 +225,12 @@ def get_article_content(url, title):
                     if width_match and height_match:
                         width = width_match.group(1)
                         height = height_match.group(1)
-                
                 try:
                     width = int(width)
                     height = int(height)
                 except ValueError:
                     width = height = 0
-                
                 print(f"HTML/CSS尺寸: {width}x{height}")
-                
                 # 如果没有尺寸信息，尝试下载图片获取实际尺寸
                 if width * height == 0:
                     try:
@@ -236,7 +244,6 @@ def get_article_content(url, title):
                     except Exception as e:
                         print(f"获取图片尺寸失败: {str(e)}")
                         continue
-                
                 # 只添加有效尺寸的图片
                 if width * height > 0:
                     images.append({
@@ -245,16 +252,23 @@ def get_article_content(url, title):
                     })
                     print(f"添加图片: {src}, 尺寸: {width}x{height}")
             
-            # 按尺寸排序并选择最大的图片
+            # 按尺寸排序并选择最大的3张图片
+            image_urls = []
+            image_paths = []
             if images:
-                largest_image = max(images, key=lambda x: x['size'])
-                image_url = largest_image['url']
-                print(f"\n选择最大图片: {image_url}, 尺寸: {largest_image['size']}")
-                
-                # 保存图片
-                image_path = save_article_image(image_url, url, title)
-                if image_path:
-                    print(f"图片已保存到: {image_path}")
+                # 按尺寸降序排序
+                images.sort(key=lambda x: x['size'], reverse=True)
+                # 获取前3张最大的图片
+                for i, img in enumerate(images[:3], 1):
+                    image_url = img['url']
+                    print(f"\n处理第{i}大图片: {image_url}, 尺寸: {img['size']}")
+                    
+                    # 保存图片，使用title_1, title_2, title_3作为文件名
+                    image_path = save_article_image(image_url, url, f"{title}_{i}")
+                    if image_path:
+                        print(f"第{i}张图片已保存到: {image_path}")
+                        image_urls.append(image_url)
+                        image_paths.append(image_path)
             
             # 现在处理文章内容
             # 处理压缩内容
@@ -287,17 +301,15 @@ def get_article_content(url, title):
                 if main_content:
                     article_content = main_content.get_text(strip=True)
             
-            if images:
-                return article_content, image_url, image_path
-            return article_content, None, None
+            return article_content, image_urls, image_paths
             
         else:
             print(f"请求失败: {response.status_code} {response.reason}")
-            return None, None, None
+            return None, [], []
             
     except Exception as e:
         print(f"处理文章时出错: {str(e)}")
-        return None, None, None
+        return None, [], []
 
 def save_article_image(image_url, referer_url, title=None):
     """保存文章图片
@@ -748,7 +760,7 @@ def process_news():
     
     # 获取需要处理的新闻
     cursor.execute('''
-    SELECT id, title, news_url, discuss_url, article_content, discussion_content, largest_image 
+    SELECT id, title, news_url, discuss_url, article_content, discussion_content, largest_image, image_2, image_3 
     FROM news 
     WHERE title_chs IS NULL OR title_chs = '' 
        OR article_content IS NULL 
@@ -759,27 +771,43 @@ def process_news():
     news_items = cursor.fetchall()
     
     for item in news_items:
-        news_id, title, news_url, discuss_url, article_content, discussion_content, largest_image = item
+        news_id, title, news_url, discuss_url, article_content, discussion_content = item[:6]
         
         # 如果原始内容为空，则获取
         if not article_content and news_url:
             print(f"\n处理文章: {title}")
             print(f"URL: {news_url}")
-            article_content, image_url, image_path = get_article_content(news_url, title)
+            article_content, image_urls, image_paths = get_article_content(news_url, title)
             
             if article_content:
                 cursor.execute('UPDATE news SET article_content = ? WHERE id = ?', 
                              (article_content, news_id))
                 
-                if image_url:
+                # 保存最多3张图片的URL
+                if image_urls:
+                    # 更新第一张图片（largest_image）
                     cursor.execute('UPDATE news SET largest_image = ? WHERE id = ?',
-                                 (image_url, news_id))
-                    print(f"已保存图片URL: {image_url}")
-                    if image_path:
-                        print(f"图片已保存到: {image_path}")
+                                 (image_urls[0], news_id))
+                    print(f"已保存第1张图片URL: {image_urls[0]}")
+                    
+                    # 更新第二张图片
+                    if len(image_urls) > 1:
+                        cursor.execute('UPDATE news SET image_2 = ? WHERE id = ?',
+                                     (image_urls[1], news_id))
+                        print(f"已保存第2张图片URL: {image_urls[1]}")
+                    
+                    # 更新第三张图片
+                    if len(image_urls) > 2:
+                        cursor.execute('UPDATE news SET image_3 = ? WHERE id = ?',
+                                     (image_urls[2], news_id))
+                        print(f"已保存第3张图片URL: {image_urls[2]}")
+                    
+                    # 打印保存的图片路径
+                    for i, path in enumerate(image_paths, 1):
+                        print(f"第{i}张图片已保存到: {path}")
             
             conn.commit()
-            print(f"文章内容已更新")
+            print(f"文章内容和图片已更新")
         
         if not discussion_content and discuss_url:
             print(f"\n获取讨论内容: {title}")

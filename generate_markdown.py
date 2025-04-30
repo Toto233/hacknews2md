@@ -78,6 +78,21 @@ def generate_markdown():
     
     print(f'Successfully generated markdown file: {filename}')
 
+    # 新增：读取内容复制到剪贴板，并打开网页
+    try:
+        import pyperclip
+    except ImportError:
+        import subprocess
+        subprocess.check_call(["pip", "install", "pyperclip"])
+        import pyperclip
+    with open(filename, 'r', encoding='utf-8') as f:
+        content = f.read()
+    pyperclip.copy(content)
+    print('已复制内容到剪贴板')
+    import webbrowser
+    webbrowser.open('https://markdown.com.cn/editor/')
+    webbrowser.open('https://mp.weixin.qq.com/')
+
 def main():
     generate_markdown()
 
