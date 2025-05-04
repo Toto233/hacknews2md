@@ -1,6 +1,11 @@
 requests
-beautifulsoup4
-sqlite3
+beautifulsoup4>=4.12.0
 colorama
-be4
-google-genai
+Pillow
+chardet
+brotli
+youtube-transcript-api
+lxml
+google-generativeai
+markdown>=3.4.0
+tinycss2>=1.2.1

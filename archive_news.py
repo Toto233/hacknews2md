@@ -30,11 +30,11 @@ def archive_old_news():
     conn = sqlite3.connect('hacknews.db')
     cursor = conn.cursor()
     
-    # 查找一天前的新闻
+    # 查找半天前的新闻
     cursor.execute('''
     SELECT id, title, title_chs, news_url, discuss_url, content_summary, discuss_summary, created_at
     FROM news
-    WHERE created_at < datetime('now', '-1 day', 'localtime')
+    WHERE created_at < datetime('now', '-0.5 day', 'localtime')
     ''')
     
     old_news = cursor.fetchall()
@@ -55,7 +55,7 @@ def archive_old_news():
     # 从主表中删除已归档的新闻
     cursor.execute('''
     DELETE FROM news
-    WHERE created_at < datetime('now', '-1 day', 'localtime')
+    WHERE created_at < datetime('now', '-0.5 day', 'localtime')
     ''')
     
     conn.commit()
