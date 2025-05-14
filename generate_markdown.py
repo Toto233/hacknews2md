@@ -41,13 +41,37 @@ def generate_markdown():
         sorted_news_items = news_items
         headline_reason = ""
     
-    # 生成markdown内容
-    # 修复：使用元组索引访问title_chs，而不是作为属性访问
-    markdown_content = f"# {sorted_news_items[0][1] if sorted_news_items and sorted_news_items[0][1] else ''} | Hacker News 摘要 ({datetime.now().strftime('%Y-%m-%d')})\n\n"
+    # 生成YAML头部（Front Matter）
+    # 获取第一个新闻的标题、摘要等信息
+    if sorted_news_items:
+        first_title_chs = sorted_news_items[0][1]
+        first_title = sorted_news_items[0][0]
+        first_content_summary = sorted_news_items[0][4]
+    else:
+        first_title_chs = ''
+        first_title = ''
+        first_content_summary = ''
+
+    # 日期格式为YYYY-MM-DD HH:MM:SS.sss+08:00，时区写死为+08:00
+    now = datetime.now()
+    pub_datetime = now.strftime('%Y-%m-%d %H:%M:%S') + f'.{int(now.microsecond/1000):03d}+08:00'
+
+    # YAML头部title字段，优先用中文标题，否则用英文标题
+    yaml_title = f"{first_title_chs if first_title_chs else first_title} | Hacker News 摘要 ({now.strftime('%Y-%m-%d')})"
+
+    # 组装YAML头部
+    yaml_header = f"""---
+title: '{yaml_title}'
+author: 'hacknews'
+description: ''
+pubDatetime: '{pub_datetime}'
+heroImage: '/blog-placeholder-1.jpg'
+---\n\n"""
+
+    # 生成markdown内容，先插入YAML头部
+    markdown_content = yaml_header
     
-    # 添加副标题（如果有）
-    if headline_reason:
-        markdown_content += f"## 今日亮点\n\n{headline_reason}\n\n"
+    
     
     # 生成新闻内容
     for idx, (title, title_chs, news_url, discuss_url, content_summary, discuss_summary) in enumerate(sorted_news_items, 1):
