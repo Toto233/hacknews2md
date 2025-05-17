@@ -44,7 +44,7 @@ def evaluate_news_attraction(news_items):
     
     # 准备评价请求
     titles_text = ""
-    for idx, (title, title_chs, _, _, content_summary, _) in enumerate(news_items, 1):
+    for idx, (title, title_chs, _, _, content_summary, _,_,_,_) in enumerate(news_items, 1):
         display_title = title_chs if title_chs else title
         titles_text += f"{idx}. {display_title}\n摘要: {content_summary[:100]}...\n\n"
     

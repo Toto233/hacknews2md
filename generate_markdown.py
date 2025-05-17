@@ -1,6 +1,10 @@
 import sqlite3
 from datetime import datetime
 from llm_evaluator import evaluate_news_attraction
+from llm_tag_extractor import extract_tags_with_llm
+import os
+
+
 
 def generate_markdown():
     conn = sqlite3.connect('hacknews.db')
@@ -8,7 +12,7 @@ def generate_markdown():
     
     # 获取最近24小时内已生成摘要的新闻
     cursor.execute('''
-    SELECT title, title_chs, news_url, discuss_url, content_summary, discuss_summary 
+    SELECT title, title_chs, news_url, discuss_url, content_summary, discuss_summary ,largest_image, image_2, image_3
     FROM news 
     WHERE content_summary IS NOT NULL 
     AND discuss_summary IS NOT NULL
@@ -16,6 +20,10 @@ def generate_markdown():
     ORDER BY created_at DESC
     ''')
     news_items = cursor.fetchall()
+    
+    # 取前4条新闻的中英文标题
+    news_titles = [(item[1], item[0]) for item in news_items[:4]]
+    tags = extract_tags_with_llm(news_titles)
     
     # 使用大模型评价新闻标题吸引力
     ratings, headline_reason = evaluate_news_attraction(news_items)
@@ -64,9 +72,12 @@ def generate_markdown():
 title: '{yaml_title}'
 author: 'hacknews'
 description: ''
-pubDatetime: '{pub_datetime}'
-heroImage: '/blog-placeholder-1.jpg'
----\n\n"""
+pubDatetime: {pub_datetime}
+tags:
+"""
+    for tag in tags:
+        yaml_header += f"  - {tag}\n"
+    yaml_header += "---\n\n"
 
     # 生成markdown内容，先插入YAML头部
     markdown_content = yaml_header
@@ -74,13 +85,17 @@ heroImage: '/blog-placeholder-1.jpg'
     
     
     # 生成新闻内容
-    for idx, (title, title_chs, news_url, discuss_url, content_summary, discuss_summary) in enumerate(sorted_news_items, 1):
+    for idx, (title, title_chs, news_url, discuss_url, content_summary, discuss_summary, largest_image, image_2, image_3) in enumerate(sorted_news_items, 1):
         markdown_content += "---\n\n"
 
         # 标题部分：中文标题(英文标题)
         display_title = f"{title_chs} ({title})" if title_chs else title
         markdown_content += f"## {idx}. {display_title}\n\n"
         
+        # 插入图片（如果有）
+        for img_url in [largest_image, image_2, image_3]:
+            if img_url:
+                markdown_content += f"![{title_chs} ]({img_url})\n\n"
         # 文章摘要
         markdown_content += f"{content_summary}\n\n"
         
