@@ -21,6 +21,14 @@ from io import BytesIO
 from youtube_transcript_api import YouTubeTranscriptApi, NoTranscriptFound, TranscriptsDisabled
 import traceback
 
+from selenium import webdriver
+from selenium.webdriver.chrome.options import Options as ChromeOptions
+from selenium.webdriver.common.by import By # If using WebDriverWait
+from selenium.webdriver.support.ui import WebDriverWait # If using WebDriverWait
+from selenium.webdriver.support import expected_conditions as EC # If using WebDriverWait
+import base64
+# os and time are already imported
+
 # 禁用SSL证书验证警告
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
@@ -54,6 +62,204 @@ colorama.init()
 #     config = json.load(f)
 #     GROK_API_KEY = config.get('GROK_API_KEY')
 #     GROK_API_URL = config.get('GROK_API_URL', 'https://api.x.ai/v1/chat/completions')
+
+def generate_summary_from_image(base64_image_data, prompt, llm_type):
+    if llm_type.lower() == 'grok':
+        print("Image summarization is not currently supported for Grok. Please configure Gemini as the default LLM for this feature.")
+        return "" # Consistent "null" / empty handling
+
+    # Assuming Gemini if not Grok
+    # Access global config for Gemini settings
+    # GEMINI_API_KEY is already global
+    # GEMINI_API_URL is already global (for REST fallback)
+    
+    if not GEMINI_API_KEY:
+        print("错误: GEMINI_API_KEY 未设置 (Error: GEMINI_API_KEY not set)")
+        return "" 
+    if not base64_image_data:
+        print("错误: base64_image_data 为空 (Error: base64_image_data is empty)")
+        return ""
+
+    gemini_model_name = config.get('GEMINI_MODEL', 'gemini-1.5-flash-latest')
+    
+    # Attempt with google.generativeai library first
+    try:
+        from google import generativeai as genai
+
+        genai.configure(api_key=GEMINI_API_KEY)
+        model = genai.GenerativeModel(gemini_model_name)
+
+        image_part = {
+            "mime_type": "image/png", 
+            "data": base64_image_data
+        }
+        
+        print(f"Attempting image summarization with google-generativeai library, model: {gemini_model_name}")
+        response = model.generate_content([prompt, image_part])
+
+        if hasattr(response, 'text') and response.text:
+            summary = response.text.strip()
+            if summary.lower() == "null":
+                print("Gemini API (google-generativeai) returned null for image.")
+                return ""
+            return summary
+        elif hasattr(response, 'prompt_feedback') and response.prompt_feedback.block_reason:
+            print(f"Gemini API (google-generativeai) blocked prompt: {response.prompt_feedback.block_reason}")
+            return "" 
+        else:
+            # Check for parts if text is not directly available (though less common for simple image prompts)
+            if hasattr(response, 'parts') and response.parts:
+                 summary_parts = [part.text for part in response.parts if hasattr(part, 'text')]
+                 if summary_parts:
+                     summary = "".join(summary_parts).strip()
+                     if summary.lower() == "null":
+                         print("Gemini API (google-generativeai) returned null in parts for image.")
+                         return ""
+                     return summary
+            print(f"Gemini API (google-generativeai) returned no usable text. Response: {response}")
+            return ""
+
+    except ImportError:
+        print("google.generativeai library not found. Falling back to REST API for image summarization.")
+    except Exception as e:
+        print(f"Error with google.generativeai for image summarization: {e}")
+        print("Falling back to REST API due to google-generativeai error.")
+
+    # Fallback to REST API
+    print(f"Attempting image summarization with REST API, model: {gemini_model_name}")
+    headers = {
+        'Content-Type': 'application/json'
+    }
+    params = {'key': GEMINI_API_KEY}
+    
+    payload = {
+        "contents": [{
+            "parts": [
+                {"text": prompt},
+                {
+                    "inline_data": {
+                        "mime_type": "image/png", 
+                        "data": base64_image_data
+                    }
+                }
+            ]
+        }],
+        "generationConfig": {
+            "temperature": config.get('GEMINI_TEMPERATURE', 0.7),
+            "maxOutputTokens": config.get('GEMINI_MAX_TOKENS_IMAGE', config.get('GEMINI_MAX_TOKENS', 250)) # Specific max tokens for image or general
+        }
+    }
+
+    # Construct the API URL carefully
+    base_gemini_api_url = config.get('GEMINI_API_URL_BASE', 'https://generativelanguage.googleapis.com/v1beta/models/')
+    if base_gemini_api_url.endswith('/'): # Ensure it ends with a slash if it's just the base
+         gemini_api_url_to_use = f"{base_gemini_api_url}{gemini_model_name}:generateContent"
+    else: # If user provided full URL template or specific model URL
+         # This logic might need adjustment if config.get('GEMINI_API_URL') is expected to be the full URL already
+         # For now, assuming GEMINI_API_URL from config might be the full URL directly
+         gemini_api_url_from_config = config.get('GEMINI_API_URL')
+         if gemini_api_url_from_config and "generateContent" in gemini_api_url_from_config:
+             gemini_api_url_to_use = gemini_api_url_from_config # Use it directly if it seems complete
+         else: # Fallback to constructing from base and model name
+             gemini_api_url_to_use = f"{base_gemini_api_url.rstrip('/')}/{gemini_model_name}:generateContent"
+
+
+    try:
+        print(f"Posting to Gemini REST API: {gemini_api_url_to_use}")
+        response = requests.post(gemini_api_url_to_use, headers=headers, params=params, json=payload, timeout=30)
+        response.raise_for_status()
+        response_json = response.json()
+
+        if 'candidates' in response_json and len(response_json['candidates']) > 0 and \
+           'content' in response_json['candidates'][0] and \
+           'parts' in response_json['candidates'][0]['content'] and \
+           len(response_json['candidates'][0]['content']['parts']) > 0 and \
+           'text' in response_json['candidates'][0]['content']['parts'][0]:
+            summary = response_json['candidates'][0]['content']['parts'][0]['text'].strip()
+            if summary.lower() == "null":
+                print("Gemini REST API returned null for image.")
+                return ""
+            return summary
+        elif 'promptFeedback' in response_json and \
+             'blockReason' in response_json['promptFeedback']:
+            print(f"Gemini REST API blocked prompt: {response_json['promptFeedback']['blockReason']}")
+            return ""
+        else:
+            print(f"Gemini REST API error or unexpected response format: {response.text}")
+            return ""
+            
+    except requests.exceptions.RequestException as e:
+        print(f"Gemini REST API request failed: {e}")
+        return ""
+    except Exception as e:
+        print(f"An unexpected error occurred with Gemini REST API for image: {e}")
+        return ""
+    
+    return "" # Default return if all fails
+
+def get_summary_from_screenshot(news_url, title, llm_type):
+    TEMP_IMAGE_DIR = "images/temp"
+    if not os.path.exists(TEMP_IMAGE_DIR):
+        os.makedirs(TEMP_IMAGE_DIR)
+    # Note: .gitignore handling for images/temp is an external concern for this subtask.
+    
+    temp_image_filename = f"{hashlib.md5(news_url.encode()).hexdigest()}.png"
+    temp_image_path = os.path.join(TEMP_IMAGE_DIR, temp_image_filename)
+
+    options = ChromeOptions()
+    options.add_argument("--headless")
+    options.add_argument("--disable-gpu")
+    options.add_argument("--window-size=1920,1200")
+    options.add_argument("--no-sandbox")
+    options.add_argument("--disable-dev-shm-usage")
+    options.add_argument("user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/98.0.4758.102 Safari/537.36")
+
+    driver = None
+    base64_image_data = ""
+    summary = ""
+
+    try:
+        print(f"Attempting to initialize WebDriver for {news_url}")
+        driver = webdriver.Chrome(options=options)
+        print(f"WebDriver initialized. Navigating to {news_url}")
+        driver.get(news_url)
+        
+        # Using time.sleep for now for simplicity as requested:
+        print(f"Waiting 10 seconds for page load: {news_url}")
+        time.sleep(10) 
+
+        driver.save_screenshot(temp_image_path)
+        print(f"Screenshot saved to {temp_image_path}")
+
+        with open(temp_image_path, "rb") as image_file:
+            base64_image_data = base64.b64encode(image_file.read()).decode('utf-8')
+        
+        if not base64_image_data:
+            # This ensures that if base64_image_data is empty, it's treated as an error
+            # and goes to the except block, setting summary to ""
+            raise ValueError("Failed to load or encode screenshot.")
+
+        image_prompt = f"这是一个关于新闻文章的截图。请用中文总结其内容，字数在200到250字之间。总结应专业、简洁，并符合中文新闻报道的习惯。如果图片内容看起来不是新闻文章或无法辨认，请只返回“null”。不要添加任何其他说明或开场白，直接给出总结。文章标题是：“{title}”。"
+        summary = generate_summary_from_image(base64_image_data, image_prompt, llm_type)
+
+    except Exception as e:
+        print(f"Error in get_summary_from_screenshot for {news_url}: {e}")
+        summary = "" # Ensure summary is empty on error
+    finally:
+        if driver:
+            print(f"Quitting WebDriver for {news_url}")
+            driver.quit()
+        if os.path.exists(temp_image_path):
+            try:
+                os.remove(temp_image_path)
+                print(f"Temporary screenshot {temp_image_path} deleted.")
+            except Exception as e:
+                print(f"Error deleting temporary screenshot {temp_image_path}: {e}")
+
+    if not summary or summary.lower() == "null":
+        print(f"LLM indicated no valid summary from image or summary was empty for {news_url}.")
+        return ""
+    return summary
 
 def create_or_update_table():
     """创建或更新数据库表结构"""
@@ -275,7 +481,12 @@ def get_article_content(url, title):
                      return cleaned_text, [], []
                  except Exception as decode_err:
                       print(f"解码原始文本也失败: {decode_err}")
-                      return f"无法解析页面内容: {url}", [], []
+                      return "", [], []
+                 # 如果清理后的文本太短，也视作失败
+                 if len(cleaned_text) < 50:
+                     print("解析后文本内容过短，视作失败")
+                     return "", [], []
+                 return cleaned_text, [], []
 
         print(f"页面标题: {soup.title.string.strip() if soup.title and soup.title.string else 'No title found'}")
 
@@ -484,16 +695,16 @@ def get_article_content(url, title):
 
     except requests.exceptions.HTTPError as e: # 处理 HTTP 错误 (4xx, 5xx)
         print(f"请求失败 (HTTP Error): {url}, 状态码: {e.response.status_code}, 原因: {e.response.reason}")
-        return f"请求失败: {e.response.status_code}", [], []
+        return "", [], []
     except requests.exceptions.Timeout as e:
         print(f"处理文章时请求超时: {url}, 错误: {str(e)}")
-        return f"请求超时", [], []
+        return "", [], []
     except requests.exceptions.RequestException as e: # 处理其他网络请求错误
         print(f"处理文章时网络请求出错: {url}, 错误: {str(e)}")
-        return f"网络请求错误: {e}", [], []
+        return "", [], []
     except Exception as e:
         print(f"处理文章时发生未知错误: {url}\n{traceback.format_exc()}")
-        return f"处理时发生未知错误", [], []
+        return "", [], []
 
 def save_article_image(image_url, referer_url, title=None):
     """保存文章图片
@@ -727,85 +938,127 @@ def generate_summary_gemini(prompt, system_content):
         print("错误: GEMINI_API_KEY未设置")
         return ""
     
+    gemini_model_name = config.get('GEMINI_MODEL', 'gemini-1.5-flash-latest')
+    # Attempt with google.generativeai library first
     try:
-        # 尝试使用Google官方API
         from google import generativeai as genai
-        
+
         genai.configure(api_key=GEMINI_API_KEY)
-        model = genai.GenerativeModel('gemini-2.0-flash')
+        model = genai.GenerativeModel(gemini_model_name)
         
-        # 合并system_content和prompt
         full_prompt = f"{system_content}\n\n{prompt}"
-        
+        print(f"Attempting text summarization with google-generativeai library, model: {gemini_model_name}")
         response = model.generate_content(full_prompt)
-        
-        if hasattr(response, 'text'):
+
+        if hasattr(response, 'text') and response.text:
             summary = response.text.strip()
-            
-            # 检查是否返回了"null"
             if summary.lower() == "null":
-                print("Gemini API返回null，认为没有有效内容")
+                print("Gemini API (google-generativeai) returned null for text.")
                 return ""
-            
-            # 直接分割句子并返回除最后一句外的所有句子
+            # The sentence splitting logic is preserved for text summaries
             sentences = summary.split('。')
             if len(sentences) > 1:
                 return '。'.join(sentences[:-1]) + '。'
             return summary
-        else:
-            print("Gemini API返回格式错误")
+        elif hasattr(response, 'prompt_feedback') and response.prompt_feedback.block_reason:
+            print(f"Gemini API (google-generativeai) blocked prompt for text: {response.prompt_feedback.block_reason}")
             return ""
+        else:
+            if hasattr(response, 'parts') and response.parts:
+                 summary_parts = [part.text for part in response.parts if hasattr(part, 'text')]
+                 if summary_parts:
+                     summary = "".join(summary_parts).strip()
+                     if summary.lower() == "null":
+                         print("Gemini API (google-generativeai) returned null in parts for text.")
+                         return ""
+                     # Sentence splitting for parts as well
+                     sentences = summary.split('。')
+                     if len(sentences) > 1:
+                         return '。'.join(sentences[:-1]) + '。'
+                     return summary
+            print(f"Gemini API (google-generativeai) returned no usable text. Response: {response}")
+            return ""
+
     except ImportError:
-        # 如果没有安装Google API库，使用REST API
-        headers = {
-            'Content-Type': 'application/json'
+        print("google.generativeai library not found. Falling back to REST API for text summarization.")
+    except Exception as e:
+        print(f"Error with google.generativeai for text summarization: {e}")
+        print("Falling back to REST API due to google-generativeai error.")
+
+    # Fallback to REST API for text summarization
+    print(f"Attempting text summarization with REST API, model: {gemini_model_name}")
+    headers = {'Content-Type': 'application/json'}
+    params = {'key': GEMINI_API_KEY}
+    
+    payload = {
+        "contents": [{"parts": [{"text": f"{system_content}\n\n{prompt}"}]}],
+        "generationConfig": {
+            "temperature": config.get('GEMINI_TEMPERATURE', 0.7),
+            "maxOutputTokens": config.get('GEMINI_MAX_TOKENS', 200) 
         }
-        
-        params = {
-            'key': GEMINI_API_KEY
-        }
-        
-        data = {
-            'contents': [
-                {
-                    'parts': [
-                        {
-                            'text': f"{system_content}\n\n{prompt}"
-                        }
-                    ]
-                }
-            ],
-            'generationConfig': {
-                'temperature': 0.7,
-                'maxOutputTokens': 200
-            }
-        }
-        
-        response = requests.post(
-            GEMINI_API_URL, 
-            headers=headers, 
-            params=params,
-            json=data
-        )
-        
-        if response.status_code == 200:
-            response_json = response.json()
-            if 'candidates' in response_json and len(response_json['candidates']) > 0:
-                summary = response_json['candidates'][0]['content']['parts'][0]['text'].strip()
-                
-                # 检查是否返回了"null"
-                if summary.lower() == "null":
-                    print("Gemini REST API返回null，认为没有有效内容")
-                    return ""
-                
-                # 直接分割句子并返回除最后一句外的所有句子
-                sentences = summary.split('。')
-                if len(sentences) > 1:
-                    return '。'.join(sentences[:-1]) + '。'
-                return summary
-        
-        print(f"Gemini API错误: {response.text}")
+    }
+
+    base_gemini_api_url = config.get('GEMINI_API_URL_BASE', 'https://generativelanguage.googleapis.com/v1beta/models/')
+    if base_gemini_api_url.endswith('/'):
+         gemini_api_url_to_use = f"{base_gemini_api_url}{gemini_model_name}:generateContent"
+    else:
+         gemini_api_url_from_config = config.get('GEMINI_API_URL') # This is the old single URL config
+         if gemini_api_url_from_config and "generateContent" in gemini_api_url_from_config and gemini_model_name in gemini_api_url_from_config:
+             # If the old GEMINI_API_URL contains the model name and :generateContent, use it
+             gemini_api_url_to_use = gemini_api_url_from_config
+         elif gemini_api_url_from_config and "generateContent" in gemini_api_url_from_config:
+             # If it has generateContent but not model, try to insert model (less ideal)
+             # This case might indicate a misconfiguration if GEMINI_API_URL_BASE is not used.
+             # For safety, we'll replace the default model in a generic URL if possible, or stick to a full default.
+             # Defaulting to gemini-1.5-flash-latest if GEMINI_MODEL is not in the URL.
+             default_model_for_url = 'gemini-1.5-flash-latest' # A known good default
+             url_parts = gemini_api_url_from_config.split('/')
+             try:
+                 model_idx = url_parts.index("models") + 1
+                 url_parts[model_idx] = gemini_model_name
+                 gemini_api_url_to_use = "/".join(url_parts)
+             except ValueError: # "models" not in URL or structure is unexpected
+                 gemini_api_url_to_use = f"https://generativelanguage.googleapis.com/v1beta/models/{gemini_model_name}:generateContent"
+
+         else: # Fallback to constructing from base and model name, or full default
+             gemini_api_url_to_use = f"{base_gemini_api_url.rstrip('/')}/{gemini_model_name}:generateContent"
+    
+    try:
+        print(f"Posting to Gemini REST API for text: {gemini_api_url_to_use}")
+        response = requests.post(gemini_api_url_to_use, headers=headers, params=params, json=payload, timeout=30)
+        response.raise_for_status() 
+        response_json = response.json()
+
+        if 'candidates' in response_json and len(response_json['candidates']) > 0 and \
+           'content' in response_json['candidates'][0] and \
+           'parts' in response_json['candidates'][0]['content'] and \
+           len(response_json['candidates'][0]['content']['parts']) > 0 and \
+           'text' in response_json['candidates'][0]['content']['parts'][0]:
+            summary = response_json['candidates'][0]['content']['parts'][0]['text'].strip()
+            if summary.lower() == "null":
+                print("Gemini REST API returned null for text.")
+                return ""
+            # Sentence splitting logic
+            sentences = summary.split('。')
+            if len(sentences) > 1:
+                return '。'.join(sentences[:-1]) + '。'
+            return summary
+        elif 'promptFeedback' in response_json and \
+             'blockReason' in response_json['promptFeedback']:
+            print(f"Gemini REST API blocked prompt for text: {response_json['promptFeedback']['blockReason']}")
+            return ""
+        else:
+            print(f"Gemini REST API error or unexpected response format for text: {response.text}")
+            return ""
+            
+    except requests.exceptions.RequestException as e:
+        print(f"Gemini REST API request failed for text: {e}")
         return ""
+    except Exception as e:
+        print(f"An unexpected error occurred with Gemini REST API for text: {e}")
+        return ""
+
+    return "" # Default return if all fails
 
 # 修改翻译标题的部分，支持不同的LLM
 def translate_title(title, content_summary, llm_type=None):
@@ -1007,6 +1260,17 @@ def process_news():
         if article_content:
             content_summary = generate_summary(article_content, 'article')
         
+        if not content_summary: # If text summarization failed or resulted in "null"
+            print(f"Text summarization failed for '{title}', attempting screenshot summarization.")
+            # Placeholder for the actual function call that will be implemented in a later step
+            # For now, assume DEFAULT_LLM is defined globally or accessible in this scope.
+            summary_from_image = get_summary_from_screenshot(news_url, title, DEFAULT_LLM) 
+            if summary_from_image:
+                content_summary = summary_from_image
+                print(f"Successfully generated summary from screenshot for '{title}'.")
+            else:
+                print(f"Screenshot summarization also failed for '{title}'.")
+
         if discussion_content:
             discuss_summary = generate_summary(discussion_content, 'discussion')
         

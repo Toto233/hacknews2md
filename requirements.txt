@@ -9,3 +9,4 @@ lxml
 google-generativeai
 markdown>=3.4.0
 tinycss2>=1.2.1
+selenium
