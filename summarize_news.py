@@ -205,7 +205,7 @@ def get_summary_from_screenshot(news_url, title, llm_type):
     
     temp_image_filename = f"{hashlib.md5(news_url.encode()).hexdigest()}.png"
     temp_image_path = os.path.join(TEMP_IMAGE_DIR, temp_image_filename)
-
+    print(f"temp_image_path: {temp_image_path}")
     options = ChromeOptions()
     options.add_argument("--headless")
     options.add_argument("--disable-gpu")
@@ -239,9 +239,9 @@ def get_summary_from_screenshot(news_url, title, llm_type):
             # and goes to the except block, setting summary to ""
             raise ValueError("Failed to load or encode screenshot.")
 
-        image_prompt = f"这是一个关于新闻文章的截图。请用中文总结其内容，字数在200到250字之间。总结应专业、简洁，并符合中文新闻报道的习惯。如果图片内容看起来不是新闻文章或无法辨认，请只返回“null”。不要添加任何其他说明或开场白，直接给出总结。文章标题是：“{title}”。"
+        image_prompt = f"这是一个关于网页的截图。请用中文描述其内容，字数在200到250字之间。总结应专业、简洁，并符合中文新闻报道的习惯。如果图片内容无法辨认，或者无法理解，请只返回“null”。不要添加任何其他说明或开场白，直接给出总结。网页标题是：“{title}”。"
         summary = generate_summary_from_image(base64_image_data, image_prompt, llm_type)
-
+        print(f"summary: {summary}")
     except Exception as e:
         print(f"Error in get_summary_from_screenshot for {news_url}: {e}")
         summary = "" # Ensure summary is empty on error
