@@ -198,14 +198,35 @@ def generate_summary_from_image(base64_image_data, prompt, llm_type):
     return "" # Default return if all fails
 
 def get_summary_from_screenshot(news_url, title, llm_type):
-    TEMP_IMAGE_DIR = "images/temp"
-    if not os.path.exists(TEMP_IMAGE_DIR):
-        os.makedirs(TEMP_IMAGE_DIR)
-    # Note: .gitignore handling for images/temp is an external concern for this subtask.
+    # Create date-specific directory for images
+    today = datetime.now()
+    date_dir = os.path.join('images', f"{today.year:04d}{today.month:02d}{today.day:02d}")
+    if not os.path.exists(date_dir):
+        os.makedirs(date_dir)
+
+    # Clean title for filename
+    clean_title = re.sub(r'[<>:"/\\|?*]', '', title)
+    clean_title = clean_title.replace(' ', '_')
+    clean_title = re.sub(r'_{2,}', '_', clean_title)
+    clean_title = clean_title[:50]  # Limit title length
+    ext = ".png"
+
+    # Handle filename conflicts
+    index = 1
+    base_filename = clean_title
+    while True:
+        if index == 1:
+            filename = f"{base_filename}{ext}"
+        else:
+            filename = f"{base_filename}_{index}{ext}"
+        
+        image_save_path = os.path.join(date_dir, filename)
+        if not os.path.exists(image_save_path):
+            break
+        index += 1
     
-    temp_image_filename = f"{hashlib.md5(news_url.encode()).hexdigest()}.png"
-    temp_image_path = os.path.join(TEMP_IMAGE_DIR, temp_image_filename)
-    print(f"temp_image_path: {temp_image_path}")
+    print(f"Screenshot will be saved to: {image_save_path}")
+
     options = ChromeOptions()
     options.add_argument("--headless")
     options.add_argument("--disable-gpu")
@@ -215,8 +236,7 @@ def get_summary_from_screenshot(news_url, title, llm_type):
     options.add_argument("user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/98.0.4758.102 Safari/537.36")
 
     driver = None
-    base64_image_data = ""
-    summary = ""
+    saved_screenshot_path = None  # Initialize path to None
 
     try:
         print(f"Attempting to initialize WebDriver for {news_url}")
@@ -224,42 +244,38 @@ def get_summary_from_screenshot(news_url, title, llm_type):
         print(f"WebDriver initialized. Navigating to {news_url}")
         driver.get(news_url)
         
-        # Using time.sleep for now for simplicity as requested:
         print(f"Waiting 10 seconds for page load: {news_url}")
         time.sleep(10) 
 
-        driver.save_screenshot(temp_image_path)
-        print(f"Screenshot saved to {temp_image_path}")
+        driver.save_screenshot(image_save_path)
+        print(f"Screenshot saved to {image_save_path}")
+        saved_screenshot_path = os.path.abspath(image_save_path)
 
-        with open(temp_image_path, "rb") as image_file:
+        # The rest of the logic for image summarization can proceed
+        # but the function's return regarding the path is now prioritized
+        with open(image_save_path, "rb") as image_file:
             base64_image_data = base64.b64encode(image_file.read()).decode('utf-8')
         
         if not base64_image_data:
-            # This ensures that if base64_image_data is empty, it's treated as an error
-            # and goes to the except block, setting summary to ""
             raise ValueError("Failed to load or encode screenshot.")
 
         image_prompt = f"这是一个关于网页的截图。请用中文描述其内容，字数在200到250字之间。总结应专业、简洁，并符合中文新闻报道的习惯。如果图片内容无法辨认，或者无法理解，请只返回“null”。不要添加任何其他说明或开场白，直接给出总结。网页标题是：“{title}”。"
+        # The summary generation itself is kept, but its result doesn't affect the path return value
         summary = generate_summary_from_image(base64_image_data, image_prompt, llm_type)
-        print(f"summary: {summary}")
+        print(f"summary (from screenshot): {summary}") # For logging
+
     except Exception as e:
         print(f"Error in get_summary_from_screenshot for {news_url}: {e}")
-        summary = "" # Ensure summary is empty on error
+        # Ensure path is None if any error occurs before or during saving, or selenium error
+        saved_screenshot_path = None 
     finally:
         if driver:
             print(f"Quitting WebDriver for {news_url}")
             driver.quit()
-        if os.path.exists(temp_image_path):
-            try:
-                os.remove(temp_image_path)
-                print(f"Temporary screenshot {temp_image_path} deleted.")
-            except Exception as e:
-                print(f"Error deleting temporary screenshot {temp_image_path}: {e}")
+        # Deletion of the image is removed as per requirements
 
-    if not summary or summary.lower() == "null":
-        print(f"LLM indicated no valid summary from image or summary was empty for {news_url}.")
-        return ""
-    return summary
+    # Return the absolute path if screenshot was saved, otherwise None
+    return saved_screenshot_path
 
 def create_or_update_table():
     """创建或更新数据库表结构"""
@@ -1260,16 +1276,21 @@ def process_news():
         if article_content:
             content_summary = generate_summary(article_content, 'article')
         
-        if not content_summary: # If text summarization failed or resulted in "null"
-            print(f"Text summarization failed for '{title}', attempting screenshot summarization.")
-            # Placeholder for the actual function call that will be implemented in a later step
-            # For now, assume DEFAULT_LLM is defined globally or accessible in this scope.
-            summary_from_image = get_summary_from_screenshot(news_url, title, DEFAULT_LLM) 
-            if summary_from_image:
-                content_summary = summary_from_image
-                print(f"Successfully generated summary from screenshot for '{title}'.")
+        if not content_summary: # If text summarization failed or article_content was empty
+            print(f"Text summarization failed for '{title}' or article content was empty, attempting screenshot processing.")
+            
+            screenshot_image_path = get_summary_from_screenshot(news_url, title, DEFAULT_LLM) 
+            
+            if screenshot_image_path: # Check if a path was returned (i.e., screenshot saved)
+                print(f"Screenshot successfully saved to: {screenshot_image_path}")
+                # Update the database with the path to the screenshot for largest_image
+                cursor.execute('UPDATE news SET largest_image = ? WHERE id = ?', 
+                               (screenshot_image_path, news_id))
+                # The main loop already has conn.commit() at the end of each item processing block.
+                print(f"Database will be updated with screenshot path for largest_image: {screenshot_image_path}")
+                # content_summary remains empty if it was empty before this block, as per requirements.
             else:
-                print(f"Screenshot summarization also failed for '{title}'.")
+                print(f"Screenshot processing (capture or save) failed for '{title}'. No image path to save for largest_image.")
 
         if discussion_content:
             discuss_summary = generate_summary(discussion_content, 'discussion')
