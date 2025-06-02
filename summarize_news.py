@@ -259,7 +259,10 @@ def get_summary_from_screenshot(news_url, title, llm_type):
         if not base64_image_data:
             raise ValueError("Failed to load or encode screenshot.")
 
-        image_prompt = f"这是一个关于网页的截图。请用中文描述其内容，字数在200到250字之间。总结应专业、简洁，并符合中文新闻报道的习惯。如果图片内容无法辨认，或者无法理解，请只返回“null”。不要添加任何其他说明或开场白，直接给出总结。网页标题是：“{title}”。"
+        image_prompt = (
+            '这是一个关于网页的截图。请用中文描述其内容，字数在200到250字之间。总结应专业、简洁，并符合中文新闻报道的习惯。'
+            '如果图片内容无法辨认，或者无法理解，请只返回"null"。不要添加任何其他说明或开场白，直接给出总结。网页标题是："{}"。'.format(title)
+        )
         # The summary generation itself is kept, but its result doesn't affect the path return value
         summary = generate_summary_from_image(base64_image_data, image_prompt, llm_type)
         print(f"summary (from screenshot): {summary}") # For logging
@@ -1286,9 +1289,25 @@ def process_news():
                 # Update the database with the path to the screenshot for largest_image
                 cursor.execute('UPDATE news SET largest_image = ? WHERE id = ?', 
                                (screenshot_image_path, news_id))
-                # The main loop already has conn.commit() at the end of each item processing block.
                 print(f"Database will be updated with screenshot path for largest_image: {screenshot_image_path}")
-                # content_summary remains empty if it was empty before this block, as per requirements.
+                
+                # 新增：用截图生成摘要，并保存到 content_summary
+                try:
+                    with open(screenshot_image_path, "rb") as image_file:
+                        base64_image_data = base64.b64encode(image_file.read()).decode('utf-8')
+                    image_prompt = (
+                        '这是一个关于网页的截图。请用中文描述其内容，字数在200到250字之间。总结应专业、简洁，并符合中文新闻报道的习惯。'
+                        '如果图片内容无法辨认，或者无法理解，请只返回"null"。不要添加任何其他说明或开场白，直接给出总结。网页标题是："{}"。'.format(title)
+                    )
+                    # 调用图片摘要生成
+                    content_summary = generate_summary_from_image(base64_image_data, image_prompt, DEFAULT_LLM)
+                    print(f"图片摘要（content_summary）: {content_summary}")
+                    # 保存图片摘要到数据库
+                    if content_summary:
+                        cursor.execute('UPDATE news SET content_summary = ? WHERE id = ?', (content_summary, news_id))
+                        print(f"已将图片摘要保存到 content_summary 字段。")
+                except Exception as e:
+                    print(f"图片摘要生成或保存失败: {e}")
             else:
                 print(f"Screenshot processing (capture or save) failed for '{title}'. No image path to save for largest_image.")
 

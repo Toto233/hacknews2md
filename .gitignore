@@ -29,3 +29,4 @@ ENV/
 
 # dbclint 配置文件
 hacknews.sqbpro
+*.code-workspace
