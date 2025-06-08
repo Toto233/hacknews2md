@@ -7,35 +7,8 @@ import urllib.parse
 import time
 # 导入归档模块
 from archive_news import archive_old_news
-
-def create_database():
-    conn = sqlite3.connect('hacknews.db')
-    cursor = conn.cursor()
-    cursor.execute('''
-    CREATE TABLE IF NOT EXISTS news (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        title TEXT,
-        title_chs TEXT,
-        news_url TEXT,
-        discuss_url TEXT,
-        content_summary TEXT,
-        discuss_summary TEXT,
-        created_at TIMESTAMP
-    )
-    ''')
-    
-    # 创建过滤域名表
-    cursor.execute('''
-    CREATE TABLE IF NOT EXISTS filtered_domains (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        domain TEXT UNIQUE,
-        reason TEXT,
-        created_at TIMESTAMP
-    )
-    ''')
-    
-    conn.commit()
-    conn.close()
+# 新增：导入db_utils
+import db_utils
 
 def extract_domain(url):
     """从URL中提取域名"""
@@ -181,7 +154,8 @@ def list_filtered_domains():
     return domains
 
 def main():
-    create_database()
+    # 统一初始化所有表结构
+    db_utils.init_database()
     # 先执行归档操作，清理旧数据
     archive_old_news()
     # 然后获取新闻

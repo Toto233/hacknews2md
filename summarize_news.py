@@ -29,6 +29,9 @@ from selenium.webdriver.support import expected_conditions as EC # If using WebD
 import base64
 # os and time are already imported
 
+# 新增：导入db_utils
+import db_utils
+
 # 禁用SSL证书验证警告
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
@@ -279,93 +282,6 @@ def get_summary_from_screenshot(news_url, title, llm_type):
 
     # Return the absolute path if screenshot was saved, otherwise None
     return saved_screenshot_path
-
-def create_or_update_table():
-    """创建或更新数据库表结构"""
-    conn = sqlite3.connect('hacknews.db')
-    cursor = conn.cursor()
-    
-    # 检查是否需要添加新字段
-    cursor.execute("PRAGMA table_info(news)")
-    columns = [column[1] for column in cursor.fetchall()]
-    
-    # 添加原始内容字段
-    if 'article_content' not in columns:
-        cursor.execute('ALTER TABLE news ADD COLUMN article_content TEXT')
-    if 'discussion_content' not in columns:
-        cursor.execute('ALTER TABLE news ADD COLUMN discussion_content TEXT')
-    if 'largest_image' not in columns:
-        cursor.execute('ALTER TABLE news ADD COLUMN largest_image TEXT')
-    # 添加新的图片字段
-    if 'image_2' not in columns:
-        cursor.execute('ALTER TABLE news ADD COLUMN image_2 TEXT')
-    if 'image_3' not in columns:
-        cursor.execute('ALTER TABLE news ADD COLUMN image_3 TEXT')
-    
-    # 创建违法关键字表
-    cursor.execute('''
-    CREATE TABLE IF NOT EXISTS illegal_keywords (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        keyword TEXT UNIQUE,
-        created_at TIMESTAMP
-    )
-    ''')
-    
-    conn.commit()
-    conn.close()
-    print("数据库表结构已更新")
-
-def get_illegal_keywords():
-    """获取所有违法关键字"""
-    conn = sqlite3.connect('hacknews.db')
-    cursor = conn.cursor()
-    cursor.execute('SELECT keyword FROM illegal_keywords')
-    keywords = [row[0] for row in cursor.fetchall()]
-    conn.close()
-    return keywords
-
-def add_illegal_keyword(keyword):
-    """添加违法关键字"""
-    conn = sqlite3.connect('hacknews.db')
-    cursor = conn.cursor()
-    try:
-        cursor.execute(
-            'INSERT INTO illegal_keywords (keyword, created_at) VALUES (?, datetime("now", "localtime"))',
-            (keyword,)
-        )
-        conn.commit()
-        print(f"成功添加违法关键字: {keyword}")
-    except sqlite3.IntegrityError:
-        print(f"关键字 {keyword} 已存在")
-    finally:
-        conn.close()
-
-def check_illegal_content(text, keywords):
-    """检查文本是否包含违法关键字，返回包含的关键字列表"""
-    if not text or not keywords:
-        return []
-    
-    found_keywords = []
-    for keyword in keywords:
-        if keyword in text:
-            found_keywords.append(keyword)
-    
-    return found_keywords
-
-def highlight_keywords(text, keywords):
-    """高亮显示文本中的关键字"""
-    if not text or not keywords:
-        return text
-    
-    highlighted_text = text
-    for keyword in keywords:
-        # 使用红色高亮显示关键字
-        highlighted_text = highlighted_text.replace(
-            keyword, 
-            f"{colorama.Fore.RED}{keyword}{colorama.Fore.RESET}"
-        )
-    
-    return highlighted_text
 
 def handle_compressed_content(content, encoding):
     """处理压缩的内容
@@ -1209,10 +1125,10 @@ def process_news():
     cursor = conn.cursor()
     
     # 先确保表结构正确
-    create_or_update_table()
+    db_utils.init_database()
     
     # 获取所有违法关键字
-    illegal_keywords = get_illegal_keywords()
+    illegal_keywords = db_utils.get_illegal_keywords()
     
     # 获取需要处理的新闻
     cursor.execute('''
@@ -1325,17 +1241,17 @@ def process_news():
                 print(f"已翻译标题: {title_chs}")
         
         # 检查摘要中是否包含违法关键字
-        content_illegal_keywords = check_illegal_content(content_summary, illegal_keywords)
-        discuss_illegal_keywords = check_illegal_content(discuss_summary, illegal_keywords)
+        content_illegal_keywords = db_utils.check_illegal_content(content_summary, illegal_keywords)
+        discuss_illegal_keywords = db_utils.check_illegal_content(discuss_summary, illegal_keywords)
         
         # 如果包含违法关键字，在控制台输出并高亮显示
         if content_illegal_keywords:
             print(f"\n{colorama.Fore.YELLOW}警告: 文章摘要包含违法关键字:{colorama.Fore.RESET}")
-            print(highlight_keywords(content_summary, content_illegal_keywords))
+            print(db_utils.highlight_keywords(content_summary, content_illegal_keywords))
         
         if discuss_illegal_keywords:
             print(f"\n{colorama.Fore.YELLOW}警告: 讨论摘要包含违法关键字:{colorama.Fore.RESET}")
-            print(highlight_keywords(discuss_summary, discuss_illegal_keywords))
+            print(db_utils.highlight_keywords(discuss_summary, discuss_illegal_keywords))
         
         # 更新摘要
         if content_summary or discuss_summary:
@@ -1362,7 +1278,7 @@ def main():
         return
     
     # 确保表结构正确
-    create_or_update_table()
+    db_utils.init_database()
     process_news()
     print("所有新闻项目处理完成。")
 
