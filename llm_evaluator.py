@@ -14,7 +14,7 @@ def evaluate_news_attraction(news_items, llm_type=None):
     # 组装prompt
     prompt = NEWS_ATTRACTION_PROMPT.format(titles_text=titles_text)
     # 调用统一LLM接口
-    result_text = call_llm(prompt, llm_type=llm_type, response_format={"type": "json_object"})
+    result_text = call_llm(prompt, llm_type=llm_type, response_format={"type": "json_object"},model=None,temperature=None,max_tokens=8192)
     # 解析结果
     try:
         result = json.loads(result_text)

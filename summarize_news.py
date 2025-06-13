@@ -29,12 +29,6 @@ from selenium.webdriver.support import expected_conditions as EC # If using WebD
 import base64
 # os and time are already imported
 
-# 新增：导入db_utils
-import db_utils
-
-# 新增：导入llm_business
-from llm_business import generate_summary, generate_summary_from_image, translate_title
-
 # 禁用SSL证书验证警告
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
@@ -68,6 +62,140 @@ colorama.init()
 #     config = json.load(f)
 #     GROK_API_KEY = config.get('GROK_API_KEY')
 #     GROK_API_URL = config.get('GROK_API_URL', 'https://api.x.ai/v1/chat/completions')
+
+def generate_summary_from_image(base64_image_data, prompt, llm_type):
+    if llm_type.lower() == 'grok':
+        print("Image summarization is not currently supported for Grok. Please configure Gemini as the default LLM for this feature.")
+        return "" # Consistent "null" / empty handling
+
+    # Assuming Gemini if not Grok
+    # Access global config for Gemini settings
+    # GEMINI_API_KEY is already global
+    # GEMINI_API_URL is already global (for REST fallback)
+    
+    if not GEMINI_API_KEY:
+        print("错误: GEMINI_API_KEY 未设置 (Error: GEMINI_API_KEY not set)")
+        return "" 
+    if not base64_image_data:
+        print("错误: base64_image_data 为空 (Error: base64_image_data is empty)")
+        return ""
+
+    gemini_model_name = config.get('GEMINI_MODEL', 'gemini-1.5-flash-latest')
+    
+    # Attempt with google.generativeai library first
+    try:
+        from google import generativeai as genai
+
+        genai.configure(api_key=GEMINI_API_KEY)
+        model = genai.GenerativeModel(gemini_model_name)
+
+        image_part = {
+            "mime_type": "image/png", 
+            "data": base64_image_data
+        }
+        
+        print(f"Attempting image summarization with google-generativeai library, model: {gemini_model_name}")
+        response = model.generate_content([prompt, image_part])
+
+        if hasattr(response, 'text') and response.text:
+            summary = response.text.strip()
+            if summary.lower() == "null":
+                print("Gemini API (google-generativeai) returned null for image.")
+                return ""
+            return summary
+        elif hasattr(response, 'prompt_feedback') and response.prompt_feedback.block_reason:
+            print(f"Gemini API (google-generativeai) blocked prompt: {response.prompt_feedback.block_reason}")
+            return "" 
+        else:
+            # Check for parts if text is not directly available (though less common for simple image prompts)
+            if hasattr(response, 'parts') and response.parts:
+                 summary_parts = [part.text for part in response.parts if hasattr(part, 'text')]
+                 if summary_parts:
+                     summary = "".join(summary_parts).strip()
+                     if summary.lower() == "null":
+                         print("Gemini API (google-generativeai) returned null in parts for image.")
+                         return ""
+                     return summary
+            print(f"Gemini API (google-generativeai) returned no usable text. Response: {response}")
+            return ""
+
+    except ImportError:
+        print("google.generativeai library not found. Falling back to REST API for image summarization.")
+    except Exception as e:
+        print(f"Error with google.generativeai for image summarization: {e}")
+        print("Falling back to REST API due to google-generativeai error.")
+
+    # Fallback to REST API
+    print(f"Attempting image summarization with REST API, model: {gemini_model_name}")
+    headers = {
+        'Content-Type': 'application/json'
+    }
+    params = {'key': GEMINI_API_KEY}
+    
+    payload = {
+        "contents": [{
+            "parts": [
+                {"text": prompt},
+                {
+                    "inline_data": {
+                        "mime_type": "image/png", 
+                        "data": base64_image_data
+                    }
+                }
+            ]
+        }],
+        "generationConfig": {
+            "temperature": config.get('GEMINI_TEMPERATURE', 0.7),
+            "maxOutputTokens": config.get('GEMINI_MAX_TOKENS_IMAGE', config.get('GEMINI_MAX_TOKENS', 250)) # Specific max tokens for image or general
+        }
+    }
+
+    # Construct the API URL carefully
+    base_gemini_api_url = config.get('GEMINI_API_URL_BASE', 'https://generativelanguage.googleapis.com/v1beta/models/')
+    if base_gemini_api_url.endswith('/'): # Ensure it ends with a slash if it's just the base
+         gemini_api_url_to_use = f"{base_gemini_api_url}{gemini_model_name}:generateContent"
+    else: # If user provided full URL template or specific model URL
+         # This logic might need adjustment if config.get('GEMINI_API_URL') is expected to be the full URL already
+         # For now, assuming GEMINI_API_URL from config might be the full URL directly
+         gemini_api_url_from_config = config.get('GEMINI_API_URL')
+         if gemini_api_url_from_config and "generateContent" in gemini_api_url_from_config:
+             gemini_api_url_to_use = gemini_api_url_from_config # Use it directly if it seems complete
+         else: # Fallback to constructing from base and model name
+             gemini_api_url_to_use = f"{base_gemini_api_url.rstrip('/')}/{gemini_model_name}:generateContent"
+
+
+    try:
+        print(f"Posting to Gemini REST API: {gemini_api_url_to_use}")
+        response = requests.post(gemini_api_url_to_use, headers=headers, params=params, json=payload, timeout=30)
+        response.raise_for_status()
+        response_json = response.json()
+
+        if 'candidates' in response_json and len(response_json['candidates']) > 0 and \
+           'content' in response_json['candidates'][0] and \
+           'parts' in response_json['candidates'][0]['content'] and \
+           len(response_json['candidates'][0]['content']['parts']) > 0 and \
+           'text' in response_json['candidates'][0]['content']['parts'][0]:
+            summary = response_json['candidates'][0]['content']['parts'][0]['text'].strip()
+            if summary.lower() == "null":
+                print("Gemini REST API returned null for image.")
+                return ""
+            return summary
+        elif 'promptFeedback' in response_json and \
+             'blockReason' in response_json['promptFeedback']:
+            print(f"Gemini REST API blocked prompt: {response_json['promptFeedback']['blockReason']}")
+            return ""
+        else:
+            print(f"Gemini REST API error or unexpected response format: {response.text}")
+            return ""
+            
+    except requests.exceptions.RequestException as e:
+        print(f"Gemini REST API request failed: {e}")
+        return ""
+    except Exception as e:
+        print(f"An unexpected error occurred with Gemini REST API for image: {e}")
+        return ""
+    
+    return "" # Default return if all fails
 
 def get_summary_from_screenshot(news_url, title, llm_type):
     # Create date-specific directory for images
@@ -151,6 +279,93 @@ def get_summary_from_screenshot(news_url, title, llm_type):
 
     # Return the absolute path if screenshot was saved, otherwise None
     return saved_screenshot_path
+
+def create_or_update_table():
+    """创建或更新数据库表结构"""
+    conn = sqlite3.connect('hacknews.db')
+    cursor = conn.cursor()
+    
+    # 检查是否需要添加新字段
+    cursor.execute("PRAGMA table_info(news)")
+    columns = [column[1] for column in cursor.fetchall()]
+    
+    # 添加原始内容字段
+    if 'article_content' not in columns:
+        cursor.execute('ALTER TABLE news ADD COLUMN article_content TEXT')
+    if 'discussion_content' not in columns:
+        cursor.execute('ALTER TABLE news ADD COLUMN discussion_content TEXT')
+    if 'largest_image' not in columns:
+        cursor.execute('ALTER TABLE news ADD COLUMN largest_image TEXT')
+    # 添加新的图片字段
+    if 'image_2' not in columns:
+        cursor.execute('ALTER TABLE news ADD COLUMN image_2 TEXT')
+    if 'image_3' not in columns:
+        cursor.execute('ALTER TABLE news ADD COLUMN image_3 TEXT')
+    
+    # 创建违法关键字表
+    cursor.execute('''
+    CREATE TABLE IF NOT EXISTS illegal_keywords (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        keyword TEXT UNIQUE,
+        created_at TIMESTAMP
+    )
+    ''')
+    
+    conn.commit()
+    conn.close()
+    print("数据库表结构已更新")
+
+def get_illegal_keywords():
+    """获取所有违法关键字"""
+    conn = sqlite3.connect('hacknews.db')
+    cursor = conn.cursor()
+    cursor.execute('SELECT keyword FROM illegal_keywords')
+    keywords = [row[0] for row in cursor.fetchall()]
+    conn.close()
+    return keywords
+
+def add_illegal_keyword(keyword):
+    """添加违法关键字"""
+    conn = sqlite3.connect('hacknews.db')
+    cursor = conn.cursor()
+    try:
+        cursor.execute(
+            'INSERT INTO illegal_keywords (keyword, created_at) VALUES (?, datetime("now", "localtime"))',
+            (keyword,)
+        )
+        conn.commit()
+        print(f"成功添加违法关键字: {keyword}")
+    except sqlite3.IntegrityError:
+        print(f"关键字 {keyword} 已存在")
+    finally:
+        conn.close()
+
+def check_illegal_content(text, keywords):
+    """检查文本是否包含违法关键字，返回包含的关键字列表"""
+    if not text or not keywords:
+        return []
+    
+    found_keywords = []
+    for keyword in keywords:
+        if keyword in text:
+            found_keywords.append(keyword)
+    
+    return found_keywords
+
+def highlight_keywords(text, keywords):
+    """高亮显示文本中的关键字"""
+    if not text or not keywords:
+        return text
+    
+    highlighted_text = text
+    for keyword in keywords:
+        # 使用红色高亮显示关键字
+        highlighted_text = highlighted_text.replace(
+            keyword, 
+            f"{colorama.Fore.RED}{keyword}{colorama.Fore.RESET}"
+        )
+    
+    return highlighted_text
 
 def handle_compressed_content(content, encoding):
     """处理压缩的内容
@@ -638,15 +853,366 @@ def get_discussion_content(url):
         print(f"Error fetching discussion content: {e}")
         return ""
 
+def generate_summary(text, prompt_type='article', llm_type=None):
+    """
+    生成摘要，支持不同的LLM模型
+    
+    Args:
+        text: 需要总结的文本
+        prompt_type: 'article'或'discussion'
+        llm_type: 使用的LLM类型，None表示使用默认设置
+    
+    Returns:
+        生成的摘要文本
+    """
+    if not text:
+        return ""
+    
+    # 如果未指定LLM类型，使用默认设置
+    if llm_type is None:
+        llm_type = DEFAULT_LLM
+    
+    # 为文章和评论使用不同的提示语
+    if prompt_type == 'article':
+        prompt = f"将以下用三引号包裹的英文新闻用简洁准确的中文总结，200到250字。专业、简洁，符合中文新闻报道习惯。乐观、生动、对任何新鲜事都感兴趣。目标读者为一群爱好科技和 对有意思生活充满好奇的中文读者。请翻译并总结以下英文新闻的核心内容，突出背景、事件和影响，保留重要细节与数据，避免过多赘述，返回的内容只有正文，不需要包含markdown格式的标题：\n\"\"\"{text}\"\"\"\n如果你认为这个文章并没有正确读取，请只返回null，不要返回任何其他文字。"
+        system_content = '你是一名专业的中文新闻编辑，擅长精准流畅地翻译和总结英文新闻。'
+    else:  # 评论提示语
+        prompt = f"下方用三引号包裹的英文讨论为hacknews社区的内容，返回文字中以社区代替\"hacknews社区\"，将以下英文讨论用简洁准确的中文总结，200到250字。尽量多的介绍不同讨论者的言论，避免对单个评论过多赘述，返回的内容只有正文，不需要包含markdown格式的标题：\"\"\"\n{text}\n\"\"\"如果讨论内容不充分或无法理解，请返回null，不要返回任何其他文字。"
+        system_content = '你是一个专业的讨论内容分析助手，擅长中文新闻编辑，擅长精准流畅地翻译和总结英文评论。'
+    
+    try:
+        # 根据LLM类型选择不同的API调用方式
+        if llm_type.lower() == 'grok':
+            return generate_summary_grok(prompt, system_content)
+        elif llm_type.lower() == 'gemini':
+            return generate_summary_gemini(prompt, system_content)
+        else:
+            print(f"不支持的LLM类型: {llm_type}，使用默认的Grok")
+            return generate_summary_grok(prompt, system_content)
+    except Exception as e:
+        print(f"生成摘要时出错: {e}")
+        # 如果主要LLM失败，尝试使用备用LLM
+        try:
+            backup_llm = 'gemini' if llm_type.lower() == 'grok' else 'grok'
+            print(f"尝试使用备用LLM: {backup_llm}")
+            if backup_llm == 'grok':
+                return generate_summary_grok(prompt, system_content)
+            else:
+                return generate_summary_gemini(prompt, system_content)
+        except Exception as e2:
+            print(f"备用LLM也失败了: {e2}")
+            return ""
+
+def generate_summary_grok(prompt, system_content):
+    """使用Grok API生成摘要"""
+    if not GROK_API_KEY:
+        print("错误: GROK_API_KEY未设置")
+        return ""
+    
+    headers = {
+        'Authorization': f'Bearer {GROK_API_KEY}',
+        'Content-Type': 'application/json'
+    }
+    
+    data = {
+        'messages': [
+            {
+                'role': 'system',
+                'content': system_content
+            },
+            {
+                'role': 'user',
+                'content': prompt
+            }
+        ],
+        'model': GROK_MODEL,
+        'temperature': GROK_TEMPERATURE,
+        'max_tokens': GROK_MAX_TOKENS,
+        'stream': False
+    }
+    
+    response = requests.post(GROK_API_URL, headers=headers, json=data, verify=True)
+    response_json = response.json()
+    
+    if response.status_code == 200 and 'choices' in response_json:
+        summary = response_json['choices'][0]['message']['content'].strip()
+        
+        # 检查是否返回了"null"
+        if summary.lower() == "null":
+            print("Grok API返回null，认为没有有效内容")
+            return ""
+        
+        # 直接分割句子并返回除最后一句外的所有句子
+        sentences = summary.split('。')
+        if len(sentences) > 1:
+            return '。'.join(sentences[:-1]) + '。'
+        return summary
+    else:
+        print(f"Grok API错误: {response.text}")
+        return ""
+
+def generate_summary_gemini(prompt, system_content):
+    """使用Gemini API生成摘要"""
+    if not GEMINI_API_KEY:
+        print("错误: GEMINI_API_KEY未设置")
+        return ""
+    
+    gemini_model_name = config.get('GEMINI_MODEL', 'gemini-1.5-flash-latest')
+    # Attempt with google.generativeai library first
+    try:
+        from google import generativeai as genai
+
+        genai.configure(api_key=GEMINI_API_KEY)
+        model = genai.GenerativeModel(gemini_model_name)
+        
+        full_prompt = f"{system_content}\n\n{prompt}"
+        print(f"Attempting text summarization with google-generativeai library, model: {gemini_model_name}")
+        response = model.generate_content(full_prompt)
+
+        if hasattr(response, 'text') and response.text:
+            summary = response.text.strip()
+            if summary.lower() == "null":
+                print("Gemini API (google-generativeai) returned null for text.")
+                return ""
+            # The sentence splitting logic is preserved for text summaries
+            sentences = summary.split('。')
+            if len(sentences) > 1:
+                return '。'.join(sentences[:-1]) + '。'
+            return summary
+        elif hasattr(response, 'prompt_feedback') and response.prompt_feedback.block_reason:
+            print(f"Gemini API (google-generativeai) blocked prompt for text: {response.prompt_feedback.block_reason}")
+            return ""
+        else:
+            if hasattr(response, 'parts') and response.parts:
+                 summary_parts = [part.text for part in response.parts if hasattr(part, 'text')]
+                 if summary_parts:
+                     summary = "".join(summary_parts).strip()
+                     if summary.lower() == "null":
+                         print("Gemini API (google-generativeai) returned null in parts for text.")
+                         return ""
+                     # Sentence splitting for parts as well
+                     sentences = summary.split('。')
+                     if len(sentences) > 1:
+                         return '。'.join(sentences[:-1]) + '。'
+                     return summary
+            print(f"Gemini API (google-generativeai) returned no usable text. Response: {response}")
+            return ""
+
+    except ImportError:
+        print("google.generativeai library not found. Falling back to REST API for text summarization.")
+    except Exception as e:
+        print(f"Error with google.generativeai for text summarization: {e}")
+        print("Falling back to REST API due to google-generativeai error.")
+
+    # Fallback to REST API for text summarization
+    print(f"Attempting text summarization with REST API, model: {gemini_model_name}")
+    headers = {'Content-Type': 'application/json'}
+    params = {'key': GEMINI_API_KEY}
+    
+    payload = {
+        "contents": [{"parts": [{"text": f"{system_content}\n\n{prompt}"}]}],
+        "generationConfig": {
+            "temperature": config.get('GEMINI_TEMPERATURE', 0.7),
+            "maxOutputTokens": config.get('GEMINI_MAX_TOKENS', 200) 
+        }
+    }
+
+    base_gemini_api_url = config.get('GEMINI_API_URL_BASE', 'https://generativelanguage.googleapis.com/v1beta/models/')
+    if base_gemini_api_url.endswith('/'):
+         gemini_api_url_to_use = f"{base_gemini_api_url}{gemini_model_name}:generateContent"
+    else:
+         gemini_api_url_from_config = config.get('GEMINI_API_URL') # This is the old single URL config
+         if gemini_api_url_from_config and "generateContent" in gemini_api_url_from_config and gemini_model_name in gemini_api_url_from_config:
+             # If the old GEMINI_API_URL contains the model name and :generateContent, use it
+             gemini_api_url_to_use = gemini_api_url_from_config
+         elif gemini_api_url_from_config and "generateContent" in gemini_api_url_from_config:
+             # If it has generateContent but not model, try to insert model (less ideal)
+             # This case might indicate a misconfiguration if GEMINI_API_URL_BASE is not used.
+             # For safety, we'll replace the default model in a generic URL if possible, or stick to a full default.
+             # Defaulting to gemini-1.5-flash-latest if GEMINI_MODEL is not in the URL.
+             default_model_for_url = 'gemini-1.5-flash-latest' # A known good default
+             url_parts = gemini_api_url_from_config.split('/')
+             try:
+                 model_idx = url_parts.index("models") + 1
+                 url_parts[model_idx] = gemini_model_name
+                 gemini_api_url_to_use = "/".join(url_parts)
+             except ValueError: # "models" not in URL or structure is unexpected
+                 gemini_api_url_to_use = f"https://generativelanguage.googleapis.com/v1beta/models/{gemini_model_name}:generateContent"
+
+         else: # Fallback to constructing from base and model name, or full default
+             gemini_api_url_to_use = f"{base_gemini_api_url.rstrip('/')}/{gemini_model_name}:generateContent"
+    
+    try:
+        print(f"Posting to Gemini REST API for text: {gemini_api_url_to_use}")
+        response = requests.post(gemini_api_url_to_use, headers=headers, params=params, json=payload, timeout=30)
+        response.raise_for_status() 
+        response_json = response.json()
+
+        if 'candidates' in response_json and len(response_json['candidates']) > 0 and \
+           'content' in response_json['candidates'][0] and \
+           'parts' in response_json['candidates'][0]['content'] and \
+           len(response_json['candidates'][0]['content']['parts']) > 0 and \
+           'text' in response_json['candidates'][0]['content']['parts'][0]:
+            summary = response_json['candidates'][0]['content']['parts'][0]['text'].strip()
+            if summary.lower() == "null":
+                print("Gemini REST API returned null for text.")
+                return ""
+            # Sentence splitting logic
+            sentences = summary.split('。')
+            if len(sentences) > 1:
+                return '。'.join(sentences[:-1]) + '。'
+            return summary
+        elif 'promptFeedback' in response_json and \
+             'blockReason' in response_json['promptFeedback']:
+            print(f"Gemini REST API blocked prompt for text: {response_json['promptFeedback']['blockReason']}")
+            return ""
+        else:
+            print(f"Gemini REST API error or unexpected response format for text: {response.text}")
+            return ""
+            
+    except requests.exceptions.RequestException as e:
+        print(f"Gemini REST API request failed for text: {e}")
+        return ""
+    except Exception as e:
+        print(f"An unexpected error occurred with Gemini REST API for text: {e}")
+        return ""
+
+    return "" # Default return if all fails
+
+# 修改翻译标题的部分，支持不同的LLM
+def translate_title(title, content_summary, llm_type=None):
+    """
+    翻译标题，支持不同的LLM模型
+    
+    Args:
+        title: 原始标题
+        content_summary: 文章摘要，提供上下文
+        llm_type: 使用的LLM类型，None表示使用默认设置
+    
+    Returns:
+        翻译后的标题
+    """
+    if not title or not content_summary:
+        return ""
+    
+    # 如果未指定LLM类型，使用默认设置
+    if llm_type is None:
+        llm_type = DEFAULT_LLM
+    
+    translation_prompt = f"请根据以下包含在三引号中的英文标题和文章摘要，请给出最有冲击力、最通顺的中文标题翻译,标题可以不直译,翻译的标题直接返回结果，无需添加任何额外内容，如果文章摘要为空，或者不符合，请直接返回空。英文标题：\"\"\"{title}\"\"\"文章摘要：\"\"\"{content_summary}\"\"\""
+    system_content = '你是一个专业的新闻编辑，需要根据文章上下文提供有冲击力的标题翻译。'
+    
+    try:
+        # 根据LLM类型选择不同的API调用方式
+        if llm_type.lower() == 'grok':
+            headers = {
+                'Authorization': f'Bearer {GROK_API_KEY}',
+                'Content-Type': 'application/json'
+            }
+            
+            data = {
+                'messages': [
+                    {
+                        'role': 'system',
+                        'content': system_content
+                    },
+                    {
+                        'role': 'user',
+                        'content': translation_prompt
+                    }
+                ],
+                'model': GROK_MODEL,
+                'temperature': GROK_TEMPERATURE,
+                'max_tokens': GROK_MAX_TOKENS,
+                'stream': False
+            }
+            
+            response = requests.post(GROK_API_URL, headers=headers, json=data, verify=True)
+            response_json = response.json()
+            
+            if response.status_code == 200 and 'choices' in response_json:
+                translated_title = response_json['choices'][0]['message']['content'].strip()
+                # 检查是否返回了"null"
+                if translated_title.lower() == "null":
+                    print(f"Grok API翻译标题返回null，认为没有有效翻译: {title}")
+                    return ""
+                return translated_title
+        elif llm_type.lower() == 'gemini':
+            try:
+                from google import generativeai as genai
+                
+                genai.configure(api_key=GEMINI_API_KEY)
+                model = genai.GenerativeModel('gemini-2.0-flash')
+                
+                # 合并system_content和prompt
+                full_prompt = f"{system_content}\n\n{translation_prompt}"
+                
+                response = model.generate_content(full_prompt)
+                
+                if hasattr(response, 'text'):
+                    translated_title = response.text.strip()
+                    # 检查是否返回了"null"
+                    if translated_title.lower() == "null":
+                        print(f"Gemini API翻译标题返回null，认为没有有效翻译: {title}")
+                        return ""
+                    return translated_title
+            except ImportError:
+                # 如果没有安装Google API库，使用REST API
+                headers = {
+                    'Content-Type': 'application/json'
+                }
+                
+                params = {
+                    'key': GEMINI_API_KEY
+                }
+                
+                data = {
+                    'contents': [
+                        {
+                            'parts': [
+                                {
+                                    'text': f"{system_content}\n\n{translation_prompt}"
+                                }
+                            ]
+                        }
+                    ],
+                    'generationConfig': {
+                        'temperature': 0.7,
+                        'maxOutputTokens': 200
+                    }
+                }
+                
+                response = requests.post(
+                    GEMINI_API_URL, 
+                    headers=headers, 
+                    params=params,
+                    json=data
+                )
+                
+                if response.status_code == 200:
+                    response_json = response.json()
+                    if 'candidates' in response_json and len(response_json['candidates']) > 0:
+                        translated_title = response_json['candidates'][0]['content']['parts'][0]['text'].strip()
+                        # 检查是否返回了"null"
+                        if translated_title.lower() == "null":
+                            print(f"Gemini REST API翻译标题返回null，认为没有有效翻译: {title}")
+                            return ""
+                        return translated_title
+    except Exception as e:
+        print(f"翻译标题时出错: {e}")
+    
+    return ""
+
+# 修改process_news函数，使用新的翻译函数
 def process_news():
     conn = sqlite3.connect('hacknews.db')
     cursor = conn.cursor()
     
     # 先确保表结构正确
-    db_utils.init_database()
+    create_or_update_table()
     
     # 获取所有违法关键字
-    illegal_keywords = db_utils.get_illegal_keywords()
+    illegal_keywords = get_illegal_keywords()
     
     # 获取需要处理的新闻
     cursor.execute('''
@@ -759,17 +1325,17 @@ def process_news():
                 print(f"已翻译标题: {title_chs}")
         
         # 检查摘要中是否包含违法关键字
-        content_illegal_keywords = db_utils.check_illegal_content(content_summary, illegal_keywords)
-        discuss_illegal_keywords = db_utils.check_illegal_content(discuss_summary, illegal_keywords)
+        content_illegal_keywords = check_illegal_content(content_summary, illegal_keywords)
+        discuss_illegal_keywords = check_illegal_content(discuss_summary, illegal_keywords)
         
         # 如果包含违法关键字，在控制台输出并高亮显示
         if content_illegal_keywords:
             print(f"\n{colorama.Fore.YELLOW}警告: 文章摘要包含违法关键字:{colorama.Fore.RESET}")
-            print(db_utils.highlight_keywords(content_summary, content_illegal_keywords))
+            print(highlight_keywords(content_summary, content_illegal_keywords))
         
         if discuss_illegal_keywords:
             print(f"\n{colorama.Fore.YELLOW}警告: 讨论摘要包含违法关键字:{colorama.Fore.RESET}")
-            print(db_utils.highlight_keywords(discuss_summary, discuss_illegal_keywords))
+            print(highlight_keywords(discuss_summary, discuss_illegal_keywords))
         
         # 更新摘要
         if content_summary or discuss_summary:
@@ -796,7 +1362,7 @@ def main():
         return
     
     # 确保表结构正确
-    db_utils.init_database()
+    create_or_update_table()
     process_news()
     print("所有新闻项目处理完成。")
 

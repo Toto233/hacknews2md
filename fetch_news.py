@@ -66,6 +66,11 @@ def fetch_news():
         news_title = title_link.text
         news_url = title_link['href']
         
+        # 如果 news_url 不是完整的 URL，则补全为 Hacker News 的标准链接
+        if not (news_url.startswith("http://") or news_url.startswith("https://")):
+            # 补全为 https://news.ycombinator.com/item?id=xxxx
+            news_url = f"https://news.ycombinator.com/{news_url}"
+        
         # 提取域名并检查是否被过滤
         domain = extract_domain(news_url)
         if domain and is_domain_filtered(domain, cursor):
