@@ -50,8 +50,8 @@ def extract_with_gemini(prompt, config):
         model_name = config.get('model', 'gemini-2.0-flash')
         model = genai.GenerativeModel(model_name)
         generation_config = {
-            "temperature": 0.7,
-            "max_output_tokens": 128,
+            "temperature": config.get('temperature', 0.7),
+            "max_output_tokens": config.get('max_tokens', 8196),
         }
         response = model.generate_content(prompt, generation_config=generation_config)
         text = response.text
@@ -99,8 +99,8 @@ def extract_with_grok(prompt, config):
         data = {
             "model": config.get('model', 'grok-3'),
             "messages": [{"role": "user", "content": prompt}],
-            "max_tokens": config.get('max_tokens', 128),
-            "temperature": config.get('temperature', 0.7)
+            "temperature": config.get('temperature', 0.7),
+            "max_output_tokens": config.get('max_tokens', 8196),
         }
         resp = requests.post(url, headers=headers, json=data, timeout=30)
         resp.raise_for_status()
