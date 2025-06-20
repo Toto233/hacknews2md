@@ -721,7 +721,7 @@ def process_news():
             if screenshot_image_path: # Check if a path was returned (i.e., screenshot saved)
                 print(f"Screenshot successfully saved to: {screenshot_image_path}")
                 # Update the database with the path to the screenshot for largest_image
-                cursor.execute('UPDATE news SET largest_image = ? WHERE id = ?', 
+                cursor.execute('UPDATE news SET largest_3= ? WHERE id = ?', 
                                (screenshot_image_path, news_id))
                 print(f"Database will be updated with screenshot path for largest_image: {screenshot_image_path}")
                 
