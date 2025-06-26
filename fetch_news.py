@@ -24,6 +24,13 @@ def is_domain_filtered(domain, cursor):
     cursor.execute('SELECT id FROM filtered_domains WHERE domain = ?', (domain,))
     return cursor.fetchone() is not None
 
+
+def is_url_in_history(news_url, cursor):
+    """检查URL是否存在于news_history表中"""
+    cursor.execute('SELECT id FROM news_history WHERE news_url = ?', (news_url,))
+    return cursor.fetchone() is not None
+
+
 def fetch_news():
     url = 'https://news.ycombinator.com/front'
     headers = {
@@ -34,7 +41,7 @@ def fetch_news():
     }
     
     max_retries = 3
-    retry_delay = 2  # 重试间隔秒数
+    retry_delay = 2
     
     for attempt in range(max_retries):
         try:
@@ -54,30 +61,32 @@ def fetch_news():
     titles = soup.find_all('span', class_='titleline')
     subtext = soup.find_all('td', class_='subtext')
     
-    # 连接数据库获取过滤域名
     conn = sqlite3.connect('hacknews.db')
     cursor = conn.cursor()
     
-    for idx, (title, sub) in enumerate(zip(titles, subtext)):
-        if idx >= 10:  # 只获取前10条新闻
+    for title, sub in zip(titles, subtext):
+        if len(news_items) >= 10:
             break
             
         title_link = title.find('a')
+        if not title_link:
+            continue
+            
         news_title = title_link.text
         news_url = title_link['href']
         
-        # 如果 news_url 不是完整的 URL，则补全为 Hacker News 的标准链接
         if not (news_url.startswith("http://") or news_url.startswith("https://")):
-            # 补全为 https://news.ycombinator.com/item?id=xxxx
             news_url = f"https://news.ycombinator.com/{news_url}"
         
-        # 提取域名并检查是否被过滤
+        if is_url_in_history(news_url, cursor):
+            print(f"跳过已存在于历史记录中的新闻: {news_title}")
+            continue
+            
         domain = extract_domain(news_url)
         if domain and is_domain_filtered(domain, cursor):
             print(f"跳过被过滤的域名: {domain}, 标题: {news_title}")
             continue
         
-        # 获取discuss链接
         discuss_link = sub.find('a', string=lambda text: text and 'comment' in text.lower())
         if discuss_link:
             discuss_id = discuss_link['href'].split('id=')[1]
