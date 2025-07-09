@@ -1,6 +1,7 @@
 # 配置文件
 config.json
 CLAUDE.md
+.claude/
 
 # Markdown文件
 hacknews_summary*.md
