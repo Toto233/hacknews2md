@@ -187,9 +187,216 @@ class WeChatArticleConverter:
     def _render_separator(self) -> str:
         """渲染分隔线"""
         return '<hr class="wechat-separator">'
+
+    def _load_css(self) -> str:
+        """加载CSS样式：优先读取外部文件，失败则回退到内置默认样式。
+        - 外部文件路径优先顺序：
+          1) 与本文件同级目录下的 css/wechat-article.css
+          2) 当前工作目录下的 css/wechat-article.css
+        """
+        candidates = [
+            os.path.join(os.path.dirname(os.path.abspath(__file__)), 'css', 'wechat-article.css'),
+            os.path.join(os.getcwd(), 'css', 'wechat-article.css'),
+        ]
+        for path in candidates:
+            try:
+                if os.path.isfile(path):
+                    with open(path, 'r', encoding='utf-8') as f:
+                        return f.read()
+            except Exception:
+                # 读取失败则尝试下一个候选路径
+                pass
+        # 回退到内置CSS，确保可用
+        default_css = """:root {
+  /* Typography */
+  --font-sans: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', 'Hiragino Sans GB', 'Microsoft YaHei', 'Helvetica Neue', Helvetica, Arial, sans-serif;
+  --font-mono: 'Monaco', 'Menlo', 'Ubuntu Mono', monospace;
+  --line-height-body: 1.8;
+
+  /* Layout */
+  --content-max-width: 800px;
+  --spacing-page: 20px;
+  --spacing-page-mobile: 15px;
+  --spacing-paragraph: 15px;
+
+  /* Font sizes */
+  --font-size-title: 24px;
+  --font-size-title-mobile: 20px;
+  --font-size-h2-mobile: 18px;
+  --font-size-body: 16px;
+  --font-size-meta: 14px;
+  --font-size-code: 14px;
+  --font-size-link-block: 15px;
+
+  /* Colors */
+  --color-bg: #ffffff;
+  --color-text: #2c3e50;
+  --color-muted: #7f8c8d;
+  --color-primary: rgb(239, 112, 96);
+  --color-accent-blue: #3498db;
+  --color-link-block-bg: #f8f9fa;
+  --color-code-bg: #f1f2f6;
+  --color-code-text: #e74c3c;
+  --color-separator: #bdc3c7;
+  --color-tag-bg: #ecf0f1;
+  --color-tag-bg-hover: #bdc3c7;
+  --color-tag-text: #34495e;
+  --color-header-border: #e74c3c;
+
+  /* Radii & Shadows */
+  --radius-image: 8px;
+  --radius-code: 4px;
+  --radius-tag: 20px;
+  --shadow-image: 0 4px 20px rgba(0, 0, 0, 0.1);
+
+  /* H2 (wechat-title) */
+  --h2-padding-y: 12px;
+  --h2-margin-top: 25px;
+  --h2-margin-bottom: 16px;
+  --h2-border-width: 2px;
+}
+
+body {
+  font-family: var(--font-sans);
+  line-height: var(--line-height-body);
+  color: var(--color-text);
+  background-color: var(--color-bg);
+  margin: 0;
+  padding: var(--spacing-page);
+  max-width: var(--content-max-width);
+  margin: 0 auto;
+}
+
+.article-header {
+  text-align: center;
+  margin-bottom: 30px;
+  padding-bottom: 20px;
+  border-bottom: 2px solid var(--color-header-border);
+}
+
+.article-title {
+  font-size: var(--font-size-title);
+  font-weight: bold;
+  color: var(--color-text);
+  margin-bottom: 15px;
+  line-height: 1.4;
+}
+
+.article-meta {
+  color: var(--color-muted);
+  font-size: var(--font-size-meta);
+}
+
+.wechat-title {
+  color: var(--color-primary);
+  padding: var(--h2-padding-y) 0;
+  margin: var(--h2-margin-top) 0 var(--h2-margin-bottom) 0;
+  border-bottom: var(--h2-border-width) solid var(--color-primary);
+  font-weight: 700;
+}
+
+.title-number {
+  margin-right: 10px;
+  font-size: 0.9em;
+  color: var(--color-primary);
+}
+
+.title-text {
+  font-weight: 700;
+  color: var(--color-primary);
+}
+
+.content-paragraph {
+  font-size: var(--font-size-body);
+  margin: var(--spacing-paragraph) 0;
+  text-align: justify;
+  color: var(--color-text);
+}
+
+.link-paragraph {
+  background: var(--color-link-block-bg);
+  border-left: 4px solid var(--color-accent-blue);
+  padding: 12px 15px;
+  margin: 15px 0;
+  border-radius: 0 4px 4px 0;
+  font-size: var(--font-size-link-block);
+}
+
+.image-container {
+  text-align: center;
+  margin: 20px 0;
+}
+
+.wechat-image {
+  max-width: 100%;
+  height: auto;
+  border-radius: var(--radius-image);
+  box-shadow: var(--shadow-image);
+}
+
+.image-caption {
+  margin-top: 8px;
+  color: var(--color-muted);
+  font-size: var(--font-size-meta);
+  font-style: italic;
+}
+
+.inline-code {
+  background: var(--color-code-bg);
+  color: var(--color-code-text);
+  padding: 2px 6px;
+  border-radius: var(--radius-code);
+  font-family: var(--font-mono);
+  font-size: var(--font-size-code);
+}
+
+.wechat-separator {
+  border: none;
+  height: 2px;
+  background: linear-gradient(90deg, transparent, var(--color-separator), transparent);
+  margin: 30px 0;
+}
+
+.tags-container {
+  margin-top: 30px;
+  text-align: center;
+}
+
+.tag {
+  display: inline-block;
+  background: var(--color-tag-bg);
+  color: var(--color-tag-text);
+  padding: 6px 12px;
+  margin: 5px;
+  border-radius: var(--radius-tag);
+  font-size: 13px;
+  text-decoration: none;
+}
+
+.tag:hover {
+  background: var(--color-tag-bg-hover);
+}
+
+@media (max-width: 768px) {
+  body {
+    padding: var(--spacing-page-mobile);
+  }
+
+  .wechat-title {
+    padding: var(--h2-padding-y) 15px;
+    font-size: var(--font-size-h2-mobile);
+  }
+
+  .article-title {
+    font-size: var(--font-size-title-mobile);
+  }
+}
+"""
+        return default_css
     
     def _generate_full_html(self, yaml_data: Dict[str, Any], article_content: str) -> str:
         """生成完整的HTML文档"""
+        css_content = self._load_css()
         return f'''<!DOCTYPE html>
 <html lang="zh-CN">
 <head>
@@ -197,142 +404,7 @@ class WeChatArticleConverter:
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>{yaml_data['title']}</title>
     <style>
-        /* 微信公众号文章样式 */
-        body {{
-            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', 'Hiragino Sans GB', 'Microsoft YaHei', 'Helvetica Neue', Helvetica, Arial, sans-serif;
-            line-height: 1.8;
-            color: #333;
-            background-color: #fff;
-            margin: 0;
-            padding: 20px;
-            max-width: 800px;
-            margin: 0 auto;
-        }}
-        
-        .article-header {{
-            text-align: center;
-            margin-bottom: 30px;
-            padding-bottom: 20px;
-            border-bottom: 2px solid #e74c3c;
-        }}
-        
-        .article-title {{
-            font-size: 24px;
-            font-weight: bold;
-            color: #2c3e50;
-            margin-bottom: 15px;
-            line-height: 1.4;
-        }}
-        
-        .article-meta {{
-            color: #7f8c8d;
-            font-size: 14px;
-        }}
-        
-        .wechat-title {{
-            color: rgb(239, 112, 96);
-            padding: 12px 0;
-            margin: 25px 0 16px 0;
-            border-bottom: 2px solid rgb(239, 112, 96);
-            font-weight: 700;
-        }}
-        
-        .title-number {{
-            margin-right: 10px;
-            font-size: 0.9em;
-            color: rgb(239, 112, 96);
-        }}
-        
-        .title-text {{
-            font-weight: 700;
-            color: rgb(239, 112, 96);
-        }}
-        
-        .content-paragraph {{
-            font-size: 16px;
-            margin: 15px 0;
-            text-align: justify;
-            color: #2c3e50;
-        }}
-        
-        .link-paragraph {{
-            background: #f8f9fa;
-            border-left: 4px solid #3498db;
-            padding: 12px 15px;
-            margin: 15px 0;
-            border-radius: 0 4px 4px 0;
-            font-size: 15px;
-        }}
-        
-        .image-container {{
-            text-align: center;
-            margin: 20px 0;
-        }}
-        
-        .wechat-image {{
-            max-width: 100%;
-            height: auto;
-            border-radius: 8px;
-            box-shadow: 0 4px 20px rgba(0,0,0,0.1);
-        }}
-        
-        .image-caption {{
-            margin-top: 8px;
-            color: #7f8c8d;
-            font-size: 14px;
-            font-style: italic;
-        }}
-        
-        .inline-code {{
-            background: #f1f2f6;
-            color: #e74c3c;
-            padding: 2px 6px;
-            border-radius: 4px;
-            font-family: 'Monaco', 'Menlo', 'Ubuntu Mono', monospace;
-            font-size: 14px;
-        }}
-        
-        .wechat-separator {{
-            border: none;
-            height: 2px;
-            background: linear-gradient(90deg, transparent, #bdc3c7, transparent);
-            margin: 30px 0;
-        }}
-        
-        .tags-container {{
-            margin-top: 30px;
-            text-align: center;
-        }}
-        
-        .tag {{
-            display: inline-block;
-            background: #ecf0f1;
-            color: #34495e;
-            padding: 6px 12px;
-            margin: 5px;
-            border-radius: 20px;
-            font-size: 13px;
-            text-decoration: none;
-        }}
-        
-        .tag:hover {{
-            background: #bdc3c7;
-        }}
-        
-        @media (max-width: 768px) {{
-            body {{
-                padding: 15px;
-            }}
-            
-            .wechat-title {{
-                padding: 12px 15px;
-                font-size: 18px;
-            }}
-            
-            .article-title {{
-                font-size: 20px;
-            }}
-        }}
+{css_content}
     </style>
 </head>
 <body>
