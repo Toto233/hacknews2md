@@ -2,6 +2,7 @@ import sqlite3
 from datetime import datetime
 from llm_evaluator import evaluate_news_attraction
 from llm_tag_extractor import extract_tags_with_llm
+from markdown_to_html_converter import convert_markdown_to_html
 import os
 
 
@@ -111,26 +112,45 @@ tags:
     conn.close()
     
     # 生成markdown文件
-    filename = f"hacknews_summary_{datetime.now().strftime('%Y%m%d_%H%M')}.md"
-    with open(filename, 'w', encoding='utf-8') as f:
+    md_filename = f"hacknews_summary_{datetime.now().strftime('%Y%m%d_%H%M')}.md"
+    with open(md_filename, 'w', encoding='utf-8') as f:
         f.write(markdown_content)
     
-    print(f'Successfully generated markdown file: {filename}')
-
-    # 新增：读取内容复制到剪贴板，并打开网页
-    try:
-        import pyperclip
-    except ImportError:
-        import subprocess
-        subprocess.check_call(["pip", "install", "pyperclip"])
-        import pyperclip
-    with open(filename, 'r', encoding='utf-8') as f:
-        content = f.read()
-    pyperclip.copy(content)
-    print('已复制内容到剪贴板')
-    import webbrowser
-    webbrowser.open('https://markdown.com.cn/editor/')
+    print(f'Successfully generated markdown file: {md_filename}')
+    
+    # 生成HTML文件
+    html_filename = f"hacknews_summary_{datetime.now().strftime('%Y%m%d_%H%M')}.html"
+    html_content = convert_markdown_to_html(markdown_content)
+    with open(html_filename, 'w', encoding='utf-8') as f:
+        f.write(html_content)
+    
+    print(f'Successfully generated HTML file: {html_filename}')
+    
+    # 在浏览器中显示HTML，方便复制到微信公众号
+    print('正在浏览器中打开HTML文件，请复制内容后关闭浏览器...')
+    from browser_manager import display_html_in_browser
+    browser_manager = display_html_in_browser(html_content, auto_close=False)
     webbrowser.open('https://mp.weixin.qq.com/')
+
+    # 等待用户复制内容
+    input("请复制HTML内容到微信公众号，完成后按回车键关闭浏览器...")
+    if browser_manager:
+        browser_manager.close_browser()
+
+    # # 新增：读取内容复制到剪贴板，并打开网页
+    # try:
+    #     import pyperclip
+    # except ImportError:
+    #     import subprocess
+    #     subprocess.check_call(["pip", "install", "pyperclip"])
+    #     import pyperclip
+    # with open(md_filename, 'r', encoding='utf-8') as f:
+    #     content = f.read()
+    # pyperclip.copy(content)
+    # print('已复制内容到剪贴板')
+    # import webbrowser
+    # webbrowser.open('https://markdown.com.cn/editor/')
+    # webbrowser.open('https://mp.weixin.qq.com/')
 
 def main():
     generate_markdown()
