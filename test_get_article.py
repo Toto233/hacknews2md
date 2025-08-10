@@ -18,6 +18,10 @@ def test_article_fetch():
         #     'url': 'https://www.youtube.com/watch?v=T_3O1FCxS5Q'
         # },
         {
+            'title': 'Sample X/Twitter Tweet (Interior bear photo)',
+            'url': 'https://x.com/Interior/status/463440424141459456'
+        },
+        {
             'title': 'How to get a full transcript of YouTube videos in 2025',
             'url': 'https://www.descript.com/blog/article/transcript-of-youtube-videos'
         }

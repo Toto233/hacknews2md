@@ -7,7 +7,8 @@ import json
 import urllib3
 import re
 import colorama
-from urllib.parse import urljoin, urlparse, parse_qs
+from urllib.parse import urljoin, urlparse, parse_qs, quote_plus
+import logging
 import time
 import brotli  # 添加brotli支持
 from PIL import Image
@@ -152,6 +153,317 @@ def get_summary_from_screenshot(news_url, title, llm_type):
     # Return the absolute path if screenshot was saved, otherwise None
     return saved_screenshot_path
 
+def _is_x_url(url: str) -> bool:
+    try:
+        netloc = urlparse(url).netloc.lower()
+        return any(domain in netloc for domain in [
+            'x.com', 'twitter.com', 'mobile.twitter.com', 'm.twitter.com'
+        ])
+    except Exception:
+        return False
+
+def _extract_tweet_id(url: str) -> str:
+    try:
+        parsed = urlparse(url)
+        # Path like /{user}/status/{id}
+        parts = [p for p in parsed.path.split('/') if p]
+        if 'status' in parts:
+            idx = parts.index('status')
+            if idx + 1 < len(parts):
+                candidate = parts[idx + 1]
+                # Strip query fragments like ?s=20
+                candidate = candidate.split('?')[0].split('#')[0]
+                if candidate.isdigit():
+                    return candidate
+        return ''
+    except Exception:
+        return ''
+
+def _fetch_x_via_cdn(tweet_id: str) -> tuple:
+    """Use Twitter's public syndication endpoint to fetch tweet text and photos.
+    Returns (text, [image_urls]).
+    """
+    if not tweet_id:
+        return '', []
+    api_url = f"https://cdn.syndication.twimg.com/widgets/tweet?id={tweet_id}"
+    try:
+        headers = {
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Safari/537.36',
+            'Accept': 'application/json,text/html;q=0.9,*/*;q=0.8',
+            'Accept-Language': 'en-US,en;q=0.9,zh-CN;q=0.8'
+        }
+        resp = requests.get(api_url, headers=headers, timeout=15)
+        if resp.status_code != 200:
+            return '', []
+        data = resp.json()
+        # The 'text' field is often HTML; strip tags for plain text
+        raw_text = data.get('text') or data.get('full_text') or ''
+        text = ''
+        if raw_text:
+            try:
+                text = BeautifulSoup(raw_text, 'html.parser').get_text(separator=' ', strip=True)
+            except Exception:
+                text = str(raw_text)
+
+        # Photos may be under 'photos' list, each with 'url'
+        image_urls = []
+        photos = data.get('photos') or []
+        for photo in photos:
+            url = photo.get('url') or ''
+            if url:
+                image_urls.append(url)
+
+        # Also check for 'media' objects
+        media = data.get('media') or []
+        for m in media:
+            m_url = m.get('url') or m.get('media_url_https') or m.get('media_url') or ''
+            if m_url:
+                image_urls.append(m_url)
+
+        # De-duplicate while preserving order
+        seen = set()
+        deduped = []
+        for u in image_urls:
+            if u not in seen:
+                seen.add(u)
+                deduped.append(u)
+
+        return text, deduped
+    except Exception as e:
+        logging.warning(f"_fetch_x_via_cdn failed for {tweet_id}: {e}")
+        return '', []
+
+def _fetch_x_via_selenium(url: str) -> tuple:
+    """Render the X page headlessly and extract tweet text and images.
+    Returns (text, [image_urls]).
+    """
+    options = ChromeOptions()
+    options.add_argument('--headless=new')
+    options.add_argument('--disable-gpu')
+    options.add_argument('--no-sandbox')
+    options.add_argument('--disable-dev-shm-usage')
+    options.add_argument('--window-size=1400,1000')
+    options.add_argument('--lang=en-US')
+    options.add_experimental_option('excludeSwitches', ['enable-automation'])
+    options.add_experimental_option('useAutomationExtension', False)
+    options.add_argument('user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Safari/537.36')
+
+    driver = None
+    try:
+        driver = webdriver.Chrome(options=options)
+        driver.get(url)
+        # Wait for the main tweet text to appear
+        WebDriverWait(driver, 20).until(
+            EC.presence_of_element_located((By.CSS_SELECTOR, 'article [data-testid="tweetText"]'))
+        )
+        # Extract all visible tweet text blocks in the page (e.g., thread)
+        text_blocks = []
+        for el in driver.find_elements(By.CSS_SELECTOR, 'article [data-testid="tweetText"]'):
+            try:
+                t = el.text.strip()
+                if t:
+                    text_blocks.append(t)
+            except Exception:
+                pass
+        text = '\n\n'.join(text_blocks).strip()
+
+        # Collect image URLs
+        image_urls = []
+        for img in driver.find_elements(By.CSS_SELECTOR, 'article [data-testid="tweetPhoto"] img, article img[src*="pbs.twimg.com/media"]'):
+            try:
+                src = img.get_attribute('src')
+                if src and src.startswith('http'):
+                    image_urls.append(src)
+            except Exception:
+                pass
+
+        # De-duplicate and cap to a few images
+        seen = set()
+        deduped = []
+        for u in image_urls:
+            if u not in seen:
+                seen.add(u)
+                deduped.append(u)
+        return text, deduped[:5]
+    except Exception as e:
+        logging.warning(f"_fetch_x_via_selenium failed for {url}: {e}")
+        return '', []
+    finally:
+        if driver:
+            try:
+                driver.quit()
+            except Exception:
+                pass
+
+def _fetch_x_via_oembed(url: str) -> tuple:
+    """Use Twitter oEmbed endpoint to fetch tweet HTML and extract text/images.
+    Returns (text, [image_urls]).
+    """
+    try:
+        api = f"https://publish.twitter.com/oembed?omit_script=1&hide_thread=1&hide_media=0&url={quote_plus(url)}"
+        headers = {
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Safari/537.36',
+            'Accept': 'application/json',
+        }
+        resp = requests.get(api, headers=headers, timeout=15)
+        if resp.status_code != 200:
+            return '', []
+        data = resp.json()
+        html = data.get('html') or ''
+        if not html:
+            return '', []
+        soup = BeautifulSoup(html, 'html.parser')
+        text = soup.get_text(separator=' ', strip=True)
+        image_urls = []
+        for img in soup.find_all('img'):
+            src = img.get('src')
+            if src and src.startswith('http'):
+                image_urls.append(src)
+        seen = set()
+        deduped = []
+        for u in image_urls:
+            if u not in seen:
+                seen.add(u)
+                deduped.append(u)
+        return text, deduped
+    except Exception as e:
+        logging.warning(f"_fetch_x_via_oembed failed for {url}: {e}")
+        return '', []
+
+def _fetch_via_jina(url: str) -> tuple:
+    """Fallback: Use r.jina.ai readability proxy to fetch textual content.
+    Returns (text, [image_urls]).
+    """
+    try:
+        parsed = urlparse(url)
+        # Build absolute http URL for the proxy
+        base = f"http://{parsed.netloc}{parsed.path}"
+        proxy_url = f"https://r.jina.ai/{base}"
+        headers = {
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Safari/537.36',
+            'Accept': 'text/html, */*'
+        }
+        resp = requests.get(proxy_url, headers=headers, timeout=20)
+        if resp.status_code != 200:
+            return '', []
+        soup = BeautifulSoup(resp.text, 'html.parser')
+        text = soup.get_text(separator=' ', strip=True)
+        image_urls = []
+        for img in soup.find_all('img'):
+            src = img.get('src')
+            if src and 'pbs.twimg.com' in src:
+                image_urls.append(src)
+        seen = set()
+        deduped = []
+        for u in image_urls:
+            if u not in seen:
+                seen.add(u)
+                deduped.append(u)
+        return text, deduped[:5]
+    except Exception as e:
+        logging.warning(f"_fetch_via_jina failed for {url}: {e}")
+        return '', []
+
+def _fetch_via_nitter(tweet_id: str) -> tuple:
+    """Fallback: Use public Nitter mirrors to fetch tweet page and parse text/images.
+    Returns (text, [image_urls]).
+    """
+    if not tweet_id:
+        return '', []
+    mirrors = [
+        'https://nitter.net',
+        'https://nitter.pufe.org',
+        'https://nitter.fdn.fr',
+        'https://nitter.poast.org',
+    ]
+    headers = {
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Safari/537.36',
+        'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+        'Accept-Language': 'en-US,en;q=0.9,zh-CN;q=0.8'
+    }
+    for base in mirrors:
+        try:
+            url = f"{base}/i/status/{tweet_id}"
+            resp = requests.get(url, headers=headers, timeout=15)
+            if resp.status_code != 200:
+                continue
+            soup = BeautifulSoup(resp.text, 'html.parser')
+            # Tweet text inside .main-tweet .tweet-content
+            text_el = soup.select_one('.main-tweet .tweet-content') or soup.select_one('.tweet-content')
+            text = text_el.get_text(separator=' ', strip=True) if text_el else ''
+            # Images inside attachments; Nitter sometimes uses <a class="still-image"> without <img>
+            image_urls = []
+            # 1) Direct <img> tags
+            for img in soup.select('.attachments .attachment.image img, .main-tweet .attachments img'):
+                src = img.get('src')
+                if not src:
+                    continue
+                if src.startswith('//'):
+                    src = 'https:' + src
+                elif src.startswith('/'):
+                    src = base + src
+                image_urls.append(src)
+            # 2) Anchor-based images
+            for a in soup.select('.attachments .attachment.image a.still-image, a.still-image, a.image'):
+                href = a.get('href')
+                if not href:
+                    continue
+                if href.startswith('//'):
+                    href = 'https:' + href
+                elif href.startswith('/'):
+                    href = base + href
+                image_urls.append(href)
+            # Deduplicate
+            seen = set(); deduped = []
+            for u in image_urls:
+                if u not in seen:
+                    seen.add(u); deduped.append(u)
+            if text:
+                return text, deduped
+        except Exception as e:
+            logging.warning(f"_fetch_via_nitter failed for {base} id={tweet_id}: {e}")
+            continue
+    return '', []
+
+def _fetch_via_vxtwitter(tweet_id: str) -> tuple:
+    """Use vxtwitter public API to fetch tweet text and media.
+    Returns (text, [image_urls]).
+    """
+    if not tweet_id:
+        return '', []
+    api = f"https://api.vxtwitter.com/Twitter/status/{tweet_id}"
+    headers = {
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Safari/537.36',
+        'Accept': 'application/json'
+    }
+    try:
+        resp = requests.get(api, headers=headers, timeout=15)
+        if resp.status_code != 200:
+            return '', []
+        data = resp.json()
+        text = data.get('text') or ''
+        image_urls = []
+        # mediaURLs is an array of direct media links
+        media_urls = data.get('mediaURLs') or []
+        for u in media_urls:
+            if isinstance(u, str) and u.startswith('http'):
+                image_urls.append(u)
+        # Attachments may also exist under 'media_extended'
+        media_ext = data.get('media_extended') or []
+        for m in media_ext:
+            u = (m.get('url') or m.get('source')) if isinstance(m, dict) else None
+            if u and isinstance(u, str) and u.startswith('http'):
+                image_urls.append(u)
+        # Deduplicate
+        seen = set(); deduped = []
+        for u in image_urls:
+            if u not in seen:
+                seen.add(u); deduped.append(u)
+        return text, deduped
+    except Exception as e:
+        logging.warning(f"_fetch_via_vxtwitter failed for {tweet_id}: {e}")
+        return '', []
+
 def handle_compressed_content(content, encoding):
     """处理压缩的内容
     
@@ -232,7 +544,65 @@ def get_article_content(url, title):
 
         return article_content, image_urls, image_paths
 
-    # ----- 如果不是YouTube链接，执行原有逻辑 -----
+    # ----- X/Twitter 专用处理 -----
+    if _is_x_url(url):
+        print("检测到X/Twitter链接，尝试通过公开接口获取...")
+        tweet_id = _extract_tweet_id(url)
+        x_text, x_images = _fetch_x_via_cdn(tweet_id)
+
+        # 如果CDN失败，尝试Selenium渲染
+        if not x_text:
+            print("CDN接口获取失败或无内容，尝试使用Selenium渲染...")
+            x_text, x_images = _fetch_x_via_selenium(url)
+
+        # 如果Selenium失败，再尝试oEmbed接口
+        if not x_text:
+            print("Selenium渲染失败或无内容，尝试oEmbed接口...")
+            x_text, x_images = _fetch_x_via_oembed(url)
+
+        # 尝试 vxtwitter API
+        if not x_text:
+            print("oEmbed失败或无内容，尝试vxtwitter API...")
+            x_text, x_images = _fetch_via_vxtwitter(tweet_id)
+
+        # 尝试Nitter镜像
+        if not x_text:
+            print("vxtwitter失败或无内容，尝试Nitter镜像...")
+            x_text, x_images = _fetch_via_nitter(tweet_id)
+
+        # 最后兜底通过r.jina.ai
+        if not x_text:
+            print("Nitter也失败，尝试使用r.jina.ai代理获取...")
+            x_text, x_images = _fetch_via_jina(url)
+
+        if x_text:
+            print("成功提取X/Twitter内容")
+            # 如果未获取到图片，尝试用 r.jina.ai 兜底抓取图片
+            if not x_images:
+                # 先尝试 vxtwitter 获取媒体
+                _, vx_images = _fetch_via_vxtwitter(tweet_id)
+                if vx_images:
+                    x_images = vx_images
+            if not x_images:
+                j_text, j_images = _fetch_via_jina(url)
+                if j_images:
+                    x_images = j_images
+            if not x_images:
+                _, n_images = _fetch_via_nitter(tweet_id)
+                if n_images:
+                    x_images = n_images
+            image_urls = []
+            image_paths = []
+            for i, img_url in enumerate(x_images[:3], 1):
+                saved = save_article_image(img_url, url, f"{title}_{i}")
+                if saved:
+                    image_urls.append(img_url)
+                    image_paths.append(saved)
+            return x_text, image_urls, image_paths
+        else:
+            print("X/Twitter内容提取失败，回退到截图方案或通用解析...")
+
+    # ----- 如果不是YouTube或X链接，执行原有逻辑 -----
     print("非YouTube链接，执行标准内容获取...")
     headers = {
         'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36',
