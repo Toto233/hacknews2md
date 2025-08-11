@@ -130,8 +130,17 @@ tags:
     print('正在浏览器中打开HTML文件，请复制内容后关闭浏览器...')
     from browser_manager import display_html_in_browser
     browser_manager = display_html_in_browser(html_content, auto_close=False)
+    import webbrowser
     webbrowser.open('https://mp.weixin.qq.com/')
-
+    try:
+        import pyperclip
+    except ImportError:
+        import subprocess
+        subprocess.check_call(["pip", "install", "pyperclip"])
+        import pyperclip
+    # 复制YAML标题到剪贴板，便于后续粘贴
+    pyperclip.copy(yaml_title)
+    print('已复制标题到剪贴板')
     # 等待用户复制内容
     input("请复制HTML内容到微信公众号，完成后按回车键关闭浏览器...")
     if browser_manager:
