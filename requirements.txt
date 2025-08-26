@@ -1,4 +1,5 @@
 requests
+PySocks
 beautifulsoup4>=4.12.0
 colorama
 Pillow
@@ -10,3 +11,4 @@ google-generativeai
 markdown>=3.4.0
 tinycss2>=1.2.1
 selenium
+crawl4ai

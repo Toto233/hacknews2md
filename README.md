@@ -30,7 +30,7 @@
 
 ## 环境要求
 - Python 3.6+
-- 必要的 Python 包：requests, beautifulsoup4, sqlite3
+- 必要的 Python 包：requests, beautifulsoup4, sqlite3, crawl4ai（用于网页抓取）
 - Grok API 密钥（需要在 config.json 中配置）
 - （HTML 转换模块使用标准库，无需额外第三方依赖）
 

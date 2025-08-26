@@ -135,6 +135,8 @@ class WeChatArticleConverter:
         if title_match:
             item_number = title_match.group(1)
             title_text = title_match.group(2)
+            # 处理标题内的强调（不处理为代码）
+            title_text = self._process_emphasis_on_non_code(title_text)
             
             # 生成微信公众号风格的标题HTML（仅显示一次标题文本）
             return f'''<h2 class="wechat-title">
@@ -173,6 +175,9 @@ class WeChatArticleConverter:
         # 处理行内代码
         escaped_line = self._process_inline_code(escaped_line)
         
+        # 处理强调（粗体与斜体），避免影响已转换的 <code> 块
+        escaped_line = self._process_emphasis_on_non_code(escaped_line)
+        
         return f'<p class="content-paragraph">{escaped_line}</p>'
     
     def _process_inline_code(self, text: str) -> str:
@@ -183,6 +188,24 @@ class WeChatArticleConverter:
             return f'<code class="inline-code">{code}</code>'
         
         return re.sub(r'`([^`]+)`', replace_code, text)
+
+    def _process_emphasis_on_non_code(self, text: str) -> str:
+        """在不包含 <code>…</code> 的片段上处理强调，保护代码片段不被替换"""
+        parts = re.split(r'(<code[^>]*>.*?</code>)', text)
+        for i in range(len(parts)):
+            # 仅处理非代码片段
+            if i % 2 == 0:
+                parts[i] = self._process_emphasis(parts[i])
+        return ''.join(parts)
+
+    def _process_emphasis(self, text: str) -> str:
+        """处理粗体与斜体：**text**/__text__ -> <STRONG>，*text*/_text_ -> <EM>"""
+        # 先处理粗体（避免与斜体规则冲突）
+        text = re.sub(r'(\*\*|__)(.+?)\1', r'<STRONG>\2</STRONG>', text)
+        # 再处理斜体（避免匹配到已替换的粗体标签内部）
+        text = re.sub(r'(?<!\*)\*(?!\s)(.+?)(?<!\s)\*(?!\*)', r'<EM>\1</EM>', text)
+        text = re.sub(r'(?<!_)_(?!\s)(.+?)(?<!\s)_(?!_)', r'<EM>\1</EM>', text)
+        return text
     
     def _render_separator(self) -> str:
         """渲染分隔线"""
