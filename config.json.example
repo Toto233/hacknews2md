@@ -10,5 +10,7 @@
     "GEMINI_MODEL": "gemini-2.5-flash-preview-04-17",
     "GEMINI_TEMPERATURE": 0.7,
     "GEMINI_MAX_TOKENS": 200,
-    "DEFAULT_LLM": "gemini"
+    "DEFAULT_LLM": "gemini",
+
+    "MIN_ARTICLE_CONTENT_CHARS": 30
 }
