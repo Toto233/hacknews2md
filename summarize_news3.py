@@ -361,7 +361,7 @@ async def get_youtube_content(url: str, title: str) -> Tuple[str, List[str], Lis
     try:
         from youtube_transcript_api import YouTubeTranscriptApi, NoTranscriptFound, TranscriptsDisabled
         
-        transcript_list = YouTubeTranscriptApi.list_transcripts(video_id)
+        transcript_list = YouTubeTranscriptApi().list(video_id)
         transcript = transcript_list.find_generated_transcript(['zh-Hans', 'zh-Hant', 'en'])
         transcript_data = transcript.fetch()
         article_content = " ".join([item.text for item in transcript_data])
