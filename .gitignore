@@ -24,6 +24,7 @@ __pycache__/
 env/
 venv/
 ENV/
+offline_package/
 
 # IDE配置文件
 .idea/
@@ -37,7 +38,7 @@ hacknews.sqbpro
 
 # Memory bank - keep sensitive project context local
 memory-bank/
-.claude/settings.local.json
+.claude/*
 
 # Qwen Code Context
 QWEN.md

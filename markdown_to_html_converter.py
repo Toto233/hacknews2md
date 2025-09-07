@@ -157,7 +157,6 @@ class WeChatArticleConverter:
             # 生成微信公众号风格的图片HTML
             return f'''<div class="image-container">
     <img src="{src_url}" alt="{alt_text}" class="wechat-image">
-    <p class="image-caption">{alt_text}</p>
 </div>'''
         
         return line
