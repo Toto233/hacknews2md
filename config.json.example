@@ -12,5 +12,9 @@
     "GEMINI_MAX_TOKENS": 200,
     "DEFAULT_LLM": "gemini",
 
-    "MIN_ARTICLE_CONTENT_CHARS": 30
+    "MIN_ARTICLE_CONTENT_CHARS": 30,
+    "wechat": {
+        "appid": "your-appid-here",
+        "appsec": "your-appsec-here"
+    }
 }

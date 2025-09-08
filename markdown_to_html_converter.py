@@ -130,6 +130,7 @@ class WeChatArticleConverter:
     
     def _process_heading(self, line: str) -> str:
         """处理标题行"""
+        styles = self._get_inline_styles()
         # 提取编号与标题文本
         title_match = re.match(r'^##\s+(\d+)\.\s+(.+)$', line)
         if title_match:
@@ -138,36 +139,40 @@ class WeChatArticleConverter:
             # 处理标题内的强调（不处理为代码）
             title_text = self._process_emphasis_on_non_code(title_text)
             
-            # 生成微信公众号风格的标题HTML（仅显示一次标题文本）
-            return f'''<h2 class="wechat-title">
-    <span class="title-number">{item_number}.</span>
-    <span class="title-text">{title_text}</span>
+            # 生成微信公众号风格的标题HTML（使用内联样式）
+            return f'''<h2 style="{styles['wechat-title']}">
+    <span style="{styles['title-number']}">{item_number}.</span>
+    <span style="{styles['title-text']}">{title_text}</span>
 </h2>'''
         
         return f"<h2>{line[3:]}</h2>"
     
     def _process_image(self, line: str) -> str:
         """处理图片行"""
+        styles = self._get_inline_styles()
         # 解析图片语法 ![alt](src)
         img_match = re.match(r'!\[([^\]]*)\]\(([^)]+)\)', line)
         if img_match:
             alt_text = img_match.group(1)
             src_url = img_match.group(2)
             
-            # 生成微信公众号风格的图片HTML
-            return f'''<div class="image-container">
-    <img src="{src_url}" alt="{alt_text}" class="wechat-image">
+            # 生成微信公众号风格的图片HTML（使用内联样式）
+            return f'''<div style="{styles['image-container']}">
+    <img src="{src_url}" alt="{alt_text}" style="{styles['wechat-image']}">
 </div>'''
         
         return line
     
     def _process_link_line(self, line: str) -> str:
         """处理链接行"""
-        # 这是链接行，转换为段落
-        return f'<p class="link-paragraph">{line}</p>'
+        styles = self._get_inline_styles()
+        # 这是链接行，转换为段落（使用内联样式）
+        link_style = styles['link-paragraph']
+        return f'<p style="{link_style}">{line}</p>'
     
     def _process_paragraph(self, line: str) -> str:
         """处理普通段落"""
+        styles = self._get_inline_styles()
         # 转义HTML特殊字符
         escaped_line = html.escape(line)
         
@@ -177,14 +182,17 @@ class WeChatArticleConverter:
         # 处理强调（粗体与斜体），避免影响已转换的 <code> 块
         escaped_line = self._process_emphasis_on_non_code(escaped_line)
         
-        return f'<p class="content-paragraph">{escaped_line}</p>'
+        paragraph_style = styles['content-paragraph']
+        return f'<p style="{paragraph_style}">{escaped_line}</p>'
     
     def _process_inline_code(self, text: str) -> str:
         """处理行内代码"""
+        styles = self._get_inline_styles()
+        code_style = styles['inline-code']
         # 查找 `code` 格式的代码
         def replace_code(match):
             code = match.group(1)
-            return f'<code class="inline-code">{code}</code>'
+            return f'<code style="{code_style}">{code}</code>'
         
         return re.sub(r'`([^`]+)`', replace_code, text)
 
@@ -208,7 +216,9 @@ class WeChatArticleConverter:
     
     def _render_separator(self) -> str:
         """渲染分隔线"""
-        return '<hr class="wechat-separator">'
+        styles = self._get_inline_styles()
+        separator_style = styles['wechat-separator']
+        return f'<hr style="{separator_style}">'
 
     def _load_css(self) -> str:
         """加载CSS样式：优先读取外部文件，失败则回退到内置默认样式。
@@ -278,7 +288,7 @@ class WeChatArticleConverter:
   --h2-border-width: 2px;
 }
 
-body {
+article {
   font-family: var(--font-sans);
   line-height: var(--line-height-body);
   color: var(--color-text);
@@ -416,22 +426,33 @@ body {
 """
         return default_css
     
+    def _get_inline_styles(self) -> Dict[str, str]:
+        """获取内联CSS样式字典"""
+        return {
+            'article': 'font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", "Helvetica Neue", Helvetica, Arial, sans-serif; line-height: 1.8; color: #2c3e50; background-color: #ffffff; margin: 0; padding: 20px; max-width: 800px; margin: 0 auto;',
+            'wechat-title': 'color: rgb(239, 112, 96); padding: 12px 0; margin: 25px 0 16px 0; border-bottom: 2px solid rgb(239, 112, 96); font-weight: 700;',
+            'title-number': 'margin-right: 10px; font-size: 0.9em; color: rgb(239, 112, 96);',
+            'title-text': 'font-weight: 700; color: rgb(239, 112, 96);',
+            'content-paragraph': 'font-size: 16px; margin: 15px 0; text-align: justify; color: #2c3e50;',
+            'link-paragraph': 'background: #f8f9fa; border-left: 4px solid #3498db; padding: 12px 15px; margin: 15px 0; border-radius: 0 4px 4px 0; font-size: 15px;',
+            'image-container': 'text-align: center; margin: 20px 0;',
+            'wechat-image': 'max-width: 100%; height: auto; border-radius: 8px; box-shadow: 0 4px 20px rgba(0, 0, 0, 0.1);',
+            'inline-code': 'background: #f1f2f6; color: #e74c3c; padding: 2px 6px; border-radius: 4px; font-family: "Monaco", "Menlo", "Ubuntu Mono", monospace; font-size: 14px;',
+            'wechat-separator': 'border: none; height: 2px; background: linear-gradient(90deg, transparent, #bdc3c7, transparent); margin: 30px 0;',
+        }
+
     def _generate_full_html(self, yaml_data: Dict[str, Any], article_content: str) -> str:
         """生成完整的HTML文档"""
-        css_content = self._load_css()
         return f'''<!DOCTYPE html>
 <html lang="zh-CN">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>{yaml_data['title']}</title>
-    <style>
-{css_content}
-    </style>
 </head>
 <body>
-    <article class="wechat-article">
-        <div class="article-content">
+    <article  style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', 'Hiragino Sans GB', 'Microsoft YaHei', 'Helvetica Neue', Helvetica, Arial, sans-serif; line-height: 1.8; color: #2c3e50; background-color: #ffffff; margin: 0; padding: 20px; max-width: 800px; margin: 0 auto;">
+        <div>
             {article_content}
         </div>
     </article>
@@ -451,6 +472,31 @@ def convert_markdown_to_html(markdown_content: str) -> str:
     """
     converter = WeChatArticleConverter()
     return converter.convert(markdown_content)
+
+
+def _sanitize_filename(filename: str) -> str:
+    """
+    清理文件名中的非法字符，保留中英文字符和常用标点
+    
+    Args:
+        filename: 原始文件名
+        
+    Returns:
+        清理后的安全文件名
+    """
+    # 移除或替换文件名中的非法字符，包括引号
+    illegal_chars = r'[<>:"/\\|?*"'']'
+    # 用下划线替换非法字符
+    safe_name = re.sub(illegal_chars, '_', filename)
+    # 将多个连续的空格或下划线合并为单个下划线
+    safe_name = re.sub(r'[\s_]+', '_', safe_name)
+    # 移除首尾的下划线和空格
+    safe_name = safe_name.strip('_ ')
+    # 限制文件名长度（Windows文件名限制为255字符）
+    if len(safe_name) > 200:  # 留出一些空间给.html扩展名
+        safe_name = safe_name[:200].strip('_ ')
+    
+    return safe_name or 'Hacker_News_摘要'
 
 
 def display_html_in_browser(html_content: str, auto_close: bool = True, close_delay: int = 5):
@@ -498,7 +544,7 @@ def _cli_main():
     """命令行入口：将指定Markdown文件转换为微信公众号HTML"""
     parser = argparse.ArgumentParser(description='将Markdown转换为微信公众号兼容HTML并可在浏览器中预览')
     parser.add_argument('input_md', help='输入的Markdown文件路径')
-    parser.add_argument('-o', '--output', help='输出HTML文件路径，默认与输入同名', default=None)
+    parser.add_argument('-o', '--output', help='输出HTML文件路径，默认从title字段生成', default=None)
     parser.add_argument('--no-open', help='不在浏览器中打开预览', action='store_true')
     parser.add_argument('--auto-close', type=int, default=None, help='浏览器自动关闭的秒数；省略则需手动回车关闭')
     args = parser.parse_args()
@@ -513,6 +559,7 @@ def _cli_main():
     html_content = convert_markdown_to_html(md_content)
 
     output_path = args.output or (os.path.splitext(input_path)[0] + '.html')
+    
     with open(output_path, 'w', encoding='utf-8') as f:
         f.write(html_content)
     print(f'已生成HTML文件: {output_path}')
