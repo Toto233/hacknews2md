@@ -429,7 +429,7 @@ article {
     def _get_inline_styles(self) -> Dict[str, str]:
         """获取内联CSS样式字典"""
         return {
-            'article': 'font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", "Helvetica Neue", Helvetica, Arial, sans-serif; line-height: 1.8; color: #2c3e50; background-color: #ffffff; margin: 0; padding: 20px; max-width: 800px; margin: 0 auto;',
+            'article': 'font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", "Helvetica Neue", Helvetica, Arial, sans-serif; line-height: 1.8; color: #2c3e50; background-color: #ffffff; margin: 0; max-width: 800px; margin: 0 auto;',
             'wechat-title': 'color: rgb(239, 112, 96); padding: 12px 0; margin: 25px 0 16px 0; border-bottom: 2px solid rgb(239, 112, 96); font-weight: 700;',
             'title-number': 'margin-right: 10px; font-size: 0.9em; color: rgb(239, 112, 96);',
             'title-text': 'font-weight: 700; color: rgb(239, 112, 96);',
@@ -451,7 +451,7 @@ article {
     <title>{yaml_data['title']}</title>
 </head>
 <body>
-    <article  style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', 'Hiragino Sans GB', 'Microsoft YaHei', 'Helvetica Neue', Helvetica, Arial, sans-serif; line-height: 1.8; color: #2c3e50; background-color: #ffffff; margin: 0; padding: 20px; max-width: 800px; margin: 0 auto;">
+    <article  style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', 'Hiragino Sans GB', 'Microsoft YaHei', 'Helvetica Neue', Helvetica, Arial, sans-serif; line-height: 1.8; color: #2c3e50; background-color: #ffffff; margin: 0; max-width: 800px; margin: 0 auto;">
         <div>
             {article_content}
         </div>
