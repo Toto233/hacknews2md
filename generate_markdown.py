@@ -376,13 +376,13 @@ tags:
     pyperclip.copy(yaml_title)
     print('已复制标题到剪贴板')
     # 等待用户复制内容
-    input("请复制HTML内容到微信公众号，完成后按回车键关闭浏览器...")
-    if browser_manager:
-        browser_manager.close_browser()
+    # input("请复制HTML内容到微信公众号，完成后按回车键关闭浏览器...")
+    # if browser_manager:
+        # browser_manager.close_browser()
 
     # 自动上传到微信草稿箱
-    print("\n是否要自动上传到微信草稿箱？")
-    upload_choice = input("输入 y 或 yes 上传，其他键跳过: ").lower().strip()
+    #print("\n是否要自动上传到微信草稿箱？")
+    upload_choice = 'y' #input("输入 y 或 yes 上传，其他键跳过: ").lower().strip()
     
     if upload_choice in ['y', 'yes']:
         # 上传HTML文件到微信草稿箱

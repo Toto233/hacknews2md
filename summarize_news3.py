@@ -585,17 +585,74 @@ async def get_article_content_async(url: str, title: str) -> Tuple[str, List[str
 # Discussion Content
 # ----------------------------
 async def get_discussion_content_async(url: str) -> str:
-    """获取讨论内容"""
+    """获取讨论内容，包括主贴和评论"""
     if not url:
         return ""
     
     try:
-        # 使用 Crawl4AI 获取讨论内容
+        print(f"开始获取讨论内容: {url}")
+        
+        # 直接使用BeautifulSoup解析Hacker News页面
+        import aiohttp
+        from bs4 import BeautifulSoup
+        
+        async with aiohttp.ClientSession() as session:
+            async with session.get(url) as response:
+                if response.status == 200:
+                    html = await response.text()
+                    soup = BeautifulSoup(html, 'html.parser')
+                    
+                    # 提取所有内容
+                    all_content = ""
+                    
+                    # 提取主贴内容
+                    main_post = soup.select_one('tr.athing')
+                    if main_post:
+                        title_elem = main_post.select_one('span.titleline > a')
+                        if title_elem:
+                            title = title_elem.get_text(strip=True)
+                            all_content += f"标题: {title}\n\n"
+                    
+                    # 提取主贴文本（如果有）
+                    main_text = soup.select_one('div.toptext')
+                    if main_text:
+                        text = main_text.get_text(strip=True)
+                        all_content += f"{text}\n\n"
+                    
+                    # 提取评论
+                    comments = []
+                    for comment_row in soup.select('tr.comtr'):
+                        comment_cell = comment_row.select_one('td.default')
+                        if not comment_cell:
+                            continue
+                            
+                        # 获取评论者
+                        commenter = comment_cell.select_one('a.hnuser')
+                        commenter_text = commenter.get_text(strip=True) if commenter else "匿名"
+                        
+                        # 获取评论内容 - 使用更精确的选择器 div.commtext.c00
+                        comment_text = comment_cell.select_one('div.commtext.c00')
+                        if not comment_text:
+                            # 如果没有找到，尝试使用一般的 div.commtext 选择器
+                            comment_text = comment_cell.select_one('div.commtext')
+                        
+                        if comment_text:
+                            comment_content = comment_text.get_text(strip=True)
+                            comments.append(f"{commenter_text}: {comment_content}")
+                    
+                    if comments:
+                        all_content += "评论:\n\n"
+                        all_content += "\n\n---\n\n".join(comments[:15])  # 取前15条评论
+                    
+                    print(f"成功获取讨论内容，长度: {len(all_content)}")
+                    return all_content[:5000] if all_content else ""
+        
+        # 如果直接解析失败，尝试使用Crawl4AI
+        print("直接解析失败，尝试使用Crawl4AI获取内容")
         crawler = NewsCrawler()
         content, _ = await crawler.crawl_article(url)
+        return content[:5000] if content else ""
         
-        # 简单处理：只取前3000字符
-        return content[:3000] if content else ""
     except Exception as e:
         print(f"Error fetching discussion content: {e}")
         return ""
