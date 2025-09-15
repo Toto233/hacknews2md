@@ -585,7 +585,7 @@ async def get_article_content_async(url: str, title: str) -> Tuple[str, List[str
 # Discussion Content
 # ----------------------------
 async def get_discussion_content_async(url: str) -> str:
-    """获取讨论内容，包括主贴和评论"""
+    """获取讨论内容，包括主贴和限制字数的评论"""
     if not url:
         return ""
     
@@ -602,7 +602,6 @@ async def get_discussion_content_async(url: str) -> str:
                     html = await response.text()
                     soup = BeautifulSoup(html, 'html.parser')
                     
-                    # 提取所有内容
                     all_content = ""
                     
                     # 提取主贴内容
@@ -612,46 +611,96 @@ async def get_discussion_content_async(url: str) -> str:
                         if title_elem:
                             title = title_elem.get_text(strip=True)
                             all_content += f"标题: {title}\n\n"
+                            
+                            # 获取外部链接URL
+                            link_url = title_elem.get('href', '')
+                            if link_url and link_url.startswith('http'):
+                                all_content += f"链接: {link_url}\n\n"
                     
                     # 提取主贴文本（如果有）
                     main_text = soup.select_one('div.toptext')
                     if main_text:
                         text = main_text.get_text(strip=True)
-                        all_content += f"{text}\n\n"
+                        if text:
+                            all_content += f"正文: {text}\n\n"
                     
-                    # 提取评论
+                    # 计算主贴内容长度
+                    main_content_length = len(all_content)
+                    
+                    # 提取评论，限制评论总字数在1000左右
                     comments = []
+                    comment_count = 0
+                    total_comment_length = 0
+                    max_comment_length = 1000  # 评论部分最大字数限制
+                    
                     for comment_row in soup.select('tr.comtr'):
+                        # 跳过折叠的评论
+                        if 'coll' in comment_row.get('class', []):
+                            continue
+                            
                         comment_cell = comment_row.select_one('td.default')
                         if not comment_cell:
                             continue
-                            
+                        
                         # 获取评论者
                         commenter = comment_cell.select_one('a.hnuser')
                         commenter_text = commenter.get_text(strip=True) if commenter else "匿名"
                         
-                        # 获取评论内容 - 使用更精确的选择器 div.commtext.c00
+                        # 获取缩进级别（评论层级）
+                        indent_elem = comment_row.select_one('td.ind')
+                        indent_level = 0
+                        if indent_elem:
+                            img = indent_elem.select_one('img')
+                            if img and img.get('width'):
+                                try:
+                                    indent_level = int(img.get('width', '0')) // 40
+                                except:
+                                    indent_level = 0
+                        
+                        # 只获取顶层评论（缩进级别为0）以减少评论数量
+                        if indent_level > 1:  # 跳过嵌套层级较深的评论
+                            continue
+                        
+                        # 获取评论内容
                         comment_text = comment_cell.select_one('div.commtext.c00')
                         if not comment_text:
-                            # 如果没有找到，尝试使用一般的 div.commtext 选择器
                             comment_text = comment_cell.select_one('div.commtext')
                         
                         if comment_text:
                             comment_content = comment_text.get_text(strip=True)
-                            comments.append(f"{commenter_text}: {comment_content}")
+                            if comment_content:  # 只添加非空评论
+                                # 计算当前评论的长度
+                                indent_prefix = "  " * indent_level  # 用空格表示层级
+                                formatted_comment = f"{indent_prefix}{commenter_text}: {comment_content}"
+                                comment_length = len(formatted_comment)
+                                
+                                # 检查是否超出总长度限制
+                                if total_comment_length + comment_length > max_comment_length:
+                                    # 如果已经有评论，就不再添加
+                                    if comments:
+                                        break
+                                    # 如果还没有评论，则截断当前评论
+                                    else:
+                                        max_chars = max_comment_length - total_comment_length - 3  # 为省略号留出空间
+                                        formatted_comment = f"{indent_prefix}{commenter_text}: {comment_content[:max_chars]}..."
+                                        comment_length = len(formatted_comment)
+                                
+                                comments.append(formatted_comment)
+                                total_comment_length += comment_length + 6  # 加上分隔符的长度 "\n\n---\n\n"
+                                comment_count += 1
+                                
+                                # 如果已经达到字数限制，停止添加更多评论
+                                if total_comment_length >= max_comment_length:
+                                    break
                     
                     if comments:
-                        all_content += "评论:\n\n"
-                        all_content += "\n\n---\n\n".join(comments[:15])  # 取前15条评论
+                        all_content += f"评论 (共{comment_count}条):\n\n"
+                        all_content += "\n\n---\n\n".join(comments)
                     
-                    print(f"成功获取讨论内容，长度: {len(all_content)}")
-                    return all_content[:5000] if all_content else ""
+                    print(f"成功获取讨论内容，总长度: {len(all_content)}, 主贴长度: {main_content_length}, 评论长度: {total_comment_length}, 评论数: {comment_count}")
+                    return all_content
         
-        # 如果直接解析失败，尝试使用Crawl4AI
-        print("直接解析失败，尝试使用Crawl4AI获取内容")
-        crawler = NewsCrawler()
-        content, _ = await crawler.crawl_article(url)
-        return content[:5000] if content else ""
+        return ""
         
     except Exception as e:
         print(f"Error fetching discussion content: {e}")

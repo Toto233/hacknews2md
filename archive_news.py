@@ -34,7 +34,7 @@ def archive_old_news():
     cursor.execute('''
     SELECT id, title, title_chs, news_url, discuss_url, content_summary, discuss_summary, created_at
     FROM news
-    WHERE created_at < datetime('now', '-0.5 day', 'localtime')
+    WHERE created_at < datetime('now', '-0.3 day', 'localtime')
     ''')
     
     old_news = cursor.fetchall()

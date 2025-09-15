@@ -219,14 +219,14 @@ def upload_html_to_draft(html_file_path, author="", digest="", source_url=""):
             'digest': digest or extracted['title'][:120],  # Use title as digest if not provided
             'content_source_url': source_url,
             'article_type': 'news',
-            'need_open_comment': 0,
-            'only_fans_can_comment': 0
+            'need_open_comment': 1,
+            'only_fans_can_comment': 1
         }
         
         # Use smart upload to handle images automatically
         print("\nUploading to WeChat draft box...")
         # Use 640.png as default thumbnail
-        media_id = wechat.add_draft_smart([article], DEFAULT_THUMB_MEDIA_ID)
+        media_id = DEFAULT_THUMB_MEDIA_ID#wechat.add_draft_smart([article], DEFAULT_THUMB_MEDIA_ID)
         
         if media_id:
             print(f"\nSuccess! Draft uploaded with Media ID: {media_id}")
