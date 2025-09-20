@@ -504,7 +504,7 @@ class WeChatAccessToken:
             print(f"Unexpected error: {e}")
             return None
     
-    def add_draft_smart(self, articles: list, default_thumb_media_id: str = "100000107") -> Optional[str]:
+    def add_draft_smart(self, articles: list, default_thumb_media_id: str = None) -> Optional[str]:
         """
         Intelligently add articles to WeChat draft box with automatic image handling
         
@@ -524,7 +524,7 @@ class WeChatAccessToken:
                 - article_type: "news" or "newspic" (optional, defaults to "news")
                 - need_open_comment: 0 or 1 (optional, default 0)
                 - only_fans_can_comment: 0 or 1 (optional, default 0)
-            default_thumb_media_id: Default thumb media ID if no images found (default: "100000107")
+            default_thumb_media_id: Default thumb media ID if no images found
             
         Returns:
             Media ID string if successful, None if failed
@@ -611,12 +611,14 @@ class WeChatAccessToken:
             
             # Set thumb_media_id for news articles
             if processed_article['article_type'] == 'news':
-                if i == 0:  # First article
+                # 使用传入的缩略图ID，如果没有传入则使用默认值
+                if default_thumb_media_id:
                     processed_article['thumb_media_id'] = first_thumb_media_id or default_thumb_media_id
-                    print(f"  First article thumb_media_id: {processed_article['thumb_media_id']}")
-                else:  # Other articles can use default
-                    processed_article['thumb_media_id'] = default_thumb_media_id
                     print(f"  Article {i+1} thumb_media_id: {processed_article['thumb_media_id']}")
+                else:
+                    # 如果没有提供缩略图ID，尝试使用系统默认值
+                    processed_article['thumb_media_id'] = first_thumb_media_id or "53QZJEu2zs4etGM_3jLi5wl7KNs2RM1RnV_iiGWQmWnYf7qEq2kvHRIIeBCBnAEb"
+                    print(f"  Article {i+1} using default thumb_media_id: {processed_article['thumb_media_id']}")
             
             processed_articles.append(processed_article)
         
