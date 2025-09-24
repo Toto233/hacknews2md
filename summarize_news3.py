@@ -596,8 +596,14 @@ async def get_discussion_content_async(url: str) -> str:
         import aiohttp
         from bs4 import BeautifulSoup
         
+        headers = {
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
+            'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8',
+            'Accept-Language': 'en-US,en;q=0.9',
+        }
+        
         async with aiohttp.ClientSession() as session:
-            async with session.get(url) as response:
+            async with session.get(url, headers=headers, timeout=20) as response:
                 if response.status == 200:
                     html = await response.text()
                     soup = BeautifulSoup(html, 'html.parser')
@@ -627,83 +633,128 @@ async def get_discussion_content_async(url: str) -> str:
                     # 计算主贴内容长度
                     main_content_length = len(all_content)
                     
-                    # 提取评论，限制评论总字数在1000左右
+                    # 提取评论，增加评论总字数限制
                     comments = []
                     comment_count = 0
                     total_comment_length = 0
-                    max_comment_length = 1000  # 评论部分最大字数限制
+                    max_comment_length = 5000  # 增加评论部分最大字数限制
                     
-                    for comment_row in soup.select('tr.comtr'):
-                        # 跳过折叠的评论
-                        if 'coll' in comment_row.get('class', []):
-                            continue
+                    # 尝试多种选择器来获取评论
+                    comment_elements = []
+                    
+                    # 针对Hacker News的特定结构
+                    comment_elements = soup.select('tr.comtr')
+                    
+                    # 如果没有找到评论，尝试其他选择器
+                    if not comment_elements:
+                        comment_elements = soup.select('div.comment')
+                    
+                    if not comment_elements:
+                        comment_elements = soup.select('.comment-tree .comment')
+                    
+                    # 记录找到的评论总数
+                    total_comments_found = len(comment_elements)
+                    
+                    # 限制处理的评论数量
+                    max_comments_to_process = 20  # 增加处理的评论数量
+                    
+                    for i, comment_elem in enumerate(comment_elements):
+                        if i >= max_comments_to_process:
+                            break
                             
-                        comment_cell = comment_row.select_one('td.default')
-                        if not comment_cell:
-                            continue
-                        
-                        # 获取评论者
-                        commenter = comment_cell.select_one('a.hnuser')
-                        commenter_text = commenter.get_text(strip=True) if commenter else "匿名"
-                        
-                        # 获取缩进级别（评论层级）
-                        indent_elem = comment_row.select_one('td.ind')
-                        indent_level = 0
-                        if indent_elem:
-                            img = indent_elem.select_one('img')
-                            if img and img.get('width'):
-                                try:
-                                    indent_level = int(img.get('width', '0')) // 40
-                                except:
-                                    indent_level = 0
-                        
-                        # 只获取顶层评论（缩进级别为0）以减少评论数量
-                        if indent_level > 1:  # 跳过嵌套层级较深的评论
-                            continue
-                        
-                        # 获取评论内容
-                        comment_text = comment_cell.select_one('div.commtext.c00')
-                        if not comment_text:
-                            comment_text = comment_cell.select_one('div.commtext')
-                        
-                        if comment_text:
-                            comment_content = comment_text.get_text(strip=True)
-                            if comment_content:  # 只添加非空评论
-                                # 计算当前评论的长度
-                                indent_prefix = "  " * indent_level  # 用空格表示层级
-                                formatted_comment = f"{indent_prefix}{commenter_text}: {comment_content}"
-                                comment_length = len(formatted_comment)
+                        # 针对Hacker News的tr.comtr结构
+                        if 'comtr' in comment_elem.get('class', []):
+                            # 跳过折叠的评论
+                            if 'coll' in comment_elem.get('class', []):
+                                continue
                                 
-                                # 检查是否超出总长度限制
-                                if total_comment_length + comment_length > max_comment_length:
-                                    # 如果已经有评论，就不再添加
-                                    if comments:
-                                        break
-                                    # 如果还没有评论，则截断当前评论
-                                    else:
-                                        max_chars = max_comment_length - total_comment_length - 3  # 为省略号留出空间
-                                        formatted_comment = f"{indent_prefix}{commenter_text}: {comment_content[:max_chars]}..."
-                                        comment_length = len(formatted_comment)
-                                
-                                comments.append(formatted_comment)
-                                total_comment_length += comment_length + 6  # 加上分隔符的长度 "\n\n---\n\n"
-                                comment_count += 1
-                                
-                                # 如果已经达到字数限制，停止添加更多评论
-                                if total_comment_length >= max_comment_length:
-                                    break
+                            comment_cell = comment_elem.select_one('td.default')
+                            if not comment_cell:
+                                continue
+                            
+                            # 获取评论者
+                            commenter = comment_cell.select_one('a.hnuser')
+                            commenter_text = commenter.get_text(strip=True) if commenter else "匿名"
+                            
+                            # 获取缩进级别（评论层级）
+                            indent_elem = comment_elem.select_one('td.ind')
+                            indent_level = 0
+                            if indent_elem:
+                                img = indent_elem.select_one('img')
+                                if img and img.get('width'):
+                                    try:
+                                        indent_level = int(img.get('width', '0')) // 40
+                                    except:
+                                        indent_level = 0
+                            
+                            # 只获取较浅层级的评论
+                            if indent_level > 2:  # 允许更深层级的评论
+                                continue
+                            
+                            # 获取评论内容
+                            comment_text = comment_cell.select_one('div.commtext.c00')
+                            if not comment_text:
+                                comment_text = comment_cell.select_one('div.commtext')
+                            
+                            if comment_text:
+                                comment_content = comment_text.get_text(strip=True)
+                                if comment_content:  # 只添加非空评论
+                                    # 计算当前评论的长度
+                                    indent_prefix = "  " * indent_level  # 用空格表示层级
+                                    formatted_comment = f"{indent_prefix}{commenter_text}: {comment_content}"
+                                    comment_length = len(formatted_comment)
+                                    
+                                    # 检查是否超出总长度限制
+                                    if total_comment_length + comment_length > max_comment_length:
+                                        # 如果已经有评论，就不再添加
+                                        if comments:
+                                            break
+                                        # 如果还没有评论，则截断当前评论
+                                        else:
+                                            max_chars = max_comment_length - total_comment_length - 3  # 为省略号留出空间
+                                            formatted_comment = f"{indent_prefix}{commenter_text}: {comment_content[:max_chars]}..."
+                                            comment_length = len(formatted_comment)
+                                    
+                                    comments.append(formatted_comment)
+                                    total_comment_length += comment_length + 2  # 加上分隔符的长度 "\n\n"
+                                    comment_count += 1
+                        
+                        # 针对其他评论结构
+                        else:
+                            commenter = comment_elem.select_one('.commenter, .author, .hnuser')
+                            commenter_text = commenter.get_text(strip=True) if commenter else "匿名"
+                            
+                            comment_text = comment_elem.select_one('.comment-content, .commtext')
+                            if comment_text:
+                                comment_content = comment_text.get_text(strip=True)
+                                if comment_content:
+                                    formatted_comment = f"{commenter_text}: {comment_content}"
+                                    comment_length = len(formatted_comment)
+                                    
+                                    if total_comment_length + comment_length > max_comment_length:
+                                        if comments:
+                                            break
+                                        else:
+                                            max_chars = max_comment_length - total_comment_length - 3
+                                            formatted_comment = f"{commenter_text}: {comment_content[:max_chars]}..."
+                                            comment_length = len(formatted_comment)
+                                    
+                                    comments.append(formatted_comment)
+                                    total_comment_length += comment_length + 2
+                                    comment_count += 1
                     
                     if comments:
-                        all_content += f"评论 (共{comment_count}条):\n\n"
-                        all_content += "\n\n---\n\n".join(comments)
+                        all_content += f"评论 (共找到{total_comments_found}条，显示{comment_count}条):\n\n"
+                        all_content += "\n\n".join(comments)  # 使用更简洁的分隔方式
                     
-                    print(f"成功获取讨论内容，总长度: {len(all_content)}, 主贴长度: {main_content_length}, 评论长度: {total_comment_length}, 评论数: {comment_count}")
+                    print(f"成功获取讨论内容，总长度: {len(all_content)}, 主贴长度: {main_content_length}, 评论长度: {total_comment_length}, 评论数: {comment_count}/{total_comments_found}")
                     return all_content
         
         return ""
         
     except Exception as e:
         print(f"Error fetching discussion content: {e}")
+        traceback.print_exc()  # 打印详细错误信息
         return ""
 
 # ----------------------------
