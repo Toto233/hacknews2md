@@ -10,16 +10,25 @@
 - 将新闻数据保存到 SQLite 数据库中
 - 自动过滤重复新闻和特定类型的新闻（如 Ask HN）
 
-### 2. 内容摘要模块 (summarize_news.py)
+### 2. 内容摘要模块 (summarize_news3.py)
 - 抓取新闻原文内容和相关讨论
 - 使用 Grok AI 进行内容翻译和摘要生成
 - 支持新闻标题翻译、正文摘要和讨论内容摘要
 - 智能处理各种网页格式和错误情况
+- **多层次内容抓取策略**：
+  - 优先使用 Crawl4AI 异步爬虫进行高效抓取
+  - 自动回退方案：当 Crawl4AI 失败时，自动使用 requests + BeautifulSoup 重试
+  - 二进制内容过滤：自动检测和过滤非文本内容，确保数据库存储纯文本
+  - Content-Type 检测：智能识别HTML/文本内容，跳过PDF、图片等非文本资源
 
 ### 3. Markdown 生成模块 (generate_markdown.py)
 - 将处理后的新闻数据生成美观的 Markdown 文档
 - 包含新闻标题、原文链接、内容摘要和讨论摘要
 - 自动添加时间戳和格式化处理
+- **新增：集成微信草稿箱上传功能**
+  - 支持自动将生成的HTML文件上传到微信公众号草稿箱
+  - 智能路径转换，支持WSL环境下的路径处理
+  - 可配置作者、摘要等文章元信息
 
 ### 4. Markdown 转微信公众号 HTML 模块 (markdown_to_html_converter.py)
 - 将带 YAML Front Matter 的 Markdown 转为微信公众号友好 HTML
@@ -32,6 +41,7 @@
 - Python 3.6+
 - 必要的 Python 包：requests, beautifulsoup4, sqlite3, crawl4ai（用于网页抓取）
 - Grok API 密钥（需要在 config.json 中配置）
+- **微信公众号配置**：如需使用草稿箱上传功能，需在 config.json 中配置微信公众号的 appid 和 appsec
 - （HTML 转换模块使用标准库，无需额外第三方依赖）
 
 ## 使用方法
@@ -40,9 +50,18 @@
 pip install -r requirements.txt
 ```
 
-2. 配置 Grok API：
+2. 配置 API 和微信公众号：
 - 复制 config.json.example 为 config.json
 - 填入你的 Grok API 密钥
+- **（可选）配置微信公众号信息**：
+  ```json
+  {
+    "wechat": {
+        "appid": "your_wechat_appid",
+        "appsec": "your_wechat_appsec"
+    }
+  }
+  ```
 
 3. 运行程序：
 ```bash
@@ -57,6 +76,7 @@ python generate_markdown.py
 ```
 
 - 运行 `python generate_markdown.py` 将生成并打开两份文件：`hacknews_summary_YYYYMMDD_HHMM.md` 与 `hacknews_summary_YYYYMMDD_HHMM.html`；HTML 会在浏览器中打开，便于复制到微信公众号编辑器，按回车后关闭浏览器。
+- **新增：微信草稿箱上传**：完成HTML预览后，系统会询问是否自动上传到微信公众号草稿箱（输入 y 或 yes 确认上传）
 - 生成逻辑要点：
   - 选取最近约 12 小时内且已生成内容与讨论摘要的新闻
   - 使用大模型对标题吸引力打分排序（失败则按时间）
@@ -104,11 +124,47 @@ display_html_in_browser(html, auto_close=True, close_delay=10)
 - 行内代码：`` `code` `` → 灰底红字内联代码
 - YAML 头部：`title/author/description/pubDatetime/tags` 将用于 `<title>` 与元信息
 
+## 微信草稿箱上传功能
+
+### 功能特性
+- **自动上传**：将生成的HTML文件直接上传到微信公众号草稿箱
+- **智能路径处理**：自动检测WSL环境并进行路径转换
+- **图片处理**：自动处理HTML中的本地图片路径
+- **内容清理**：自动清理HTML内容以适配微信公众号格式
+
+### 使用方法
+1. 在 config.json 中配置微信公众号信息：
+```json
+{
+  "wechat": {
+    "appid": "your_wechat_appid", 
+    "appsec": "your_wechat_appsec"
+  }
+}
+```
+
+2. 运行 generate_markdown.py，在HTML预览完成后选择上传：
+```bash
+python generate_markdown.py
+# 按回车关闭浏览器后，输入 y 或 yes 确认上传
+```
+
+### 支持环境
+- **Windows**: 原生Windows环境
+- **WSL**: Windows Subsystem for Linux，自动处理路径转换
+- **Linux**: 原生Linux环境
+
+### 注意事项
+- 确保微信公众号具有素材管理权限
+- 上传的HTML会自动使用默认缩略图
+- 文章标题会自动截断至64字符以符合微信限制
+
 ## 注意事项
 - 请确保 config.json 中的 API 密钥配置正确
 - 建议定时运行脚本以获取最新内容
 - 注意控制 API 调用频率，避免超出限制
 - 注意，由于某些网站会屏蔽抓取，导致生成的摘要为空
+- 微信草稿箱上传功能需要有效的微信公众号配置
 
 # 添加关键字
 python d:\python\hacknews\manage_keywords.py add 敏感词1

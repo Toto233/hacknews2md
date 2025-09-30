@@ -30,6 +30,10 @@ from proxy_config import ProxyConfig
 import urllib3
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
+# Additional imports for fallback logic
+import requests
+from bs4 import BeautifulSoup
+
 # Load config
 with open('config.json', 'r', encoding='utf-8') as f:
     config = json.load(f)
@@ -144,7 +148,10 @@ class NewsCrawler:
                 # 清理内容
                 content = re.sub(r'\s{2,}', ' ', content)
                 content = re.sub(r'(\n\s*){2,}', '\n\n', content)
-                
+
+                # 确保内容是可打印的文本，过滤掉二进制字符
+                content = ''.join(char for char in content if char.isprintable() or char.isspace())
+
                 print(f"Crawl4AI 抓取成功，内容长度: {len(content)}")
                 return content.strip(), images[:5]  # 最多返回5张图片
             else:
@@ -535,6 +542,132 @@ def get_summary_from_screenshot(news_url: str, title: str, llm_type: str) -> Opt
     return saved_screenshot_path
 
 # ----------------------------
+# Fallback Content Extraction
+# ----------------------------
+async def fallback_content_extraction(url: str, title: str) -> Tuple[str, List[str], List[str]]:
+    """回退方案：使用requests和BeautifulSoup进行内容提取"""
+    print("使用回退方案：requests + BeautifulSoup 获取内容...")
+
+    headers = {
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36',
+        'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8',
+        'Accept-Language': 'zh-CN,zh;q=0.9,en;q=0.8',
+        'Accept-Encoding': 'gzip, deflate',
+        'Connection': 'keep-alive',
+        'Cache-Control': 'max-age=0',
+        'Upgrade-Insecure-Requests': '1'
+    }
+
+    try:
+        # 在异步上下文中运行同步请求
+        loop = asyncio.get_event_loop()
+        response = await loop.run_in_executor(
+            None,
+            lambda: requests.get(url, headers=headers, verify=False, timeout=20)
+        )
+
+        print("\n回退方案调试信息:")
+        print(f"状态码: {response.status_code}")
+        print(f"原始编码: {response.encoding}")
+        print(f"Apparent Encoding: {response.apparent_encoding}")
+        print(f"Content-Type: {response.headers.get('Content-Type', 'unknown')}")
+
+        response.raise_for_status()
+
+        # 检查是否为HTML内容
+        content_type = response.headers.get('Content-Type', '').lower()
+        if 'text/html' not in content_type and 'text/plain' not in content_type and 'application/xhtml+xml' not in content_type:
+            print(f"非文本内容类型: {content_type}，跳过")
+            return "", [], []
+
+        content = response.content
+
+        # 确定最终编码
+        final_encoding = response.encoding if response.encoding else response.apparent_encoding or 'utf-8'
+        print(f"最终用于解析的编码: {final_encoding}")
+
+        try:
+            soup = BeautifulSoup(content, 'lxml', from_encoding=final_encoding)
+        except Exception as e_lxml:
+            print(f"使用lxml解析失败 (编码: {final_encoding}): {e_lxml}，尝试html.parser...")
+            try:
+                soup = BeautifulSoup(content, 'html.parser', from_encoding=final_encoding)
+            except Exception as e_parser:
+                print(f"使用html.parser解析也失败 (编码: {final_encoding}): {e_parser}")
+                try:
+                    raw_text = content.decode(final_encoding, errors='ignore')
+                    print("解析HTML失败，尝试返回原始文本内容")
+                    cleaned_text = re.sub(r'<script.*?</script>', '', raw_text, flags=re.DOTALL | re.IGNORECASE)
+                    cleaned_text = re.sub(r'<style.*?</style>', '', cleaned_text, flags=re.DOTALL | re.IGNORECASE)
+                    cleaned_text = re.sub(r'<.*?>', ' ', cleaned_text)
+                    cleaned_text = re.sub(r'\s+', ' ', cleaned_text).strip()
+                    if len(cleaned_text) < 50:
+                        print("解析后文本内容过短，视作失败")
+                        return "", [], []
+                    return cleaned_text, [], []
+                except Exception as decode_err:
+                    print(f"解码原始文本也失败: {decode_err}")
+                    return "", [], []
+
+        print(f"页面标题: {soup.title.string.strip() if soup.title and soup.title.string else 'No title found'}")
+
+        # 图片处理逻辑
+        images = []
+        seen_srcs = set()
+        for img in soup.find_all('img'):
+            src = img.get('src') or img.get('data-src')
+            if src and src not in seen_srcs:
+                if src.startswith('//'):
+                    src = 'https:' + src
+                elif src.startswith('/'):
+                    parsed = urlparse(url)
+                    src = f"{parsed.scheme}://{parsed.netloc}{src}"
+                if src.startswith('http'):
+                    images.append(src)
+                    seen_srcs.add(src)
+
+        # 保存图片
+        image_paths = []
+        for i, img_url in enumerate(images[:3], 1):
+            saved = save_article_image(img_url, url, f"{title}_{i}")
+            if saved:
+                image_paths.append(saved)
+
+        # 提取文本内容
+        for tag in soup(['script', 'style', 'nav', 'header', 'footer', 'aside']):
+            tag.decompose()
+
+        article_content = ""
+        article = soup.find('article')
+        if article:
+            article_content = article.get_text(separator=' ', strip=True)
+        else:
+            main = soup.find('main') or soup.find('div', class_=re.compile(r'(content|article|post)', re.I))
+            if main:
+                article_content = main.get_text(separator=' ', strip=True)
+            else:
+                article_content = soup.get_text(separator=' ', strip=True)
+
+        # 清理文本，确保是纯文本
+        article_content = re.sub(r'\s+', ' ', article_content).strip()
+
+        # 确保内容是可打印的文本，过滤掉二进制字符
+        article_content = ''.join(char for char in article_content if char.isprintable() or char.isspace())
+        article_content = article_content.strip()
+
+        if len(article_content) < 50:
+            print("回退方案提取的文本内容过短，视作失败")
+            return "", [], []
+
+        print(f"回退方案成功提取内容，长度: {len(article_content)} 字符")
+        return article_content, images[:3], image_paths
+
+    except Exception as e:
+        print(f"回退方案失败: {e}")
+        traceback.print_exc()
+        return "", [], []
+
+# ----------------------------
 # Main Content Extraction
 # ----------------------------
 async def get_article_content_async(url: str, title: str) -> Tuple[str, List[str], List[str]]:
@@ -571,14 +704,25 @@ async def get_article_content_async(url: str, title: str) -> Tuple[str, List[str
     print("使用 Crawl4AI 获取网页内容...")
     crawler = NewsCrawler()
     content, image_urls = await crawler.crawl_article(url)
-    
-    # 保存图片
+
+    # 如果 Crawl4AI 没有获取到内容，使用回退方案
+    if not content or len(content.strip()) < MIN_ARTICLE_CONTENT_CHARS:
+        print(f"Crawl4AI 未获取到有效内容 (长度: {len(content) if content else 0})，启动回退方案...")
+        fallback_content, fallback_image_urls, fallback_image_paths = await fallback_content_extraction(url, title)
+
+        if fallback_content and len(fallback_content.strip()) >= MIN_ARTICLE_CONTENT_CHARS:
+            print("回退方案成功获取内容")
+            return fallback_content, fallback_image_urls, fallback_image_paths
+        else:
+            print("回退方案也未能获取到有效内容")
+
+    # 保存图片（仅在 Crawl4AI 成功时）
     image_paths = []
     for i, img_url in enumerate(image_urls[:3], 1):
         saved = save_article_image(img_url, url, f"{title}_{i}")
         if saved:
             image_paths.append(saved)
-    
+
     return content, image_urls[:3], image_paths
 
 # ----------------------------
