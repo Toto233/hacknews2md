@@ -1,7 +1,42 @@
 import json
 import requests
+import time
+import random
+from threading import Lock
+from collections import defaultdict, deque
 
 # LLM配置加载
+
+# API限流器
+class RateLimiter:
+    def __init__(self):
+        self.request_times = defaultdict(deque)
+        self.locks = defaultdict(Lock)
+        
+    def wait_if_needed(self, api_type: str, max_requests: int = 60, window_seconds: int = 60):
+        """API限流检查，如需要会阻塞等待"""
+        with self.locks[api_type]:
+            now = time.time()
+            window_start = now - window_seconds
+            
+            # 清理超出窗口的记录
+            times = self.request_times[api_type]
+            while times and times[0] < window_start:
+                times.popleft()
+            
+            # 检查是否需要等待
+            if len(times) >= max_requests:
+                oldest_request = times[0]
+                wait_time = oldest_request + window_seconds - now
+                if wait_time > 0:
+                    print(f"{api_type} API限流：等待 {wait_time:.1f} 秒")
+                    time.sleep(wait_time)
+            
+            # 记录本次请求
+            self.request_times[api_type].append(now)
+
+# 全局限流器实例
+rate_limiter = RateLimiter()
 
 def load_llm_config():
     """加载LLM配置"""
@@ -27,6 +62,9 @@ def load_llm_config():
 
 # 通用Grok API调用
 def call_grok_api(prompt, system_content=None, model=None, temperature=None, max_tokens=None, response_format=None):
+    # API限流保护
+    rate_limiter.wait_if_needed('grok', max_requests=50, window_seconds=60)
+    
     config = load_llm_config()['grok']
     api_key = config['api_key']
     api_url = config['api_url']
@@ -60,7 +98,10 @@ def call_grok_api(prompt, system_content=None, model=None, temperature=None, max
         return ''
 
 # 通用Gemini API调用
-def call_gemini_api(prompt, model=None, temperature=None, max_tokens=None, response_format=None):
+def call_gemini_api(prompt, model=None, temperature=None, max_tokens=None, response_format=None, max_retries=3):
+    # API限流保护 - Gemini免费版限制更严格
+    rate_limiter.wait_if_needed('gemini', max_requests=15, window_seconds=60)
+    
     print(f"Gemini API调用: {prompt}")
     config = load_llm_config()['gemini']
     api_key = config['api_key']
@@ -72,64 +113,117 @@ def call_gemini_api(prompt, model=None, temperature=None, max_tokens=None, respo
     print(f"Gemini 配置: api_url={api_url}, model={model}, temperature={temperature}, max_tokens={max_tokens}")
     print(f"api_key(前后4位): {api_key[:4]}...{api_key[-4:] if api_key else ''}")
     print(f"prompt长度: {len(prompt)}")
-    # 优先尝试google-generativeai
-    try:
-        from google import generativeai as genai
-        genai.configure(api_key=api_key)
-        gen_model = genai.GenerativeModel(model)
-        generation_config = {
-            "temperature": temperature,
-            "max_output_tokens": max_tokens,
-        }
-        response = gen_model.generate_content(prompt, generation_config=generation_config)
-        print(f"Gemini API调用: {response}")
-        # 新增健壮性处理
-        if hasattr(response, 'candidates') and response.candidates:
-            candidate = response.candidates[0]
-            if getattr(candidate, 'finish_reason', None) == 2:
-                print("Gemini内容被安全策略拦截（finish_reason=2）")
-                return ""
-        if hasattr(response, 'text') and response.text:
-            return response.text.strip()
-        return ""
-    except ImportError:
-        pass
-    except Exception as e:
-        print(f"Gemini SDK调用失败: {e}")
-    # requests兜底
-    try:
-        headers = {'Content-Type': 'application/json'}
-        params = {'key': api_key}
-        data = {
-            "contents": [{"parts": [{"text": prompt}]}],
-            "generationConfig": {
+    
+    for attempt in range(max_retries):
+        # 优先尝试google-generativeai
+        try:
+            from google import generativeai as genai
+            genai.configure(api_key=api_key)
+            gen_model = genai.GenerativeModel(model)
+            generation_config = {
                 "temperature": temperature,
-                "maxOutputTokens": max_tokens
+                "max_output_tokens": max_tokens,
             }
-        }
-        response = requests.post(api_url, headers=headers, params=params, json=data, timeout=60)
-        response.raise_for_status()
-        response_json = response.json()
-        if 'candidates' in response_json and len(response_json['candidates']) > 0:
-            return response_json['candidates'][0]['content']['parts'][0]['text'].strip()
-        return ''
-    except Exception as e:
-        print(f"Gemini API调用失败: {e}")
-        return ''
+            response = gen_model.generate_content(prompt, generation_config=generation_config)
+            print(f"Gemini API调用: {response}")
+            # 新增健壮性处理
+            if hasattr(response, 'candidates') and response.candidates:
+                candidate = response.candidates[0]
+                if getattr(candidate, 'finish_reason', None) == 2:
+                    print("Gemini内容被安全策略拦截（finish_reason=2）")
+                    return ""
+            if hasattr(response, 'text') and response.text:
+                return response.text.strip()
+            return ""
+        except ImportError:
+            pass
+        except Exception as e:
+            error_msg = str(e)
+            if "429" in error_msg or "quota" in error_msg.lower() or "rate limit" in error_msg.lower():
+                print(f"Gemini API配额限制 (尝试 {attempt + 1}/{max_retries}): {e}")
+                if attempt < max_retries - 1:
+                    # 尝试从错误信息中提取retry_delay
+                    import re
+                    retry_match = re.search(r'retry_delay\s*\{\s*seconds:\s*(\d+)', error_msg)
+                    if retry_match:
+                        delay = int(retry_match.group(1)) + random.uniform(0.5, 1.5)
+                        print(f"使用API返回的retry_delay，等待 {delay:.1f} 秒后重试...")
+                    else:
+                        # 指数退避 + 随机抖动
+                        delay = (2 ** attempt) + random.uniform(0, 1)
+                        print(f"等待 {delay:.1f} 秒后重试...")
+                    time.sleep(delay)
+                    continue
+            else:
+                print(f"Gemini SDK调用失败: {e}")
+                break
+        
+        # requests兜底
+        try:
+            headers = {'Content-Type': 'application/json'}
+            params = {'key': api_key}
+            data = {
+                "contents": [{"parts": [{"text": prompt}]}],
+                "generationConfig": {
+                    "temperature": temperature,
+                    "maxOutputTokens": max_tokens
+                }
+            }
+            response = requests.post(api_url, headers=headers, params=params, json=data, timeout=60)
+            response.raise_for_status()
+            response_json = response.json()
+            if 'candidates' in response_json and len(response_json['candidates']) > 0:
+                return response_json['candidates'][0]['content']['parts'][0]['text'].strip()
+            return ''
+        except Exception as e:
+            error_msg = str(e)
+            if "429" in error_msg or "quota" in error_msg.lower():
+                print(f"Gemini API配额限制 (尝试 {attempt + 1}/{max_retries}): {e}")
+                if attempt < max_retries - 1:
+                    # 尝试从错误信息中提取retry_delay
+                    import re
+                    retry_match = re.search(r'retry_delay\s*\{\s*seconds:\s*(\d+)', error_msg)
+                    if retry_match:
+                        delay = int(retry_match.group(1)) + random.uniform(0.5, 1.5)
+                        print(f"使用API返回的retry_delay，等待 {delay:.1f} 秒后重试...")
+                    else:
+                        delay = (2 ** attempt) + random.uniform(0, 1)
+                        print(f"等待 {delay:.1f} 秒后重试...")
+                    time.sleep(delay)
+                    continue
+            else:
+                print(f"Gemini API调用失败: {e}")
+                break
+    
+    print(f"Gemini API在 {max_retries} 次尝试后仍然失败")
+    return ''
 
 def call_llm(prompt, llm_type=None, system_content=None, model=None, temperature=None, max_tokens=None, response_format=None):
     """
     统一LLM调用入口，根据llm_type自动选择Grok或Gemini。
     llm_type: 'grok'、'gemini'，不传则用配置默认。
+    支持自动降级：Gemini失败时自动切换到Grok。
     其余参数同call_grok_api/call_gemini_api。
     """
     config = load_llm_config()
     if llm_type is None:
         llm_type = config['default']
+    
+    # 尝试主要LLM
     if llm_type.lower() == 'grok':
-        return call_grok_api(prompt, system_content, model, temperature, max_tokens, response_format)
-    elif llm_type.lower() == 'gemini':
+        result = call_grok_api(prompt, system_content, model, temperature, max_tokens, response_format)
+        if result:  # 成功则直接返回
+            return result
+        # Grok失败，尝试切换到Gemini
+        print("Grok API调用失败，尝试切换到Gemini...")
         return call_gemini_api(prompt, model, temperature, max_tokens, response_format)
+    elif llm_type.lower() == 'gemini':
+        result = call_gemini_api(prompt, model, temperature, max_tokens, response_format)
+        if result:  # 成功则直接返回
+            return result
+        # Gemini失败，尝试切换到Grok
+        print("Gemini API调用失败，尝试切换到Grok...")
+        return call_grok_api(prompt, system_content, model, temperature, max_tokens, response_format)
     else:
         raise ValueError(f"不支持的llm_type: {llm_type}")
 

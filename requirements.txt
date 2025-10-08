@@ -13,3 +13,4 @@ tinycss2>=1.2.1
 selenium
 crawl4ai
 playwright
+PyPDF2
