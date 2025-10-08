@@ -18,7 +18,7 @@ def generate_summary(text, prompt_type='article', llm_type=None):
     # 控制输入文本大小，超过1000词只取前1000词
     words = text.split()
     if len(words) > 500:
-        text = ' '.join(words[:500])
+        text = ' '.join(words[:1000])
     if prompt_type == 'article':
         prompt = ARTICLE_SUMMARY_PROMPT.format(text=text)
         system_content = ARTICLE_SUMMARY_SYSTEM

@@ -997,13 +997,36 @@ def get_discussion_content(url):
         return ""
     try:
         headers = {
-            'User-Agent': 'Mozilla/5.0 (iPhone; CPU iPhone OS 13_2_3 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/13.0.3 Mobile/15E148 Safari/604.1'
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'
         }
-        response = requests.get(url, timeout=10, headers=headers)
+        response = requests.get(url, timeout=15, headers=headers)
         soup = BeautifulSoup(response.text, 'html.parser')
+        
+        # 针对Hacker News的特定结构
+        if 'news.ycombinator.com' in url:
+            # 查找所有评论区块
+            comments = soup.select('div.comment')
+            if not comments:
+                # 尝试其他可能的选择器
+                comments = soup.select('div.comtr')
+                if not comments:
+                    comments = soup.select('.commtext')
+            
+            # 如果找到评论，提取文本
+            if comments:
+                print(f"找到 {len(comments)} 条评论")
+                text = '\n\n---\n\n'.join([comment.get_text(strip=True) for comment in comments[:20]])
+                return text[:5000]  # 增加文本长度限制
+        
+        # 通用处理方式
         comments = soup.find_all('div', class_='comment')
-        text = '\n'.join([comment.get_text(strip=True) for comment in comments[:10]])  # 只获取前10条评论
-        return text[:3000]  # 限制文本长度
+        if comments:
+            text = '\n\n'.join([comment.get_text(strip=True) for comment in comments[:20]])  # 获取前20条评论
+            return text[:5000]  # 增加文本长度限制
+        
+        # 如果没有找到评论，返回页面主要内容
+        return soup.get_text(strip=True)[:5000]
+    
     except Exception as e:
         print(f"Error fetching discussion content: {e}")
         return ""

@@ -34,6 +34,14 @@ urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 import requests
 from bs4 import BeautifulSoup
 
+# PDF processing imports
+import io
+try:
+    import PyPDF2
+    PDF_LIBRARY = 'pypdf2'
+except ImportError:
+    PDF_LIBRARY = None
+
 # Load config
 with open('config.json', 'r', encoding='utf-8') as f:
     config = json.load(f)
@@ -344,6 +352,68 @@ def _fetch_x_via_selenium(url: str) -> Tuple[str, List[str]]:
                 driver.quit()
             except Exception:
                 pass
+
+# ----------------------------
+# PDF Handler
+# ----------------------------
+async def get_pdf_content(url: str) -> str:
+    """从PDF URL提取文本内容"""
+    if PDF_LIBRARY is None:
+        print("未安装PyPDF2库，无法处理PDF文件")
+        return ""
+
+    try:
+        # 下载PDF文件
+        headers = {
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36',
+            'Accept': 'application/pdf,*/*'
+        }
+
+        loop = asyncio.get_event_loop()
+        response = await loop.run_in_executor(
+            None,
+            lambda: requests.get(url, headers=headers, verify=False, timeout=30)
+        )
+
+        if response.status_code != 200:
+            print(f"下载PDF失败，状态码: {response.status_code}")
+            return ""
+
+        # 检查Content-Type
+        content_type = response.headers.get('Content-Type', '').lower()
+        if 'pdf' not in content_type:
+            print(f"内容类型不是PDF: {content_type}")
+            return ""
+
+        # 使用PyPDF2提取文本
+        pdf_file = io.BytesIO(response.content)
+        pdf_reader = PyPDF2.PdfReader(pdf_file)
+
+        # 提取所有页面的文本
+        text_content = []
+        total_pages = len(pdf_reader.pages)
+        print(f"PDF共有 {total_pages} 页")
+
+        for page_num in range(total_pages):
+            page = pdf_reader.pages[page_num]
+            text = page.extract_text()
+            if text:
+                text_content.append(text)
+
+        # 合并所有页面的文本
+        full_text = '\n\n'.join(text_content)
+
+        # 清理文本
+        full_text = re.sub(r'\s+', ' ', full_text).strip()
+        full_text = ''.join(char for char in full_text if char.isprintable() or char.isspace())
+
+        print(f"成功提取PDF文本，共 {len(full_text)} 字符")
+        return full_text
+
+    except Exception as e:
+        print(f"提取PDF内容时出错: {e}")
+        traceback.print_exc()
+        return ""
 
 # ----------------------------
 # YouTube Handler
@@ -673,7 +743,18 @@ async def fallback_content_extraction(url: str, title: str) -> Tuple[str, List[s
 async def get_article_content_async(url: str, title: str) -> Tuple[str, List[str], List[str]]:
     """获取文章内容的主函数"""
     parsed_url = urlparse(url)
-    
+
+    # 检查是否为PDF链接
+    if url.lower().endswith('.pdf'):
+        print("检测到PDF链接，尝试提取文本...")
+        pdf_content = await get_pdf_content(url)
+        if pdf_content:
+            print(f"成功提取PDF内容，长度: {len(pdf_content)}")
+            return pdf_content, [], []
+        else:
+            print("PDF内容提取失败")
+            return "", [], []
+
     # 检查是否为YouTube链接
     if parsed_url.netloc in ('www.youtube.com', 'youtube.com', 'youtu.be'):
         return await get_youtube_content(url, title)
