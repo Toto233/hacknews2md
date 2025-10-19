@@ -369,14 +369,31 @@ async def get_pdf_content(url: str) -> str:
             'Accept': 'application/pdf,*/*'
         }
 
-        loop = asyncio.get_event_loop()
-        response = await loop.run_in_executor(
-            None,
-            lambda: requests.get(url, headers=headers, verify=False, timeout=30)
-        )
+        # 尝试下载PDF，增加重试机制
+        max_retries = 3
+        for attempt in range(max_retries):
+            try:
+                loop = asyncio.get_event_loop()
+                response = await loop.run_in_executor(
+                    None,
+                    lambda: requests.get(url, headers=headers, verify=False, timeout=30, stream=True)
+                )
 
-        if response.status_code != 200:
-            print(f"下载PDF失败，状态码: {response.status_code}")
+                if response.status_code == 200:
+                    break
+
+                print(f"下载PDF失败（尝试 {attempt + 1}/{max_retries}），状态码: {response.status_code}")
+                if attempt < max_retries - 1:
+                    await asyncio.sleep(2)  # 等待2秒后重试
+
+            except (requests.exceptions.ConnectionError, requests.exceptions.Timeout) as e:
+                print(f"PDF下载连接错误（尝试 {attempt + 1}/{max_retries}）: {e}")
+                if attempt < max_retries - 1:
+                    await asyncio.sleep(2)
+                else:
+                    raise
+        else:
+            print(f"所有重试均失败，状态码: {response.status_code}")
             return ""
 
         # 检查Content-Type
@@ -545,8 +562,16 @@ def get_extension_from_content_type(content_type: str) -> Optional[str]:
 # ----------------------------
 # Screenshot Handler
 # ----------------------------
-def get_summary_from_screenshot(news_url: str, title: str, llm_type: str) -> Optional[str]:
-    """通过截图获取摘要"""
+def save_page_screenshot(url: str, title: str) -> Optional[str]:
+    """保存网页截图到本地
+
+    Args:
+        url: 网页URL
+        title: 网页标题，用于生成文件名
+
+    Returns:
+        截图文件的绝对路径，失败返回None
+    """
     today = datetime.now()
     date_dir = os.path.join('images', f"{today.year:04d}{today.month:02d}{today.day:02d}")
     if not os.path.exists(date_dir):
@@ -581,17 +606,35 @@ def get_summary_from_screenshot(news_url: str, title: str, llm_type: str) -> Opt
     saved_screenshot_path = None
 
     try:
-        print(f"Attempting to initialize WebDriver for {news_url}")
+        print(f"Attempting to initialize WebDriver for {url}")
         driver = webdriver.Chrome(options=options)
-        print(f"WebDriver initialized. Navigating to {news_url}")
-        driver.get(news_url)
-        print(f"Waiting 10 seconds for page load: {news_url}")
+        print(f"WebDriver initialized. Navigating to {url}")
+        driver.get(url)
+        print(f"Waiting 10 seconds for page load: {url}")
         time.sleep(10)
         driver.save_screenshot(image_save_path)
         print(f"Screenshot saved to {image_save_path}")
         saved_screenshot_path = os.path.abspath(image_save_path)
+    except Exception as e:
+        print(f"Error in save_page_screenshot for {url}: {e}")
+        saved_screenshot_path = None
+    finally:
+        if driver:
+            print(f"Quitting WebDriver for {url}")
+            driver.quit()
 
-        with open(image_save_path, "rb") as image_file:
+    return saved_screenshot_path
+
+def get_summary_from_screenshot(news_url: str, title: str, llm_type: str) -> Optional[str]:
+    """通过截图获取摘要"""
+    # 调用独立的截图保存方法
+    saved_screenshot_path = save_page_screenshot(news_url, title)
+
+    if not saved_screenshot_path:
+        return None
+
+    try:
+        with open(saved_screenshot_path, "rb") as image_file:
             base64_image_data = base64.b64encode(image_file.read()).decode('utf-8')
         if not base64_image_data:
             raise ValueError("Failed to load or encode screenshot.")
@@ -603,11 +646,7 @@ def get_summary_from_screenshot(news_url: str, title: str, llm_type: str) -> Opt
         _ = generate_summary_from_image(base64_image_data, image_prompt, llm_type)
     except Exception as e:
         print(f"Error in get_summary_from_screenshot for {news_url}: {e}")
-        saved_screenshot_path = None
-    finally:
-        if driver:
-            print(f"Quitting WebDriver for {news_url}")
-            driver.quit()
+        return None
 
     return saved_screenshot_path
 
@@ -748,12 +787,28 @@ async def get_article_content_async(url: str, title: str) -> Tuple[str, List[str
     if url.lower().endswith('.pdf'):
         print("检测到PDF链接，尝试提取文本...")
         pdf_content = await get_pdf_content(url)
+
+        # 无论PDF文本提取是否成功，都尝试生成截图
+        print("正在为PDF生成截图...")
+        pdf_screenshot_path = await asyncio.to_thread(save_page_screenshot, url, title)
+
         if pdf_content:
             print(f"成功提取PDF内容，长度: {len(pdf_content)}")
-            return pdf_content, [], []
+            if pdf_screenshot_path:
+                print(f"PDF截图已保存到: {pdf_screenshot_path}")
+                return pdf_content, [], [pdf_screenshot_path]
+            else:
+                print("PDF截图生成失败，但已提取文本内容")
+                return pdf_content, [], []
         else:
-            print("PDF内容提取失败")
-            return "", [], []
+            print("PDF文本提取失败")
+            if pdf_screenshot_path:
+                print(f"虽然PDF文本提取失败，但截图已保存到: {pdf_screenshot_path}")
+                # 返回空文本，但包含截图路径，后续可以用截图生成摘要
+                return "", [], [pdf_screenshot_path]
+            else:
+                print("PDF文本提取和截图都失败")
+                return "", [], []
 
     # 检查是否为YouTube链接
     if parsed_url.netloc in ('www.youtube.com', 'youtube.com', 'youtu.be'):
