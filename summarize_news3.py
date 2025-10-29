@@ -470,12 +470,11 @@ async def get_youtube_content(url: str, title: str) -> Tuple[str, List[str], Lis
     # 获取缩略图
     thumbnail_url = f"https://i.ytimg.com/vi/{video_id}/hqdefault.jpg"
     print(f"YouTube缩略图URL: {thumbnail_url}")
-    
+
     thumbnail_path = save_article_image(thumbnail_url, url, f"{title}_1")
-    image_urls = [thumbnail_url] if thumbnail_path else []
     image_paths = [thumbnail_path] if thumbnail_path else []
-    
-    return article_content, image_urls, image_paths
+
+    return article_content, image_paths, image_paths
 
 # ----------------------------
 # Image Handler
@@ -535,7 +534,7 @@ def save_article_image(image_url: str, referer_url: str, title: Optional[str] = 
                     if width < 100 or height < 100:
                         os.remove(full_path)
                         return None
-                    return full_path
+                    return os.path.abspath(full_path)
             except Exception:
                 if os.path.exists(full_path):
                     os.remove(full_path)
@@ -735,12 +734,15 @@ async def fallback_content_extraction(url: str, title: str) -> Tuple[str, List[s
                     images.append(src)
                     seen_srcs.add(src)
 
-        # 保存图片
+        # 保存图片，只保留本地路径
         image_paths = []
         for i, img_url in enumerate(images[:3], 1):
             saved = save_article_image(img_url, url, f"{title}_{i}")
             if saved:
                 image_paths.append(saved)
+
+        # 替换远端URL为本地路径
+        images = image_paths
 
         # 提取文本内容
         for tag in soup(['script', 'style', 'nav', 'header', 'footer', 'aside']):
@@ -769,7 +771,7 @@ async def fallback_content_extraction(url: str, title: str) -> Tuple[str, List[s
             return "", [], []
 
         print(f"回退方案成功提取内容，长度: {len(article_content)} 字符")
-        return article_content, images[:3], image_paths
+        return article_content, image_paths, image_paths
 
     except Exception as e:
         print(f"回退方案失败: {e}")
@@ -827,14 +829,12 @@ async def get_article_content_async(url: str, title: str) -> Tuple[str, List[str
         
         if text:
             print("成功提取X/Twitter内容")
-            image_urls = []
             image_paths = []
             for i, img_url in enumerate(images[:3], 1):
                 saved = save_article_image(img_url, url, f"{title}_{i}")
                 if saved:
-                    image_urls.append(img_url)
                     image_paths.append(saved)
-            return text, image_urls, image_paths
+            return text, image_paths, image_paths
     
     # 使用 Crawl4AI 获取普通网页内容
     print("使用 Crawl4AI 获取网页内容...")
@@ -852,14 +852,14 @@ async def get_article_content_async(url: str, title: str) -> Tuple[str, List[str
         else:
             print("回退方案也未能获取到有效内容")
 
-    # 保存图片（仅在 Crawl4AI 成功时）
+    # 保存图片（仅在 Crawl4AI 成功时），只保留本地路径
     image_paths = []
     for i, img_url in enumerate(image_urls[:3], 1):
         saved = save_article_image(img_url, url, f"{title}_{i}")
         if saved:
             image_paths.append(saved)
 
-    return content, image_urls[:3], image_paths
+    return content, image_paths, image_paths
 
 # ----------------------------
 # Discussion Content
