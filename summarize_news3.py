@@ -1196,6 +1196,13 @@ async def process_news_parallel():
 
     max_fetch_concurrency = int(os.environ.get('HN2MD_FETCH_CONCURRENCY', '5'))
     max_llm_concurrency = int(os.environ.get('HN2MD_LLM_CONCURRENCY', '3'))
+
+    # 根据使用的LLM调整并发数
+    if DEFAULT_LLM.lower() == 'gemini':
+        # Gemini RPM=10，非常严格，降低到1确保不超限
+        max_llm_concurrency = 1
+        print(f"检测到使用Gemini，LLM并发降低到 {max_llm_concurrency} (避免超过RPM限制)")
+
     fetch_semaphore = asyncio.Semaphore(max_fetch_concurrency)
     llm_semaphore = asyncio.Semaphore(max_llm_concurrency)
 

@@ -555,9 +555,9 @@ class WeChatAccessToken:
             # Find local image paths in content
             # Look for common patterns: img src="local_path", ![](local_path), etc.
             image_patterns = [
-                r'<img[^>]+src=["\']([^"\']+\.(?:jpg|jpeg|png|gif))["\'][^>]*>',  # HTML img tags
-                r'!\[.*?\]\(([^)]+\.(?:jpg|jpeg|png|gif))\)',  # Markdown images
-                r'src=["\']([^"\']+\.(?:jpg|jpeg|png|gif))["\']',  # Simple src attributes
+                r'<img[^>]+src=["\']([^"\']+\.(?:jpg|jpeg|png|gif|webp))["\'][^>]*>',  # HTML img tags
+                r'!\[.*?\]\(([^)]+\.(?:jpg|jpeg|png|gif|webp))\)',  # Markdown images
+                r'src=["\']([^"\']+\.(?:jpg|jpeg|png|gif|webp))["\']',  # Simple src attributes
             ]
             
             found_images = set()
@@ -757,14 +757,15 @@ class WeChatAccessToken:
         
         # Check file extension
         file_ext = os.path.splitext(file_path)[1].lower()
-        if file_ext not in ['.jpg', '.jpeg', '.png']:
-            print("Error: Only jpg/png formats are supported for article images")
+        if file_ext not in ['.jpg', '.jpeg', '.png', '.webp']:
+            print("Error: Only jpg/png/webp formats are supported for article images")
             return None
-        
-        # Check file size (1MB limit)
+
+        # Check file size (1MB limit for jpg/png, 2MB for webp)
         file_size = os.path.getsize(file_path)
-        if file_size > 1024 * 1024:  # 1MB
-            print(f"Error: File size {file_size} bytes exceeds 1MB limit")
+        size_limit = 2 * 1024 * 1024 if file_ext == '.webp' else 1024 * 1024
+        if file_size > size_limit:
+            print(f"Error: File size {file_size} bytes exceeds {size_limit//1024//1024}MB limit")
             return None
         
         # Get access token
@@ -781,7 +782,17 @@ class WeChatAccessToken:
             
             # Prepare files for upload
             with open(file_path, 'rb') as f:
-                files = {'media': (os.path.basename(file_path), f, 'image/jpeg' if file_ext in ['.jpg', '.jpeg'] else 'image/png')}
+                # Determine MIME type based on file extension
+                if file_ext in ['.jpg', '.jpeg']:
+                    mime_type = 'image/jpeg'
+                elif file_ext == '.png':
+                    mime_type = 'image/png'
+                elif file_ext == '.webp':
+                    mime_type = 'image/webp'
+                else:
+                    mime_type = 'application/octet-stream'
+
+                files = {'media': (os.path.basename(file_path), f, mime_type)}
                 
                 # Make request
                 response = requests.post(url, files=files, timeout=30)

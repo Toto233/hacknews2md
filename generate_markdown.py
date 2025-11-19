@@ -40,12 +40,12 @@ def is_wsl():
     return False
 
 def convert_windows_path_to_wsl(windows_path):
-    """
+    r"""
     Convert Windows path to WSL path
-    
+
     Args:
         windows_path: Windows-style path like D:\python\...
-        
+
     Returns:
         WSL-style path like /mnt/d/python/...
     """

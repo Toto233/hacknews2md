@@ -36,18 +36,40 @@ def extract_tags_with_llm(news_titles):
 
 def extract_with_gemini(prompt, config):
     """
-    使用Gemini提取tag，优先用google-generativeai SDK，失败再用requests兜底。
+    使用Gemini提取tag，优先用google-genai新SDK，失败再用旧SDK，最后用requests兜底。
     config结构同llm_evaluator.py
     """
     if not config['api_key']:
         print("错误: GEMINI_API_KEY未设置")
         return []
-    # 优先用google-generativeai
+
+    # 优先用新版 google-genai SDK
+    try:
+        from google import genai
+        client = genai.Client(api_key=config['api_key'])
+        model_name = config.get('model', 'gemini-2.5-flash')
+        response = client.models.generate_content(
+            model=model_name,
+            contents=prompt,
+            config={
+                "temperature": config.get('temperature', 0.7),
+                "max_output_tokens": config.get('max_tokens', 8196),
+            }
+        )
+        text = response.text
+        tags = parse_tags_from_text(text)
+        print(f"Gemini新SDK调用成功，提取到 {len(tags)} 个tag")
+        return tags
+    except ImportError:
+        print("新SDK不可用，尝试旧SDK")
+    except Exception as e:
+        print(f"Gemini新SDK调用失败: {e}")
+
+    # 旧版 google-generativeai SDK
     try:
         from google import generativeai as genai
         genai.configure(api_key=config['api_key'])
-        # 支持配置模型名
-        model_name = config.get('model', 'gemini-2.0-flash')
+        model_name = config.get('model', 'gemini-2.5-flash')
         model = genai.GenerativeModel(model_name)
         generation_config = {
             "temperature": config.get('temperature', 0.7),
@@ -56,9 +78,10 @@ def extract_with_gemini(prompt, config):
         response = model.generate_content(prompt, generation_config=generation_config)
         text = response.text
         tags = parse_tags_from_text(text)
+        print(f"Gemini旧SDK调用成功，提取到 {len(tags)} 个tag")
         return tags
     except Exception as e:
-        print(f"Gemini SDK调用失败，尝试requests兜底: {e}")
+        print(f"Gemini旧SDK调用失败，尝试requests兜底: {e}")
     # requests兜底
     try:
         import requests
