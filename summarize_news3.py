@@ -63,11 +63,11 @@ ENABLE_SCREENSHOT = os.environ.get('HN2MD_ENABLE_SCREENSHOT', '1') != '0'
 # ----------------------------
 # Helpers: non-blocking LLM
 # ----------------------------
-async def async_generate_summary(text: str, prompt_type: str) -> str:
-    return await asyncio.to_thread(generate_summary, text, prompt_type)
+async def async_generate_summary(text: str, prompt_type: str, model: str = None) -> str:
+    return await asyncio.to_thread(generate_summary, text, prompt_type, None, model)
 
-async def async_translate_title(title: str, content_summary: str) -> str:
-    return await asyncio.to_thread(translate_title, title, content_summary)
+async def async_translate_title(title: str, content_summary: str, model: str = None) -> str:
+    return await asyncio.to_thread(translate_title, title, content_summary, None, model)
 
 async def async_generate_summary_from_image(base64_image_data: str, prompt: str, llm_type: str) -> str:
     return await asyncio.to_thread(generate_summary_from_image, base64_image_data, prompt, llm_type)
@@ -1140,14 +1140,14 @@ async def process_single_news(news_item, illegal_keywords, fetch_semaphore: asyn
         else:
             print(f"讨论内容为空，跳过摘要生成: {title}")
 
-        # 翻译标题
+        # 翻译标题 - 使用 Pro 模型（更高质量的翻译）
         result = await db.fetchone('SELECT title_chs FROM news WHERE id = ?', (news_id,))
         if result and not result[0] and content_summary:
             async with llm_semaphore:
-                title_chs = await async_translate_title(title, content_summary)
+                title_chs = await async_translate_title(title, content_summary, model='gemini-2.5-pro')
             if title_chs:
                 await db.execute('UPDATE news SET title_chs = ? WHERE id = ?', (title_chs, news_id))
-                print(f"已翻译标题: {title_chs}")
+                print(f"已翻译标题 (Pro模型): {title_chs}")
 
         # 检查违法关键字
         content_illegal_keywords = db_utils.check_illegal_content(content_summary, illegal_keywords)
@@ -1197,11 +1197,12 @@ async def process_news_parallel():
     max_fetch_concurrency = int(os.environ.get('HN2MD_FETCH_CONCURRENCY', '5'))
     max_llm_concurrency = int(os.environ.get('HN2MD_LLM_CONCURRENCY', '3'))
 
-    # 根据使用的LLM调整并发数
+    # Gemini 的限流已在 llm_utils.py 中根据模型类型动态处理
+    # Flash: 8次/分钟, Pro: 2次/分钟
+    # 这里设置并发数为 5，让底层限流器控制实际速率
     if DEFAULT_LLM.lower() == 'gemini':
-        # Gemini RPM=10，非常严格，降低到1确保不超限
-        max_llm_concurrency = 1
-        print(f"检测到使用Gemini，LLM并发降低到 {max_llm_concurrency} (避免超过RPM限制)")
+        max_llm_concurrency = 5
+        print(f"检测到使用Gemini，LLM并发设置为 {max_llm_concurrency}，底层限流器将根据模型类型控制速率")
 
     fetch_semaphore = asyncio.Semaphore(max_fetch_concurrency)
     llm_semaphore = asyncio.Semaphore(max_llm_concurrency)

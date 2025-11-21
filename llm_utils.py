@@ -12,28 +12,41 @@ class RateLimiter:
     def __init__(self):
         self.request_times = defaultdict(deque)
         self.locks = defaultdict(Lock)
-        
+
     def wait_if_needed(self, api_type: str, max_requests: int = 60, window_seconds: int = 60):
-        """API限流检查，如需要会阻塞等待"""
+        """API限流检查，如需要会阻塞等待
+
+        Args:
+            api_type: API类型标识（如 'gemini-gemini-2.5-pro'）
+            max_requests: 时间窗口内最大请求数
+            window_seconds: 时间窗口（秒）
+        """
         with self.locks[api_type]:
             now = time.time()
             window_start = now - window_seconds
-            
+
             # 清理超出窗口的记录
             times = self.request_times[api_type]
             while times and times[0] < window_start:
                 times.popleft()
-            
+
             # 检查是否需要等待
             if len(times) >= max_requests:
                 oldest_request = times[0]
-                wait_time = oldest_request + window_seconds - now
+                # 计算需要等待到最老的请求过期（离开时间窗口）
+                wait_time = oldest_request + window_seconds - now + 1  # +1秒安全余量
                 if wait_time > 0:
-                    print(f"{api_type} API限流：等待 {wait_time:.1f} 秒")
+                    print(f"{api_type} API限流：已达到 {max_requests}次/{window_seconds}秒 上限，等待 {wait_time:.1f} 秒")
                     time.sleep(wait_time)
-            
-            # 记录本次请求
+                    # 等待后重新清理过期记录
+                    now = time.time()
+                    window_start = now - window_seconds
+                    while times and times[0] < window_start:
+                        times.popleft()
+
+            # 记录本次请求时间
             self.request_times[api_type].append(now)
+            print(f"{api_type} 限流状态: {len(times)+1}/{max_requests} 请求 (最近{window_seconds}秒)")
 
 # 全局限流器实例
 rate_limiter = RateLimiter()
@@ -99,15 +112,26 @@ def call_grok_api(prompt, system_content=None, model=None, temperature=None, max
 
 # 通用Gemini API调用
 def call_gemini_api(prompt, model=None, temperature=None, max_tokens=None, response_format=None, max_retries=5):
-    # API限流保护 - Gemini免费版 RPM=10，设置为6留出更多安全余量给重试
-    # 使用保守的限流：6次/分钟 = 每10秒最多1次请求
-    rate_limiter.wait_if_needed('gemini', max_requests=6, window_seconds=60)
-    
-    print(f"Gemini API调用: {prompt}")
     config = load_llm_config()['gemini']
     api_key = config['api_key']
     api_url = config['api_url']
     model = model or config.get('model', 'gemini-2.0-flash')
+
+    # 根据模型类型设置不同的限流参数
+    # gemini-2.5-pro: 2次/分钟
+    # gemini-2.5-flash: 10次/分钟
+    if 'pro' in model.lower():
+        max_requests = 2
+        print(f"Gemini Pro 模型限流: {max_requests}次/分钟")
+    else:
+        max_requests = 8  # Flash模型，设置为8留出安全余量（实际限制10次）
+        print(f"Gemini Flash 模型限流: {max_requests}次/分钟")
+
+    # 使用模型名作为限流key，使得pro和flash分别计数
+    rate_limiter_key = f'gemini-{model}'
+    rate_limiter.wait_if_needed(rate_limiter_key, max_requests=max_requests, window_seconds=60)
+
+    print(f"Gemini API调用: {prompt}")
     temperature = temperature if temperature is not None else config.get('temperature', 0.7)
     max_tokens = max_tokens or config.get('max_tokens', 800)
     print(f"Gemini API调用: {prompt[:100]}...")  # 只打印前100字
@@ -140,11 +164,15 @@ def call_gemini_api(prompt, model=None, temperature=None, max_tokens=None, respo
             error_msg = str(e)
             # 处理503、429等服务错误
             if any(code in error_msg for code in ["503", "429", "500", "502", "504"]) or \
-               any(keyword in error_msg.lower() for keyword in ["quota", "rate limit", "service unavailable", "unavailable", "overloaded"]):
+               any(keyword in error_msg.lower() for keyword in ["quota", "rate limit", "service unavailable", "unavailable", "overloaded", "resource_exhausted"]):
                 print(f"Gemini API服务问题 (尝试 {attempt + 1}/{max_retries}): {e}")
                 if attempt < max_retries - 1:
-                    # 对503等服务不可用错误使用更长的指数退避
-                    if "503" in error_msg or "unavailable" in error_msg.lower():
+                    # 对429限流错误，直接等待到下一个窗口（安全策略：等待65秒）
+                    if "429" in error_msg or "rate limit" in error_msg.lower() or "resource_exhausted" in error_msg.lower():
+                        delay = 65 + random.uniform(1.0, 3.0)  # 60秒窗口 + 5秒安全余量
+                        print(f"遇到限流错误 (429)，等待 {delay:.1f} 秒到下一个时间窗口...")
+                    # 对503等服务不可用错误使用指数退避
+                    elif "503" in error_msg or "unavailable" in error_msg.lower():
                         delay = min(60, (3 ** attempt) + random.uniform(2, 5))  # 5秒、11秒、29秒、60秒
                         print(f"服务暂时不可用，等待 {delay:.1f} 秒后重试...")
                     else:
@@ -155,7 +183,7 @@ def call_gemini_api(prompt, model=None, temperature=None, max_tokens=None, respo
                             delay = int(retry_match.group(1)) + random.uniform(1.0, 3.0)
                             print(f"使用API返回的retry_delay，等待 {delay:.1f} 秒后重试...")
                         else:
-                            # 使用更长的退避时间：10秒、20秒、40秒、80秒
+                            # 默认使用较长的退避时间
                             delay = min(90, (10 * (2 ** attempt))) + random.uniform(1.0, 3.0)
                             print(f"等待 {delay:.1f} 秒后重试...")
                     time.sleep(delay)
@@ -231,11 +259,15 @@ def call_gemini_api(prompt, model=None, temperature=None, max_tokens=None, respo
             error_msg = str(e)
             # 处理503、429等服务错误
             if any(code in error_msg for code in ["503", "429", "500", "502", "504"]) or \
-               any(keyword in error_msg.lower() for keyword in ["quota", "rate limit", "service unavailable", "unavailable", "overloaded"]):
+               any(keyword in error_msg.lower() for keyword in ["quota", "rate limit", "service unavailable", "unavailable", "overloaded", "resource_exhausted"]):
                 print(f"Gemini API服务问题 (尝试 {attempt + 1}/{max_retries}): {e}")
                 if attempt < max_retries - 1:
-                    # 对503等服务不可用错误使用更长的指数退避
-                    if "503" in error_msg or "unavailable" in error_msg.lower():
+                    # 对429限流错误，直接等待到下一个窗口（安全策略：等待65秒）
+                    if "429" in error_msg or "rate limit" in error_msg.lower() or "resource_exhausted" in error_msg.lower():
+                        delay = 65 + random.uniform(1.0, 3.0)  # 60秒窗口 + 5秒安全余量
+                        print(f"遇到限流错误 (429)，等待 {delay:.1f} 秒到下一个时间窗口...")
+                    # 对503等服务不可用错误使用指数退避
+                    elif "503" in error_msg or "unavailable" in error_msg.lower():
                         delay = min(60, (3 ** attempt) + random.uniform(2, 5))  # 5秒、11秒、29秒、60秒
                         print(f"服务暂时不可用，等待 {delay:.1f} 秒后重试...")
                     else:
@@ -246,7 +278,7 @@ def call_gemini_api(prompt, model=None, temperature=None, max_tokens=None, respo
                             delay = int(retry_match.group(1)) + random.uniform(1.0, 3.0)
                             print(f"使用API返回的retry_delay，等待 {delay:.1f} 秒后重试...")
                         else:
-                            # 使用更长的退避时间：10秒、20秒、40秒、80秒
+                            # 默认使用较长的退避时间
                             delay = min(90, (10 * (2 ** attempt))) + random.uniform(1.0, 3.0)
                             print(f"等待 {delay:.1f} 秒后重试...")
                     time.sleep(delay)
