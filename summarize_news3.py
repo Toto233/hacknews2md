@@ -534,8 +534,18 @@ def save_article_image(image_url: str, referer_url: str, title: Optional[str] = 
                     if width < 100 or height < 100:
                         os.remove(full_path)
                         return None
+
+                    # 如果是 avif、webp 或 svg 格式，转换为 png
+                    if ext in ['.avif', '.webp', '.svg']:
+                        png_path = full_path.replace(ext, '.png')
+                        img.save(png_path, 'PNG')
+                        os.remove(full_path)  # 删除原始文件
+                        print(f"已将 {ext} 图片转换为 png: {png_path}")
+                        return os.path.abspath(png_path)
+
                     return os.path.abspath(full_path)
-            except Exception:
+            except Exception as e:
+                print(f"处理图片时出错: {e}")
                 if os.path.exists(full_path):
                     os.remove(full_path)
                 return None
@@ -554,6 +564,8 @@ def get_extension_from_content_type(content_type: str) -> Optional[str]:
         return '.gif'
     elif 'webp' in content_type:
         return '.webp'
+    elif 'avif' in content_type:
+        return '.avif'
     elif 'svg' in content_type:
         return '.svg'
     return None

@@ -20,6 +20,11 @@
   - 自动回退方案：当 Crawl4AI 失败时，自动使用 requests + BeautifulSoup 重试
   - 二进制内容过滤：自动检测和过滤非文本内容，确保数据库存储纯文本
   - Content-Type 检测：智能识别HTML/文本内容，跳过PDF、图片等非文本资源
+- **图片处理功能**：
+  - 支持多种图片格式：JPEG、PNG、GIF、WebP、AVIF、SVG
+  - 自动格式转换：WebP、AVIF、SVG 格式自动转换为 PNG 格式存储
+  - 智能图片过滤：自动过滤尺寸小于 100x100 的图片
+  - 本地存储：所有图片下载到本地并按日期分类保存
 
 ### 3. Markdown 生成模块 (generate_markdown.py)
 - 将处理后的新闻数据生成美观的 Markdown 文档
@@ -40,6 +45,7 @@
 ## 环境要求
 - Python 3.6+
 - 必要的 Python 包：requests, beautifulsoup4, sqlite3, crawl4ai（用于网页抓取）
+- Pillow 及 pillow-avif-plugin（用于图片处理和格式转换）
 - Grok API 密钥（需要在 config.json 中配置）
 - **微信公众号配置**：如需使用草稿箱上传功能，需在 config.json 中配置微信公众号的 appid 和 appsec
 - （HTML 转换模块使用标准库，无需额外第三方依赖）
