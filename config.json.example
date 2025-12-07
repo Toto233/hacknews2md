@@ -10,8 +10,14 @@
     "GEMINI_MODEL": "gemini-2.5-flash-preview-04-17",
     "GEMINI_TEMPERATURE": 0.7,
     "GEMINI_MAX_TOKENS": 200,
-    "DEFAULT_LLM": "gemini",
 
+    "MOONSHOT_API_KEY": "your-moonshot-api-key-here",
+    "MOONSHOT_API_URL": "https://api.moonshot.cn/v1/chat/completions",
+    "MOONSHOT_MODEL": "kimi-k2-0905-preview",
+    "MOONSHOT_TEMPERATURE": 0.7,
+    "MOONSHOT_MAX_TOKENS": 8192,
+
+    "DEFAULT_LLM": "gemini",
     "MIN_ARTICLE_CONTENT_CHARS": 30,
     "wechat": {
         "appid": "your-appid-here",

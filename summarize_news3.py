@@ -527,7 +527,13 @@ def save_article_image(image_url: str, referer_url: str, title: Optional[str] = 
                 for chunk in response.iter_content(chunk_size=8192):
                     if chunk:
                         f.write(chunk)
-            
+                f.flush()  # 确保数据写入磁盘
+                os.fsync(f.fileno())  # 强制刷新到磁盘
+
+            # Windows文件锁释放需要时间，添加短暂延迟
+            import time
+            time.sleep(0.1)
+
             try:
                 with Image.open(full_path) as img:
                     width, height = img.size
@@ -1152,14 +1158,14 @@ async def process_single_news(news_item, illegal_keywords, fetch_semaphore: asyn
         else:
             print(f"讨论内容为空，跳过摘要生成: {title}")
 
-        # 翻译标题 - 使用 Pro 模型（更高质量的翻译）
+        # 翻译标题 - 使用负载均衡的模型
         result = await db.fetchone('SELECT title_chs FROM news WHERE id = ?', (news_id,))
         if result and not result[0] and content_summary:
             async with llm_semaphore:
-                title_chs = await async_translate_title(title, content_summary, model='gemini-2.5-pro')
+                title_chs = await async_translate_title(title, content_summary)
             if title_chs:
                 await db.execute('UPDATE news SET title_chs = ? WHERE id = ?', (title_chs, news_id))
-                print(f"已翻译标题 (Pro模型): {title_chs}")
+                print(f"已翻译标题: {title_chs}")
 
         # 检查违法关键字
         content_illegal_keywords = db_utils.check_illegal_content(content_summary, illegal_keywords)

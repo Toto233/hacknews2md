@@ -260,8 +260,8 @@ def generate_markdown():
     news_titles = [(item[1], item[0]) for item in news_items[:4]]
     tags = extract_tags_with_llm(news_titles)
 
-    # 使用大模型评价新闻标题吸引力 - 强制使用 gemini-2.5-pro 模型（更准确的分析）
-    ratings, headline_reason = evaluate_news_attraction(news_items, llm_type='gemini', model='gemini-2.5-pro')
+    # 使用大模型评价新闻标题吸引力 - 使用负载均衡的 Gemini 模型
+    ratings, headline_reason = evaluate_news_attraction(news_items, llm_type='moonshot')
     
     # 如果成功获取评分，根据评分排序新闻
     if ratings:
