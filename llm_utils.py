@@ -132,9 +132,20 @@ def load_llm_config():
         }
 
 # 通用Grok API调用
-def call_grok_api(prompt, system_content=None, model=None, temperature=None, max_tokens=None, response_format=None):
-    # API限流保护
-    rate_limiter.wait_if_needed('grok', max_requests=50, window_seconds=60)
+def call_grok_api(prompt, system_content=None, model=None, temperature=None, max_tokens=None, response_format=None, image_data=None):
+    """
+    Grok API调用 - 支持图片识别（Grok 4.1+）
+    Args:
+        prompt: 文本提示
+        system_content: 系统提示
+        model: 模型名称
+        temperature: 温度参数
+        max_tokens: 最大token数
+        response_format: 响应格式
+        image_data: Base64编码的图片数据（可选，Grok 4.1+支持）
+    """
+    # Grok无限额限制，不需要限流
+    # rate_limiter.wait_if_needed('grok', max_requests=50, window_seconds=60)
 
     config = load_llm_config()['grok']
     api_key = config['api_key']
@@ -142,21 +153,49 @@ def call_grok_api(prompt, system_content=None, model=None, temperature=None, max
     model = model or config['model']
     temperature = temperature if temperature is not None else config['temperature']
     max_tokens = max_tokens or config['max_tokens']
+
     headers = {
         'Authorization': f'Bearer {api_key}',
         'Content-Type': 'application/json'
     }
+
+    # 构建消息内容
+    messages = []
+
+    # 添加系统消息
+    if system_content:
+        messages.append({'role': 'system', 'content': system_content})
+
+    # 构建用户消息
+    if image_data:
+        # 如果有图片，构建多模态输入
+        user_message = {
+            'role': 'user',
+            'content': [
+                {'type': 'text', 'text': prompt},
+                {
+                    'type': 'image_url',
+                    'image_url': {
+                        'url': f'data:image/png;base64,{image_data}'
+                    }
+                }
+            ]
+        }
+    else:
+        # 纯文本输入
+        user_message = {'role': 'user', 'content': prompt}
+
+    messages.append(user_message)
+
     data = {
-        'messages': [
-            {'role': 'system', 'content': system_content or ''},
-            {'role': 'user', 'content': prompt}
-        ],
+        'messages': messages,
         'model': model,
         'temperature': temperature,
         'max_tokens': max_tokens
     }
     if response_format:
         data['response_format'] = response_format
+
     try:
         response = requests.post(api_url, headers=headers, json=data, timeout=60, verify=True)
         response.raise_for_status()
@@ -177,8 +216,8 @@ def call_moonshot_api(prompt, system_content=None, model=None, temperature=None,
     - moonshot-v1-32k (32k上下文)
     - moonshot-v1-128k (128k上下文)
     """
-    # API限流保护 - Moonshot免费版限制较严格
-    rate_limiter.wait_if_needed('moonshot', max_requests=3, window_seconds=60)
+    # Moonshot无限额限制，不需要限流
+    # rate_limiter.wait_if_needed('moonshot', max_requests=3, window_seconds=60)
 
     config = load_llm_config()['moonshot']
     api_key = config['api_key']
@@ -559,26 +598,19 @@ def call_llm(prompt, llm_type=None, system_content=None, model=None, temperature
 
     # 尝试主要LLM
     if llm_type.lower() == 'grok':
-        # Grok不支持图片,如果有图片数据则直接切换到Gemini
-        if image_data:
-            print("警告: Grok不支持图片输入,自动切换到Gemini处理图片")
-            result = call_gemini_api(prompt, model, temperature, max_tokens, response_format, image_data=image_data)
-            if result:
-                return result
-            # Gemini失败
-            print("Gemini处理图片失败,图片识别无法继续")
-            return ''
-
-        # 纯文本调用Grok
-        result = call_grok_api(prompt, system_content, model, temperature, max_tokens, response_format)
+        # Grok 4.1+ 支持图片识别
+        result = call_grok_api(prompt, system_content, model, temperature, max_tokens, response_format, image_data=image_data)
         if result:  # 成功则直接返回
             return result
         # Grok失败,尝试切换到Gemini
         print("Grok API调用失败,尝试切换到Gemini...")
-        result = call_gemini_api(prompt, model, temperature, max_tokens, response_format)
+        result = call_gemini_api(prompt, model, temperature, max_tokens, response_format, image_data=image_data)
         if result:
             return result
-        # Gemini也失败,尝试Moonshot
+        # Gemini也失败,尝试Moonshot(不支持图片)
+        if image_data:
+            print("Grok和Gemini均失败,Moonshot不支持图片,图片识别无法继续")
+            return ''
         print("Gemini API也失败,尝试切换到Moonshot...")
         return call_moonshot_api(prompt, system_content, model, temperature, max_tokens, response_format)
 

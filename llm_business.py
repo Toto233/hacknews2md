@@ -46,27 +46,25 @@ def generate_summary_from_image(base64_image_data, prompt, llm_type):
     Args:
         base64_image_data: Base64编码的图片数据
         prompt: 提示词
-        llm_type: LLM类型（优先使用Gemini，Grok次之）
+        llm_type: LLM类型（Grok 4.1+和Gemini均支持图片识别）
     """
     if not base64_image_data:
         print("错误: base64_image_data 为空 (Error: base64_image_data is empty)")
         return ""
 
-    # Moonshot不支持图片，自动切换到Gemini
+    # Moonshot不支持图片，自动切换到配置的默认LLM或Gemini
     if llm_type and llm_type.lower() == 'moonshot':
         print("警告: Moonshot不支持图片输入，自动切换到Gemini")
         llm_type = 'gemini'
 
-    # Grok不支持图片，自动切换到Gemini
-    if llm_type and llm_type.lower() == 'grok':
-        print("警告: Grok不支持图片输入，自动切换到Gemini")
-        llm_type = 'gemini'
-
-    # 如果未指定类型，默认使用Gemini
+    # 如果未指定类型，默认使用配置的LLM
     if not llm_type:
-        llm_type = 'gemini'
+        from llm_utils import load_llm_config
+        config = load_llm_config()
+        llm_type = config['default']
+        print(f"未指定LLM类型，使用配置默认: {llm_type}")
 
-    # Gemini图片摘要 - 传递图片数据
+    # 调用LLM进行图片摘要 - 传递图片数据
     try:
         summary = call_llm(prompt, llm_type=llm_type, image_data=base64_image_data)
         if summary.lower() == "null":

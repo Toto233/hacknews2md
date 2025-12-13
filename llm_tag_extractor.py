@@ -17,20 +17,20 @@ def extract_tags_with_llm(news_titles):
         else:
             prompt += f"{idx}. {en}\n"
     llm_config = load_llm_config()
-    # 先用Gemini
-    try:
-        tags = extract_with_gemini(prompt, llm_config['gemini'])
-        if tags:
-            return tags
-    except Exception as e:
-        print(f"Gemini调用失败: {e}")
-    # Gemini失败再用Grok
+    # 先用 Grok 4.1 Fast
     try:
         tags = extract_with_grok(prompt, llm_config['grok'])
         if tags:
             return tags
     except Exception as e:
         print(f"Grok调用失败: {e}")
+    # Grok 失败再用 Gemini
+    try:
+        tags = extract_with_gemini(prompt, llm_config['gemini'])
+        if tags:
+            return tags
+    except Exception as e:
+        print(f"Gemini调用失败: {e}")
     return []
 
 
@@ -107,7 +107,7 @@ def extract_with_gemini(prompt, config):
 
 def extract_with_grok(prompt, config):
     """
-    使用Grok提取tag，config结构同llm_evaluator.py
+    使用Grok提取tag，使用 grok-4-1-fast 模型
     """
     if not config['api_key']:
         print("错误: GROK_API_KEY未设置")
@@ -120,10 +120,10 @@ def extract_with_grok(prompt, config):
             "Authorization": f"Bearer {config['api_key']}"
         }
         data = {
-            "model": config.get('model', 'grok-3'),
+            "model": config.get('model', 'grok-4-1-fast'),
             "messages": [{"role": "user", "content": prompt}],
             "temperature": config.get('temperature', 0.7),
-            "max_output_tokens": config.get('max_tokens', 8196),
+            "max_tokens": config.get('max_tokens', 8196),
         }
         resp = requests.post(url, headers=headers, json=data, timeout=30)
         resp.raise_for_status()
