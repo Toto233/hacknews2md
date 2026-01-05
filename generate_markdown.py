@@ -89,21 +89,21 @@ def smart_path_convert(path_str):
 def extract_html_content(html_file_path):
     """
     Extract title and content from HTML file
-    
+
     Args:
         html_file_path: Path to the HTML file
-        
+
     Returns:
-        Dict with title, content, and images found
+        Dict with title, content, and images found (only from first news item)
     """
     if not os.path.exists(html_file_path):
         raise FileNotFoundError(f"HTML file not found: {html_file_path}")
-    
+
     with open(html_file_path, 'r', encoding='utf-8') as f:
         html_content = f.read()
-    
+
     soup = BeautifulSoup(html_content, 'html.parser')
-    
+
     # Extract title from <title> tag or h1
     title = ""
     if soup.title:
@@ -113,44 +113,80 @@ def extract_html_content(html_file_path):
     else:
         # Use filename as fallback
         title = os.path.splitext(os.path.basename(html_file_path))[0]
-    
+
     # WeChat title limit is 64 characters, truncate if needed
     if len(title) > 64:
         title = title[:61] + "..."
         print(f"Title truncated to: {title}")
-    
+
     # Extract body content
     if soup.body:
         content_element = soup.body
     else:
         content_element = soup
-    
+
     local_images = []
-    
+    first_news_images = []
+
     print(f"Current environment: {'WSL' if is_wsl() else 'Native'}")
-    
-    # Find all image tags and convert paths
+
+    # Find all H2 tags to identify news boundaries
+    h2_tags = content_element.find_all('h2')
+
+    # If we have H2 tags, extract images only from the first news item
+    if h2_tags:
+        first_h2 = h2_tags[0]
+        second_h2 = h2_tags[1] if len(h2_tags) > 1 else None
+
+        # Get all elements between first and second H2
+        current = first_h2.next_sibling
+        while current:
+            # Stop if we reach the second H2
+            if second_h2 and current == second_h2:
+                break
+
+            # Check if this element or its descendants contain images
+            if hasattr(current, 'find_all'):
+                imgs_in_section = current.find_all('img')
+                for img in imgs_in_section:
+                    src = img.get('src', '')
+                    if src and not src.startswith(('http://', 'https://', '//', 'data:')):
+                        # Smart path conversion based on environment
+                        converted_path = smart_path_convert(src)
+
+                        # Check if the converted path exists
+                        if os.path.exists(converted_path):
+                            first_news_images.append(converted_path)
+                            print(f"✓ First news image found: {src} -> {converted_path}")
+                        else:
+                            print(f"✗ Image not found: {src} -> {converted_path}")
+
+            current = current.next_sibling
+
+        print(f"Extracted {len(first_news_images)} image(s) from first news item")
+
+    # Find all image tags and convert paths (for content processing)
     for img in content_element.find_all('img'):
         src = img.get('src', '')
         if src and not src.startswith(('http://', 'https://', '//', 'data:')):
             # Smart path conversion based on environment
             converted_path = smart_path_convert(src)
-            
+
             # Check if the converted path exists
             if os.path.exists(converted_path):
                 img['src'] = converted_path
                 local_images.append(converted_path)
-                print(f"✓ Image found: {src} -> {converted_path}")
             else:
                 print(f"✗ Image not found: {src} -> {converted_path}")
-    
+
     # Get clean HTML content
     content_html = str(content_element)
-    
+
     return {
         'title': title,
         'content': content_html,
-        'local_images': local_images
+        'local_images': local_images,
+        'first_news_images': first_news_images  # Only images from first news item
     }
 
 def clean_html_for_wechat(html_content):
@@ -204,13 +240,26 @@ def upload_html_to_draft(html_file_path, author="", digest="", source_url=""):
         # Extract content from HTML
         print(f"Extracting content from: {html_file_path}")
         extracted = extract_html_content(html_file_path)
-        
+
         print(f"Title: {extracted['title']}")
-        print(f"Found {len(extracted['local_images'])} local images")
-        
+        print(f"Found {len(extracted['local_images'])} local images (total)")
+        print(f"Found {len(extracted['first_news_images'])} image(s) from first news item")
+
+        # Determine which thumb media ID to use
+        # Only use first news image if we have images from the first news item
+        use_first_news_thumb = len(extracted['first_news_images']) > 0
+
+        if use_first_news_thumb:
+            print(f"✓ Will use first news image as thumbnail: {extracted['first_news_images'][0]}")
+            # We'll let add_draft_smart handle the upload, pass None to let it auto-detect
+            thumb_media_id_to_use = None
+        else:
+            print(f"✓ No images in first news item, will use default thumbnail: {DEFAULT_THUMB_MEDIA_ID}")
+            thumb_media_id_to_use = DEFAULT_THUMB_MEDIA_ID
+
         # Clean HTML for WeChat
         cleaned_content = clean_html_for_wechat(extracted['content'])
-        
+
         # Prepare article data
         article = {
             'title': extracted['title'],
@@ -222,11 +271,10 @@ def upload_html_to_draft(html_file_path, author="", digest="", source_url=""):
             'need_open_comment': 1,
             'only_fans_can_comment': 1
         }
-        
+
         # Use smart upload to handle images automatically
         print("\nUploading to WeChat draft box...")
-        # Use DEFAULT_THUMB_MEDIA_ID as thumbnail
-        media_id = wechat.add_draft_smart([article], DEFAULT_THUMB_MEDIA_ID)
+        media_id = wechat.add_draft_smart([article], thumb_media_id_to_use)
         
         if media_id:
             print(f"\nSuccess! Draft uploaded with Media ID: {media_id}")

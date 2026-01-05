@@ -1282,6 +1282,25 @@ async def process_single_news(news_item, illegal_keywords, fetch_semaphore: asyn
                 else:
                     print(f"Screenshot processing failed for '{title}'.")
 
+        # 检查是否需要补充截图（即使已有摘要，但没有保存任何图片）
+        if ENABLE_SCREENSHOT and news_url:
+            # 检查是否有保存的图片
+            result = await db.fetchone('SELECT largest_image, image_2, image_3 FROM news WHERE id = ?', (news_id,))
+            if result:
+                largest_image, image_2, image_3 = result
+                # 如果三个图片字段都为空，则进行截图
+                if not largest_image and not image_2 and not image_3:
+                    print(f"未保存任何图片，为 '{title}' 生成补充截图（仅用于存档，不生成摘要）")
+                    try:
+                        fallback_screenshot_path = await asyncio.to_thread(save_page_screenshot, news_url, title)
+                        if fallback_screenshot_path:
+                            print(f"补充截图已保存到: {fallback_screenshot_path}")
+                            await db.execute('UPDATE news SET image_3= ? WHERE id = ?', (fallback_screenshot_path, news_id))
+                        else:
+                            print(f"补充截图生成失败: '{title}'")
+                    except Exception as e:
+                        print(f"补充截图过程出错: {e}")
+
         # 生成讨论摘要
         if discussion_content:
             print(f"为讨论生成摘要: {title}")

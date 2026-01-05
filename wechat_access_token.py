@@ -122,13 +122,14 @@ class WeChatAccessToken:
             print(f"Error loading token from database: {e}")
             return None
         
-    def get_access_token(self, force_refresh: bool = False) -> Optional[str]:
+    def get_access_token(self, force_refresh: bool = False, retry_count: int = 2) -> Optional[str]:
         """
         Get WeChat access token. Checks database first, then API if needed.
-        
+
         Args:
             force_refresh: Force refresh token even if cached one is valid
-            
+            retry_count: Number of retries if API request fails (default: 2)
+
         Returns:
             Access token string or None if failed
         """
@@ -137,49 +138,74 @@ class WeChatAccessToken:
             db_token = self._load_token_from_db()
             if db_token:
                 return db_token
-        
-        # Request new token from API
+
+        # Request new token from API with retry logic
         url = "https://api.weixin.qq.com/cgi-bin/token"
         params = {
             'grant_type': 'client_credential',
             'appid': self.appid,
             'secret': self.secret
         }
-        
-        try:
-            print("Requesting new access token from WeChat API...")
-            response = requests.get(url, params=params, timeout=10)
-            response.raise_for_status()
-            
-            data = response.json()
-            
-            if 'access_token' in data:
-                access_token = data['access_token']
-                expires_in = data.get('expires_in', 7200)
-                
-                # Save to database
-                if self._save_token_to_db(access_token, expires_in):
-                    print(f"New access token retrieved and saved!")
-                    print(f"Token: {access_token[:20]}...")
-                    return access_token
+
+        for attempt in range(retry_count):
+            try:
+                if attempt > 0:
+                    print(f"Retrying to get access token (attempt {attempt + 1}/{retry_count})...")
                 else:
-                    print("Warning: Token retrieved but failed to save to database")
-                    return access_token
-            else:
-                error_code = data.get('errcode', 'unknown')
-                error_msg = data.get('errmsg', 'unknown error')
-                print(f"WeChat API error {error_code}: {error_msg}")
+                    print("Requesting new access token from WeChat API...")
+
+                response = requests.get(url, params=params, timeout=10)
+                response.raise_for_status()
+
+                data = response.json()
+
+                if 'access_token' in data:
+                    access_token = data['access_token']
+                    expires_in = data.get('expires_in', 7200)
+
+                    # Save to database
+                    if self._save_token_to_db(access_token, expires_in):
+                        print(f"New access token retrieved and saved!")
+                        print(f"Token: {access_token[:20]}...")
+                        return access_token
+                    else:
+                        print("Warning: Token retrieved but failed to save to database")
+                        return access_token
+                else:
+                    error_code = data.get('errcode', 'unknown')
+                    error_msg = data.get('errmsg', 'unknown error')
+                    print(f"WeChat API error {error_code}: {error_msg}")
+
+                    # Only retry for certain error codes (e.g., network issues, rate limits)
+                    if attempt < retry_count - 1:
+                        print(f"Will retry in 2 seconds...")
+                        time.sleep(2)
+                        continue
+                    return None
+
+            except requests.exceptions.RequestException as e:
+                print(f"Network error: {e}")
+                if attempt < retry_count - 1:
+                    print(f"Will retry in 2 seconds...")
+                    time.sleep(2)
+                    continue
                 return None
-                
-        except requests.exceptions.RequestException as e:
-            print(f"Network error: {e}")
-            return None
-        except json.JSONDecodeError as e:
-            print(f"JSON decode error: {e}")
-            return None
-        except Exception as e:
-            print(f"Unexpected error: {e}")
-            return None
+            except json.JSONDecodeError as e:
+                print(f"JSON decode error: {e}")
+                if attempt < retry_count - 1:
+                    print(f"Will retry in 2 seconds...")
+                    time.sleep(2)
+                    continue
+                return None
+            except Exception as e:
+                print(f"Unexpected error: {e}")
+                if attempt < retry_count - 1:
+                    print(f"Will retry in 2 seconds...")
+                    time.sleep(2)
+                    continue
+                return None
+
+        return None
     
     def is_token_valid(self) -> bool:
         """Check if current token is still valid"""
@@ -536,7 +562,8 @@ class WeChatAccessToken:
         print(f"Smart draft processing: {len(articles)} article(s)")
         processed_articles = []
         first_thumb_media_id = None
-        
+        first_article_has_image = False  # Track if first article has any images
+
         for i, article in enumerate(articles):
             # Check required fields
             if not article.get('title'):
@@ -545,13 +572,13 @@ class WeChatAccessToken:
             if not article.get('content'):
                 print(f"Error: Article {i+1} missing required field 'content'")
                 return None
-            
+
             print(f"\nProcessing article {i+1}: {article['title']}")
-            
+
             # Copy article data
             processed_article = article.copy()
             processed_content = processed_article['content']
-            
+
             # Find local image paths in content
             # Look for common patterns: img src="local_path", ![](local_path), etc.
             image_patterns = [
@@ -559,31 +586,35 @@ class WeChatAccessToken:
                 r'!\[.*?\]\(([^)]+\.(?:jpg|jpeg|png|gif|webp))\)',  # Markdown images
                 r'src=["\']([^"\']+\.(?:jpg|jpeg|png|gif|webp))["\']',  # Simple src attributes
             ]
-            
+
             found_images = set()
             for pattern in image_patterns:
                 matches = re.findall(pattern, processed_content, re.IGNORECASE)
                 found_images.update(matches)
-            
+
             # Filter for local files (not URLs)
             local_images = [img for img in found_images if not img.startswith(('http://', 'https://', '//'))]
-            
+
             if local_images:
                 print(f"  Found {len(local_images)} local image(s): {local_images}")
-                
+
+                # Mark if this is the first article with images
+                if i == 0:
+                    first_article_has_image = True
+
                 # Upload local images and replace paths
                 for local_path in local_images:
                     # Check if file exists
                     if os.path.exists(local_path):
                         print(f"  Uploading: {local_path}")
                         uploaded_url = self.upload_image_for_article(local_path)
-                        
+
                         if uploaded_url:
                             # Replace all occurrences of local path with uploaded URL
                             processed_content = processed_content.replace(local_path, uploaded_url)
                             print(f"    ✓ Replaced with: {uploaded_url}")
-                            
-                            # Use first image of first article as thumb
+
+                            # ONLY use first image of first article as thumb, not from other articles
                             if i == 0 and first_thumb_media_id is None:
                                 # Upload as permanent material for thumb
                                 print(f"  Using as thumb image: {local_path}")
@@ -597,6 +628,9 @@ class WeChatAccessToken:
                         print(f"  ✗ Image file not found: {local_path}")
             else:
                 print(f"  No local images found in article {i+1}")
+                if i == 0:
+                    # First article has no images
+                    first_article_has_image = False
             
             # Update processed content
             processed_article['content'] = processed_content
@@ -611,14 +645,20 @@ class WeChatAccessToken:
             
             # Set thumb_media_id for news articles
             if processed_article['article_type'] == 'news':
-                # 使用传入的缩略图ID，如果没有传入则使用默认值
-                if default_thumb_media_id:
-                    processed_article['thumb_media_id'] = first_thumb_media_id or default_thumb_media_id
-                    print(f"  Article {i+1} thumb_media_id: {processed_article['thumb_media_id']}")
+                # CRITICAL: Only use first_thumb_media_id if first article has images
+                # If first article has NO images, always use default thumb
+                if first_article_has_image and first_thumb_media_id:
+                    # First article has images, use its first image as thumb
+                    processed_article['thumb_media_id'] = first_thumb_media_id
+                    print(f"  Article {i+1} using first article's image as thumb: {first_thumb_media_id}")
                 else:
-                    # 如果没有提供缩略图ID，尝试使用系统默认值
-                    processed_article['thumb_media_id'] = first_thumb_media_id or "53QZJEu2zs4etGM_3jLi5wl7KNs2RM1RnV_iiGWQmWnYf7qEq2kvHRIIeBCBnAEb"
-                    print(f"  Article {i+1} using default thumb_media_id: {processed_article['thumb_media_id']}")
+                    # First article has NO images, use default thumb
+                    thumb_to_use = default_thumb_media_id or "53QZJEu2zs4etGM_3jLi5wl7KNs2RM1RnV_iiGWQmWnYf7qEq2kvHRIIeBCBnAEb"
+                    processed_article['thumb_media_id'] = thumb_to_use
+                    if not first_article_has_image:
+                        print(f"  Article {i+1} using DEFAULT thumb (first article has no images): {thumb_to_use}")
+                    else:
+                        print(f"  Article {i+1} using default thumb: {thumb_to_use}")
             
             processed_articles.append(processed_article)
         
