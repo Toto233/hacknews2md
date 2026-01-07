@@ -114,7 +114,9 @@ def extract_html_content(html_file_path):
         # Use filename as fallback
         title = os.path.splitext(os.path.basename(html_file_path))[0]
 
-    # WeChat title limit is 64 characters, truncate if needed
+    # WeChat title limit is 64 characters
+    # For yaml_title, we'll handle truncation with suffix preservation later
+    # This section is for HTML extraction only
     if len(title) > 64:
         title = title[:61] + "..."
         print(f"Title truncated to: {title}")
@@ -348,7 +350,19 @@ def generate_markdown():
     pub_datetime = now.strftime('%Y-%m-%d %H:%M:%S') + f'.{int(now.microsecond/1000):03d}+08:00'
 
     # YAML头部title字段，优先用中文标题，否则用英文标题
-    yaml_title = f"{first_title_chs if first_title_chs else first_title} | Hacker News 摘要 ({now.strftime('%Y-%m-%d')})"
+    # 保证总长度不超过64字符，固定后缀部分为: " | Hacker News 摘要 (YYYY-MM-DD)"
+    suffix = f" | Hacker News 摘要 ({now.strftime('%Y-%m-%d')})"
+    prefix = first_title_chs if first_title_chs else first_title
+
+    # 如果总长度超过64，截断前缀部分
+    max_length = 64
+    if len(prefix) + len(suffix) > max_length:
+        # 计算前缀可用的最大长度
+        max_prefix_length = max_length - len(suffix)
+        # 截断前缀，确保总长度不超过64
+        prefix = prefix[:max_prefix_length]
+
+    yaml_title = prefix + suffix
 
     # 组装YAML头部
     yaml_header = f"""---
