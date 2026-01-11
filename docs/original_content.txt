@@ -1,0 +1,65 @@
+Sounds like this app wasn't a good fit for htmx.  I have added it to the "On The Other Hand" section on the htmx website:https://htmx.org/essays/#on-the-other-handRegarding the default swap behavior of "innerHTML":https://htmx.org/quirks/#the-default-swap-strategy-is-innerh...Our proposal to merge htmx functionality into the HTML spec uses outerHTML:https://alexanderpetros.com/triptych/Also consider datastar, it was written from an SSE-first perspective by a go engineer:https://data-star.dev/reply
+
+---
+
+Oh wow! This is a huge honour, thank you so much! I definitely started writing a "lol HTMX is shit" post, but it just wasn't honest. HTMX is incredibly powerful - I am a fan of what you all have done with it. This attempt on my part to try and write something server-side rendered wouldn't have happened without the kick up the butt HTMX gives me (and all of us).reply
+
+---
+
+No problem at all. There are aspects of htmx that are good and bad depending on context and experience, and I like having different perspectives on it available for people to read, so thank you for taking the time to put together an in depth essay on it.reply
+
+---
+
+I can't help but to think "lol HTMX is shit" may have beat out "htmx sucks" for first place on that list!reply
+
+---
+
++1 for datastar. It lets you do really dumb push based streaming html stuff where HTMX isnt quite fast enough (great for multiplayer apps).[1]Super excited about triptych too! Thanks for pushing that.- [1]https://checkboxes.andersmurphy.comreply
+
+---
+
+I was quite excited for Datastart until I saw that they keep a good chunk of the functionality behind a proprietary license [1]. It's not even about the price (it is a bit steep though, but I guess if you use it in a commercial project it will pay for itself), it's the proprietary part.[1]https://data-star.dev/reference/datastar_proreply
+
+---
+
+A "good chunk of functionality" is a mischaracterisation. I don't use anything from pro and I use datastar at work. I do believe in making open source maintainable though so bought the license.The pro stuff is mostly a collection of foot guns you shouldn't use and are a support burden for the core team. In some niche corporate context they are useful. You can also implement your own plugins with the same functionality if you want it's just going to cost you time in instead of money.I find devs complaining about paying for things never gets old. A one off life time license? How scandalous! Sustainable open source? Disgusting. Oh a proprietary AI model that is built on others work without their concent and steals my data? Only 100$ a month? Take my money!reply
+
+---
+
+Your recent post on using datastar with SSE to power game of life [1] was excellent. Thanks for writing it![1]https://andersmurphy.com/2025/04/07/clojure-realtime-collabo...reply
+
+---
+
+Thank you! I've been meaning to write one on the nitty gritty of virtual scroll, hopefully I'll find some time next month.reply
+
+---
+
+That would be great to see. Likewise more details about your custom compression settings.reply
+
+---
+
+Datastar folks have some cool videos -https://data-star.dev/videosreply
+
+---
+
+HTMX does have web socket support! I've been experimenting with it...reply
+
+---
+
+Datastar uses SSE. In practice you almost always want SSE rather than websockets or your own UDP protocol. Websockets are an operational nightmare once you get off the happy path.reply
+
+---
+
+HTMX also has a SSE extension. I’m working on a multiplayer game as a hobby project and am not too far along.reply
+
+---
+
+Regarding your proposal:I would love to see cross browser support for forms encoded as application/json instead of url encoded. Additionally making name attributes in forms a query path selector to be able to nest JSON data structures would go a very long way.Regarding web components and htmx: I kind of disagree with the server sided rendering approach there because I believe in local first web apps that use JSON or other data formats to communicate, but I'm pretty stubborn like that.Don't have much to prove it yet, but I'm working on gooey, my bindings and components library for WebASM. Hopefully I'll get there in the next months, though Go has a couple of limitations due to how the type system works.[1]https://github.com/cookiengineer/gooeyreply
+
+---
+
+> I would love to see cross browser support for forms encoded as application/json instead of url encoded. Additionally making name attributes in forms a query path selector to be able to nest JSON data structures would go a very long way.This would be simply amazing. Would so drastically reduce the JavaScript truly needed for basic CRUD stuff. Could even eliminate it if you don’t need variable-length arrays. Just the simplicity of POSTing forms…reply
+
+---
+
+Yeah, in my (limited) experience, htmx works best to grease the wheels of an oldschool multi-page app.I tried building something with SPAish drag-and-drop interactivity using htmx, and my ultimate conclusion was that functionality like that sho

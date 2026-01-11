@@ -103,7 +103,7 @@ Moonshot 失败 → Gemini → Grok
 
 ### 配置示例
 
-在 `config.json` 中配置：
+在 `config/config.json` 中配置：
 
 ```json
 {
@@ -123,7 +123,7 @@ Moonshot 失败 → Gemini → Grok
 ### 使用方法
 
 ```python
-from llm_utils import call_llm
+from src.llm.llm_utils import call_llm
 
 # 使用默认 LLM
 result = call_llm(prompt="翻译这段文字...")
@@ -143,7 +143,7 @@ result = call_llm(
 )
 ```
 
-详细文档请参考 [MOONSHOT_INTEGRATION.md](MOONSHOT_INTEGRATION.md)
+详细文档请参考 [docs/MOONSHOT_INTEGRATION.md](docs/MOONSHOT_INTEGRATION.md)
 
 ## 环境要求
 - Python 3.6+
@@ -163,7 +163,7 @@ pip install -r requirements.txt
 ```
 
 2. 配置 API 和微信公众号：
-- 复制 config.json.example 为 config.json
+- 复制 config/config.json.example 为 config/config.json
 - **配置至少一个 LLM API 密钥**：
   ```json
   {
@@ -186,16 +186,16 @@ pip install -r requirements.txt
 3. 运行程序：
 ```bash
 # 抓取最新新闻
-python fetch_news.py
+python src/core/fetch_news.py
 
 # 生成新闻摘要
-python summarize_news.py
+python src/core/summarize_news3.py
 
 # 生成 Markdown 报告
-python generate_markdown.py
+python src/core/generate_markdown.py
 ```
 
-- 运行 `python generate_markdown.py` 将生成并打开两份文件：`hacknews_summary_YYYYMMDD_HHMM.md` 与 `hacknews_summary_YYYYMMDD_HHMM.html`；HTML 会在浏览器中打开，便于复制到微信公众号编辑器，按回车后关闭浏览器。
+- 运行 `python src/core/generate_markdown.py` 将生成并打开两份文件：`hacknews_summary_YYYYMMDD_HHMM.md` 与 `hacknews_summary_YYYYMMDD_HHMM.html`；HTML 会在浏览器中打开，便于复制到微信公众号编辑器，按回车后关闭浏览器。
 - **新增：微信草稿箱上传**：完成HTML预览后，系统会询问是否自动上传到微信公众号草稿箱（输入 y 或 yes 确认上传）
 - 生成逻辑要点：
   - 选取最近约 12 小时内且已生成内容与讨论摘要的新闻
@@ -208,7 +208,7 @@ python generate_markdown.py
 - 以函数方式转换 Markdown 为 HTML：
 
 ```python
-from markdown_to_html_converter import convert_markdown_to_html
+from src.integrations.markdown_to_html_converter import convert_markdown_to_html
 
 with open('your.md', 'r', encoding='utf-8') as f:
     md = f.read()
@@ -222,15 +222,15 @@ with open('out.html', 'w', encoding='utf-8') as f:
 - 命令行转换现有 Markdown：
 
 ```bash
-python markdown_to_html_converter.py input.md -o output.html --no-open
+python src/integrations/markdown_to_html_converter.py input.md -o output.html --no-open
 # 自动打开并在 10 秒后关闭
-python markdown_to_html_converter.py input.md -o output.html --auto-close 10
+python src/integrations/markdown_to_html_converter.py input.md -o output.html --auto-close 10
 ```
 
-- 浏览器预览（需要 `browser_manager.py`）：
+- 浏览器预览：
 
 ```python
-from browser_manager import display_html_in_browser
+from src.utils.browser_manager import display_html_in_browser
 
 display_html_in_browser(html, auto_close=True, close_delay=10)
 ```
@@ -253,11 +253,11 @@ display_html_in_browser(html, auto_close=True, close_delay=10)
 - **内容清理**：自动清理HTML内容以适配微信公众号格式
 
 ### 使用方法
-1. 在 config.json 中配置微信公众号信息：
+1. 在 config/config.json 中配置微信公众号信息：
 ```json
 {
   "wechat": {
-    "appid": "your_wechat_appid", 
+    "appid": "your_wechat_appid",
     "appsec": "your_wechat_appsec"
   }
 }
@@ -265,7 +265,7 @@ display_html_in_browser(html, auto_close=True, close_delay=10)
 
 2. 运行 generate_markdown.py，在HTML预览完成后选择上传：
 ```bash
-python generate_markdown.py
+python src/core/generate_markdown.py
 # 按回车关闭浏览器后，输入 y 或 yes 确认上传
 ```
 
@@ -293,26 +293,45 @@ python generate_markdown.py
 
 ## 📚 相关文档
 
-- [MOONSHOT_INTEGRATION.md](MOONSHOT_INTEGRATION.md) - Moonshot AI 集成详细文档
-- [AUTO_PROCESS_README.md](AUTO_PROCESS_README.md) - 自动化处理说明
-- 测试脚本：`python test_moonshot.py` - 测试 Moonshot 集成
+- [docs/MOONSHOT_INTEGRATION.md](docs/MOONSHOT_INTEGRATION.md) - Moonshot AI 集成详细文档
+- [WORKFLOW.md](WORKFLOW.md) - 日常使用工作流程指南
+- [MIGRATION_GUIDE.md](MIGRATION_GUIDE.md) - 项目重组迁移指南
 
 ## 🏗️ 项目架构
 
 ```
-HackerNews 中文摘要生成器
-├── fetch_news.py           # 新闻抓取
-├── summarize_news3.py      # 内容摘要（主推荐）
-├── summarize_news2.py      # 内容摘要（备用）
-├── generate_markdown.py    # Markdown 生成
-├── llm_utils.py           # LLM 核心逻辑
-│   ├── call_grok_api()    # Grok 集成
-│   ├── call_gemini_api()  # Gemini 集成 + 负载均衡
-│   ├── call_moonshot_api()# Moonshot 集成
-│   └── call_llm()         # 统一入口 + 自动降级
-├── llm_business.py        # LLM 业务逻辑
-├── config.json            # 配置文件
-└── hacknews.db            # SQLite 数据库
+hacknews/
+├── src/                          # 源代码
+│   ├── core/                     # 核心功能模块
+│   │   ├── fetch_news.py         # 新闻抓取
+│   │   ├── summarize_news3.py    # 摘要生成
+│   │   ├── generate_markdown.py  # Markdown 生成
+│   │   └── archive_news.py       # 归档功能
+│   ├── llm/                      # LLM 相关模块
+│   │   ├── llm_utils.py          # LLM 统一接口 + 负载均衡
+│   │   ├── llm_business.py       # 业务层抽象
+│   │   ├── llm_evaluator.py      # 新闻评分
+│   │   ├── llm_tag_extractor.py  # 标签提取
+│   │   └── prompts.py            # 提示词库
+│   ├── integrations/             # 第三方集成
+│   │   ├── wechat_access_token.py        # 微信API
+│   │   └── markdown_to_html_converter.py # Markdown转HTML
+│   └── utils/                    # 工具类
+│       ├── db_utils.py           # 数据库工具
+│       ├── config.py             # 配置加载器
+│       ├── proxy_config.py       # 代理配置
+│       └── browser_manager.py    # 浏览器管理
+├── scripts/                      # 可执行脚本
+│   └── auto_process.py           # 自动化处理
+├── config/                       # 配置文件
+│   ├── config.json               # 主配置
+│   └── config.json.example       # 配置模板
+├── data/                         # 数据文件
+│   └── hacknews.db               # SQLite 数据库
+├── output/                       # 输出文件
+│   ├── markdown/                 # 生成的 Markdown/HTML
+│   └── images/                   # 下载的图片
+└── docs/                         # 文档
 ```
 
 ## 🔍 故障排除
