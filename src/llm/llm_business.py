@@ -16,10 +16,11 @@ def generate_summary(text, prompt_type='article', llm_type=None, model=None):
     """
     if not text:
         return ""
-    # 控制输入文本大小，超过1000词只取前1000词
+    # 控制输入文本大小，超过700词只取前700词（降低以避免超长内容）
     words = text.split()
-    if len(words) > 1000:
-        text = ' '.join(words[:1000])
+    if len(words) > 700:
+        text = ' '.join(words[:700])
+        print(f"[截取] 文章内容从 {len(words)} 词截取到 700 词")
     if prompt_type == 'article':
         prompt = ARTICLE_SUMMARY_PROMPT.format(text=text)
         system_content = ARTICLE_SUMMARY_SYSTEM

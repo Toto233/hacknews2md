@@ -132,7 +132,7 @@ def load_llm_config():
         }
 
 # 通用Grok API调用
-def call_grok_api(prompt, system_content=None, model=None, temperature=None, max_tokens=None, response_format=None, image_data=None):
+def call_grok_api(prompt, system_content=None, model=None, temperature=None, max_tokens=None, response_format=None, image_data=None, max_retries=2):
     """
     Grok API调用 - 支持图片识别（Grok 4.1+）
     Args:
@@ -143,6 +143,7 @@ def call_grok_api(prompt, system_content=None, model=None, temperature=None, max
         max_tokens: 最大token数
         response_format: 响应格式
         image_data: Base64编码的图片数据（可选，Grok 4.1+支持）
+        max_retries: 最大重试次数（默认2次，总共会尝试3次）
     """
     # Grok无限额限制，不需要限流
     # rate_limiter.wait_if_needed('grok', max_requests=50, window_seconds=60)
@@ -196,16 +197,60 @@ def call_grok_api(prompt, system_content=None, model=None, temperature=None, max
     if response_format:
         data['response_format'] = response_format
 
-    try:
-        response = requests.post(api_url, headers=headers, json=data, timeout=60, verify=True)
-        response.raise_for_status()
-        response_json = response.json()
-        if 'choices' in response_json:
-            return response_json['choices'][0]['message']['content'].strip()
-        return ''
-    except Exception as e:
-        print(f"Grok API调用失败: {e}")
-        return ''
+    # 计算输入内容长度用于调试
+    input_length = len(prompt)
+    total_messages_length = sum(len(str(m)) for m in messages)
+    print(f"[Grok] 输入长度: prompt={input_length} 字符, 总消息={total_messages_length} 字符, 估算 ~{total_messages_length // 4} tokens")
+
+    # 重试循环
+    for attempt in range(max_retries + 1):
+        try:
+            if attempt > 0:
+                wait_time = 2 ** attempt  # 指数退避: 2秒, 4秒
+                print(f"[Grok] 第 {attempt + 1}/{max_retries + 1} 次尝试，等待 {wait_time} 秒...")
+                time.sleep(wait_time)
+
+            response = requests.post(api_url, headers=headers, json=data, timeout=60, verify=True)
+            response.raise_for_status()
+            response_json = response.json()
+            if 'choices' in response_json:
+                result = response_json['choices'][0]['message']['content'].strip()
+                if attempt > 0:
+                    print(f"[Grok] 重试成功！返回长度: {len(result)} 字符")
+                else:
+                    print(f"[Grok] 调用成功，返回长度: {len(result)} 字符")
+                return result
+            else:
+                print(f"[Grok] 响应中没有 'choices' 字段: {response_json}")
+                if attempt < max_retries:
+                    continue
+                return ''
+        except requests.exceptions.Timeout as e:
+            print(f"[Grok] 调用超时 (60秒): {e}")
+            print(f"  输入长度: {total_messages_length} 字符, max_tokens: {max_tokens}")
+            if attempt < max_retries:
+                print(f"  将在 {2 ** (attempt + 1)} 秒后重试...")
+                continue
+            return ''
+        except requests.exceptions.HTTPError as e:
+            print(f"[Grok] HTTP错误: {e}")
+            print(f"  状态码: {response.status_code}")
+            print(f"  响应内容: {response.text[:500]}")
+            if attempt < max_retries:
+                print(f"  将在 {2 ** (attempt + 1)} 秒后重试...")
+                continue
+            return ''
+        except Exception as e:
+            print(f"[Grok] 调用失败: {e}")
+            print(f"  错误类型: {type(e).__name__}")
+            if attempt < max_retries:
+                print(f"  将在 {2 ** (attempt + 1)} 秒后重试...")
+                continue
+            import traceback
+            traceback.print_exc()
+            return ''
+
+    return ''
 
 # 通用Moonshot API调用
 def call_moonshot_api(prompt, system_content=None, model=None, temperature=None, max_tokens=None, response_format=None):

@@ -993,7 +993,7 @@ async def get_discussion_content_async(url: str) -> str:
         comments = []
         comment_count = 0
         total_comment_length = 0
-        max_comment_length = 5000
+        max_comment_length = 3000  # 降低以避免超长内容导致API失败
         
         # 尝试多种选择器来获取评论
         comment_elements = []
