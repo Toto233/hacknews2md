@@ -17,9 +17,8 @@ __pycache__/
 *.py[cod]
 *$py.class
 
-# 数据库文件
-data/*.db
-data/*.sqbpro
+# 数据库文件 - 整个data目录都应该被忽略
+data/
 
 # 环境文件
 .env
