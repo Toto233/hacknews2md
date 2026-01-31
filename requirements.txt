@@ -8,10 +8,13 @@ chardet
 brotli
 youtube-transcript-api
 lxml
-google-generativeai
+google-genai
+httpx
+curl-cffi
 markdown>=3.4.0
 tinycss2>=1.2.1
 selenium
 crawl4ai
 playwright
 PyPDF2
+pyperclip
