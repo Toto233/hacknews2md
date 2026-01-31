@@ -5,294 +5,11 @@ sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..',
 
 import sqlite3
 import re
-import platform
 from datetime import datetime
 from bs4 import BeautifulSoup
 from src.llm.llm_evaluator import evaluate_news_attraction
 from src.llm.llm_tag_extractor import extract_tags_with_llm
 from src.integrations.markdown_to_html_converter import convert_markdown_to_html
-from src.utils.config import Config
-from src.integrations.wechat_access_token import WeChatAccessToken
-
-
-
-# Default thumbnail media_id (640.png uploaded to WeChat)
-DEFAULT_THUMB_MEDIA_ID = "53QZJEu2zs4etGM_3jLi5wl7KNs2RM1RnV_iiGWQmWnYf7qEq2kvHRIIeBCBnAEb"
-
-def is_wsl():
-    """
-    Check if running in WSL environment
-    
-    Returns:
-        True if running in WSL, False otherwise
-    """
-    try:
-        # Check for WSL specific indicators
-        if platform.system() == 'Linux':
-            # Check for WSL in /proc/version
-            with open('/proc/version', 'r') as f:
-                version_info = f.read().lower()
-                if 'microsoft' in version_info or 'wsl' in version_info:
-                    return True
-            
-            # Check for WSL mount points
-            if os.path.exists('/mnt/c') or os.path.exists('/mnt/d'):
-                return True
-    except:
-        pass
-    
-    return False
-
-def convert_windows_path_to_wsl(windows_path):
-    r"""
-    Convert Windows path to WSL path
-
-    Args:
-        windows_path: Windows-style path like D:\python\...
-
-    Returns:
-        WSL-style path like /mnt/d/python/...
-    """
-    if not windows_path or windows_path.startswith('/'):
-        return windows_path  # Already Unix path
-    
-    # Convert Windows path to WSL path
-    if ':\\' in windows_path:
-        drive, path = windows_path.split(':\\', 1)
-        drive = drive.lower()
-        path = path.replace('\\', '/')
-        return f'/mnt/{drive}/{path}'
-    
-    return windows_path
-
-def smart_path_convert(path_str):
-    """
-    Smart path conversion based on current environment
-    
-    Args:
-        path_str: Original path string from HTML
-        
-    Returns:
-        Converted path suitable for current environment
-    """
-    if not path_str:
-        return path_str
-    
-    # If running in WSL and path looks like Windows path
-    if is_wsl() and (':\\' in path_str or '\\' in path_str):
-        wsl_path = convert_windows_path_to_wsl(path_str)
-        # Check if converted path exists
-        if os.path.exists(wsl_path):
-            return wsl_path
-        else:
-            print(f"Warning: Converted path not found: {path_str} -> {wsl_path}")
-    
-    # If not WSL or path doesn't need conversion, return original
-    return path_str
-
-def extract_html_content(html_file_path):
-    """
-    Extract title and content from HTML file
-
-    Args:
-        html_file_path: Path to the HTML file
-
-    Returns:
-        Dict with title, content, and images found (only from first news item)
-    """
-    if not os.path.exists(html_file_path):
-        raise FileNotFoundError(f"HTML file not found: {html_file_path}")
-
-    with open(html_file_path, 'r', encoding='utf-8') as f:
-        html_content = f.read()
-
-    soup = BeautifulSoup(html_content, 'html.parser')
-
-    # Extract title from <title> tag or h1
-    title = ""
-    if soup.title:
-        title = soup.title.get_text().strip()
-    elif soup.h1:
-        title = soup.h1.get_text().strip()
-    else:
-        # Use filename as fallback
-        title = os.path.splitext(os.path.basename(html_file_path))[0]
-
-    # WeChat title limit is 64 characters
-    # For yaml_title, we'll handle truncation with suffix preservation later
-    # This section is for HTML extraction only
-    if len(title) > 64:
-        title = title[:61] + "..."
-        print(f"Title truncated to: {title}")
-
-    # Extract body content
-    if soup.body:
-        content_element = soup.body
-    else:
-        content_element = soup
-
-    local_images = []
-    first_news_images = []
-
-    print(f"Current environment: {'WSL' if is_wsl() else 'Native'}")
-
-    # Find all H2 tags to identify news boundaries
-    h2_tags = content_element.find_all('h2')
-
-    # If we have H2 tags, extract images only from the first news item
-    if h2_tags:
-        first_h2 = h2_tags[0]
-        second_h2 = h2_tags[1] if len(h2_tags) > 1 else None
-
-        # Get all elements between first and second H2
-        current = first_h2.next_sibling
-        while current:
-            # Stop if we reach the second H2
-            if second_h2 and current == second_h2:
-                break
-
-            # Check if this element or its descendants contain images
-            if hasattr(current, 'find_all'):
-                imgs_in_section = current.find_all('img')
-                for img in imgs_in_section:
-                    src = img.get('src', '')
-                    if src and not src.startswith(('http://', 'https://', '//', 'data:')):
-                        # Smart path conversion based on environment
-                        converted_path = smart_path_convert(src)
-
-                        # Check if the converted path exists
-                        if os.path.exists(converted_path):
-                            first_news_images.append(converted_path)
-                            print(f"[OK] First news image found: {src} -> {converted_path}")
-                        else:
-                            print(f"[WARN] Image not found: {src} -> {converted_path}")
-
-            current = current.next_sibling
-
-        print(f"Extracted {len(first_news_images)} image(s) from first news item")
-
-    # Find all image tags and convert paths (for content processing)
-    for img in content_element.find_all('img'):
-        src = img.get('src', '')
-        if src and not src.startswith(('http://', 'https://', '//', 'data:')):
-            # Smart path conversion based on environment
-            converted_path = smart_path_convert(src)
-
-            # Check if the converted path exists
-            if os.path.exists(converted_path):
-                img['src'] = converted_path
-                local_images.append(converted_path)
-            else:
-                print(f"[WARN] Image not found: {src} -> {converted_path}")
-
-    # Get clean HTML content
-    content_html = str(content_element)
-
-    return {
-        'title': title,
-        'content': content_html,
-        'local_images': local_images,
-        'first_news_images': first_news_images  # Only images from first news item
-    }
-
-def clean_html_for_wechat(html_content):
-    """
-    Extract body content for WeChat (CSS already inlined)
-    
-    Args:
-        html_content: Raw HTML content
-        
-    Returns:
-        Body content suitable for WeChat
-    """
-    soup = BeautifulSoup(html_content, 'html.parser')
-    
-    # Extract body content only
-    if soup.body:
-        body_content = soup.body
-        # Get inner HTML of body tag
-        content_html = ''.join(str(child) for child in body_content.children)
-    else:
-        # If no body tag, use the entire content
-        content_html = str(soup)
-    
-    return content_html
-
-def upload_html_to_draft(html_file_path, author="", digest="", source_url=""):
-    """
-    Upload HTML file to WeChat draft box
-    
-    Args:
-        html_file_path: Path to the HTML file
-        author: Article author (optional)
-        digest: Article summary (optional) 
-        source_url: Original article URL (optional)
-        
-    Returns:
-        Media ID if successful, None if failed
-    """
-    try:
-        # Load configuration
-        config = Config()
-        wechat_config = config.get_wechat_config()
-        
-        if not wechat_config:
-            print("Error: WeChat configuration not found")
-            return None
-        
-        # Initialize WeChat client
-        wechat = WeChatAccessToken(wechat_config['appid'], wechat_config['appsec'])
-        
-        # Extract content from HTML
-        print(f"Extracting content from: {html_file_path}")
-        extracted = extract_html_content(html_file_path)
-
-        print(f"Title: {extracted['title']}")
-        print(f"Found {len(extracted['local_images'])} local images (total)")
-        print(f"Found {len(extracted['first_news_images'])} image(s) from first news item")
-
-        # Determine which thumb media ID to use
-        # Only use first news image if we have images from the first news item
-        use_first_news_thumb = len(extracted['first_news_images']) > 0
-
-        if use_first_news_thumb:
-            print(f"[OK] Will use first news image as thumbnail: {extracted['first_news_images'][0]}")
-            # We'll let add_draft_smart handle the upload, pass None to let it auto-detect
-            thumb_media_id_to_use = None
-        else:
-            print(f"[OK] No images in first news item, will use default thumbnail: {DEFAULT_THUMB_MEDIA_ID}")
-            thumb_media_id_to_use = DEFAULT_THUMB_MEDIA_ID
-
-        # Clean HTML for WeChat
-        cleaned_content = clean_html_for_wechat(extracted['content'])
-
-        # Prepare article data
-        article = {
-            'title': extracted['title'],
-            'content': cleaned_content,
-            'author': author,
-            'digest': digest or extracted['title'][:120],  # Use title as digest if not provided
-            'content_source_url': source_url,
-            'article_type': 'news',
-            'need_open_comment': 1,
-            'only_fans_can_comment': 1
-        }
-
-        # Use smart upload to handle images automatically
-        print("\nUploading to WeChat draft box...")
-        media_id = wechat.add_draft_smart([article], thumb_media_id_to_use)
-        
-        if media_id:
-            print(f"\nSuccess! Draft uploaded with Media ID: {media_id}")
-            print(f"You can now find this draft in your WeChat Official Account backend.")
-            return media_id
-        else:
-            print("Failed to upload draft")
-            return None
-            
-    except Exception as e:
-        print(f"Error uploading HTML to draft: {e}")
-        return None
 
 
 def generate_markdown():
@@ -368,11 +85,13 @@ def generate_markdown():
 
     yaml_title = prefix + suffix
 
-    # 组装YAML头部
+    # 组装YAML头部，包含微信公众号所需的元数据
     yaml_header = f"""---
 title: '{yaml_title}'
 author: 'hacknews'
 description: ''
+digest: '{first_content_summary[:120] if first_content_summary else ""}'
+source_url: '{sorted_news_items[0][2] if sorted_news_items else ""}'
 pubDatetime: {pub_datetime}
 tags:
 """
@@ -426,57 +145,17 @@ tags:
 
     print(f'Successfully generated HTML file: {html_filename}')
 
-    # 在浏览器中显示HTML，方便复制到微信公众号
-    print('正在浏览器中打开HTML文件，请复制内容后关闭浏览器...')
-    from src.utils.browser_manager import display_html_in_browser
-    browser_manager = display_html_in_browser(html_content, auto_close=False)
-    import webbrowser
-    webbrowser.open('https://mp.weixin.qq.com/')
+    # 复制YAML标题到剪贴板
     try:
         import pyperclip
     except ImportError:
         import subprocess
         subprocess.check_call(["pip", "install", "pyperclip"])
         import pyperclip
-    # 复制YAML标题到剪贴板，便于后续粘贴
     pyperclip.copy(yaml_title)
     print('已复制标题到剪贴板')
-    # 等待用户复制内容
-    # input("请复制HTML内容到微信公众号，完成后按回车键关闭浏览器...")
-    # if browser_manager:
-        # browser_manager.close_browser()
-
-    # 自动上传到微信草稿箱
-    #print("\n是否要自动上传到微信草稿箱？")
-    upload_choice = 'y' #input("输入 y 或 yes 上传，其他键跳过: ").lower().strip()
-    
-    if upload_choice in ['y', 'yes']:
-        # 上传HTML文件到微信草稿箱
-        author = "HackerNews摘要"
-        digest = f"今日技术热点汇总 - {now.strftime('%Y年%m月%d日')}"
-        
-        media_id = upload_html_to_draft(html_filename, author, digest)
-        if media_id:
-            print("\n[SUCCESS] 已成功上传到微信草稿箱!")
-        else:
-            print("\n[ERROR] 上传微信草稿箱失败，请检查配置或手动上传")
-    else:
-        print("\n跳过自动上传，你可以稍后手动上传到微信草稿箱")
-
-    # # 新增：读取内容复制到剪贴板，并打开网页
-    # try:
-    #     import pyperclip
-    # except ImportError:
-    #     import subprocess
-    #     subprocess.check_call(["pip", "install", "pyperclip"])
-    #     import pyperclip
-    # with open(md_filename, 'r', encoding='utf-8') as f:
-    #     content = f.read()
-    # pyperclip.copy(content)
-    # print('已复制内容到剪贴板')
-    # import webbrowser
-    # webbrowser.open('https://markdown.com.cn/editor/')
-    # webbrowser.open('https://mp.weixin.qq.com/')
+    print(f'\n使用以下命令发布到微信公众号:')
+    print(f'  python scripts/publish_wechat.py "{md_filename}"')
 
 def main():
     generate_markdown()

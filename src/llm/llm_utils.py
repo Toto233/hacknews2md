@@ -204,14 +204,33 @@ def call_grok_api(prompt, system_content=None, model=None, temperature=None, max
 
     # 重试循环
     for attempt in range(max_retries + 1):
+        response = None
         try:
             if attempt > 0:
-                wait_time = 2 ** attempt  # 指数退避: 2秒, 4秒
-                print(f"[Grok] 第 {attempt + 1}/{max_retries + 1} 次尝试，等待 {wait_time} 秒...")
+                wait_time = 2 ** attempt + random.uniform(0.5, 1.5)  # 指数退避 + 随机抖动
+                print(f"[Grok] 第 {attempt + 1}/{max_retries + 1} 次尝试，等待 {wait_time:.1f} 秒...")
                 time.sleep(wait_time)
 
-            response = requests.post(api_url, headers=headers, json=data, timeout=60, verify=True)
-            response.raise_for_status()
+            # 优先使用 curl-cffi (使用系统 libcurl，SSL 兼容性更好)
+            try:
+                from curl_cffi import requests as curl_requests
+                print(f"[Grok] 使用 curl-cffi 发送请求...")
+                response = curl_requests.post(
+                    api_url,
+                    headers=headers,
+                    json=data,
+                    timeout=120,
+                    verify=False
+                )
+                response.raise_for_status()
+            except ImportError:
+                # 回退到 httpx
+                import httpx
+                print(f"[Grok] curl-cffi 不可用，使用 httpx...")
+                with httpx.Client(verify=False, timeout=120.0, follow_redirects=True) as client:
+                    response = client.post(api_url, headers=headers, json=data)
+                    response.raise_for_status()
+
             response_json = response.json()
             if 'choices' in response_json:
                 result = response_json['choices'][0]['message']['content'].strip()
@@ -225,26 +244,22 @@ def call_grok_api(prompt, system_content=None, model=None, temperature=None, max
                 if attempt < max_retries:
                     continue
                 return ''
-        except requests.exceptions.Timeout as e:
-            print(f"[Grok] 调用超时 (60秒): {e}")
-            print(f"  输入长度: {total_messages_length} 字符, max_tokens: {max_tokens}")
-            if attempt < max_retries:
-                print(f"  将在 {2 ** (attempt + 1)} 秒后重试...")
-                continue
-            return ''
-        except requests.exceptions.HTTPError as e:
-            print(f"[Grok] HTTP错误: {e}")
-            print(f"  状态码: {response.status_code}")
-            print(f"  响应内容: {response.text[:500]}")
-            if attempt < max_retries:
-                print(f"  将在 {2 ** (attempt + 1)} 秒后重试...")
-                continue
-            return ''
         except Exception as e:
             print(f"[Grok] 调用失败: {e}")
             print(f"  错误类型: {type(e).__name__}")
+
+            # 尝试从响应中获取更多信息
+            if hasattr(e, 'response') and e.response is not None:
+                try:
+                    print(f"  状态码: {e.response.status_code}")
+                    print(f"  响应内容: {e.response.text[:500]}")
+                except:
+                    pass
+
             if attempt < max_retries:
-                print(f"  将在 {2 ** (attempt + 1)} 秒后重试...")
+                wait_next = 2 ** (attempt + 1)
+                print(f"  将在 {wait_next} 秒后重试...")
+                time.sleep(wait_next)
                 continue
             import traceback
             traceback.print_exc()
@@ -348,7 +363,7 @@ def call_gemini_api(prompt, model=None, temperature=None, max_tokens=None, respo
     print(f"prompt长度: {len(prompt)}")
     
     for attempt in range(max_retries):
-        # 优先使用新版 google-genai SDK
+        # 使用新版 google-genai SDK
         try:
             from google import genai
             client = genai.Client(api_key=api_key)
@@ -377,14 +392,14 @@ def call_gemini_api(prompt, model=None, temperature=None, max_tokens=None, respo
                 }
             )
             if hasattr(response, 'text') and response.text:
-                print(f"Gemini API调用成功 (新SDK)")
+                print(f"Gemini API调用成功")
                 gemini_balancer.report_success(model)
                 return response.text.strip()
             return ""
         except ImportError:
-            # 如果新SDK不可用，回退到旧SDK
-            print("新SDK不可用，回退到旧SDK google-generativeai")
-            pass
+            print("错误: 新版 google-genai SDK 未安装")
+            print("请运行: pip install google-genai")
+            return ""
         except Exception as e:
             error_msg = str(e)
 
@@ -438,91 +453,6 @@ def call_gemini_api(prompt, model=None, temperature=None, max_tokens=None, respo
                     time.sleep(delay)
                     continue
 
-        # 尝试旧版 google-generativeai SDK作为兜底
-        try:
-            from google import generativeai as genai_old
-            genai_old.configure(api_key=api_key)
-            gen_model = genai_old.GenerativeModel(model)
-            generation_config = {
-                "temperature": temperature,
-                "max_output_tokens": max_tokens,
-            }
-            response = gen_model.generate_content(prompt, generation_config=generation_config)
-            # 健壮性处理
-            if hasattr(response, 'candidates') and response.candidates:
-                candidate = response.candidates[0]
-                if getattr(candidate, 'finish_reason', None) == 2:
-                    print("Gemini内容被安全策略拦截（finish_reason=2）")
-                    return ""
-            if hasattr(response, 'text') and response.text:
-                print(f"Gemini API调用成功 (旧SDK)")
-                gemini_balancer.report_success(model)
-                return response.text.strip()
-            return ""
-        except ImportError:
-            pass
-        except Exception as e:
-            error_msg = str(e)
-
-            # 检查是否是配额超限（quota exceeded）而非限流（rate limit）
-            is_quota_exceeded = "quota exceeded" in error_msg.lower() and "limit: 0" in error_msg.lower()
-
-            # 处理503、429等服务错误
-            if any(code in error_msg for code in ["503", "429", "500", "502", "504"]) or \
-               any(keyword in error_msg.lower() for keyword in ["quota", "rate limit", "service unavailable", "unavailable", "overloaded"]):
-                print(f"Gemini API服务问题 (尝试 {attempt + 1}/{max_retries}): {e}")
-
-                # 如果是配额超限（每日/每分钟配额用尽），直接失败，不重试
-                if is_quota_exceeded:
-                    print(f"模型 {model} 配额已超限，停止重试，尝试切换到备用模型")
-                    gemini_balancer.report_failure(model)
-                    break
-
-                if attempt < max_retries - 1:
-                    # 对429限流错误（非配额超限），尝试从错误信息中提取重试延迟
-                    if "429" in error_msg or "rate limit" in error_msg.lower():
-                        import re
-                        # 尝试提取 retryDelay（格式：'43s' 或 'retryDelay': '43s'）
-                        retry_match = re.search(r'["\']retryDelay["\']\s*:\s*["\'](\d+)s["\']', error_msg)
-                        if retry_match:
-                            delay = int(retry_match.group(1)) + random.uniform(1.0, 3.0)
-                            print(f"使用API返回的retryDelay，等待 {delay:.1f} 秒后重试...")
-                        else:
-                            # 尝试提取 "Please retry in XXs" 格式
-                            retry_match = re.search(r'retry in ([\d.]+)s', error_msg)
-                            if retry_match:
-                                delay = float(retry_match.group(1)) + random.uniform(1.0, 3.0)
-                                print(f"从错误信息提取重试时间，等待 {delay:.1f} 秒后重试...")
-                            else:
-                                # 尝试提取 retry_delay { seconds: XX }
-                                retry_match = re.search(r'retry_delay\s*\{\s*seconds:\s*(\d+)', error_msg)
-                                if retry_match:
-                                    delay = int(retry_match.group(1)) + random.uniform(1.0, 3.0)
-                                    print(f"使用API返回的retry_delay，等待 {delay:.1f} 秒后重试...")
-                                else:
-                                    # 默认等待到下一个窗口
-                                    delay = 65 + random.uniform(1.0, 3.0)
-                                    print(f"遇到限流错误 (429)，等待 {delay:.1f} 秒到下一个时间窗口...")
-                    # 对503等服务不可用错误使用指数退避
-                    elif "503" in error_msg or "unavailable" in error_msg.lower():
-                        delay = min(60, (3 ** attempt) + random.uniform(2, 5))
-                        print(f"服务暂时不可用，等待 {delay:.1f} 秒后重试...")
-                    else:
-                        import re
-                        retry_match = re.search(r'retry_delay\s*\{\s*seconds:\s*(\d+)', error_msg)
-                        if retry_match:
-                            delay = int(retry_match.group(1)) + random.uniform(1.0, 3.0)
-                            print(f"使用API返回的retry_delay，等待 {delay:.1f} 秒后重试...")
-                        else:
-                            # 使用更长的退避时间：10秒、20秒、40秒、80秒
-                            delay = min(90, (10 * (2 ** attempt))) + random.uniform(1.0, 3.0)
-                            print(f"等待 {delay:.1f} 秒后重试...")
-                    time.sleep(delay)
-                    continue
-            else:
-                print(f"Gemini旧SDK调用失败: {e}")
-                break
-        
         # requests兜底
         try:
             headers = {'Content-Type': 'application/json'}

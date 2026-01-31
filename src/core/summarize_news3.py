@@ -455,21 +455,27 @@ async def get_youtube_content(url: str, title: str) -> Tuple[str, List[str], Lis
         return "", [], []
 
     print(f"检测到YouTube链接, 视频ID: {video_id}")
-    
+
+    article_content = ""
     try:
         from youtube_transcript_api import YouTubeTranscriptApi, NoTranscriptFound, TranscriptsDisabled
-        
+
         transcript_list = YouTubeTranscriptApi().list(video_id)
         transcript = transcript_list.find_generated_transcript(['zh-Hans', 'zh-Hant', 'en'])
         transcript_data = transcript.fetch()
         article_content = " ".join([item.text for item in transcript_data])
         print("成功获取YouTube文字稿")
-    except (NoTranscriptFound, TranscriptsDisabled):
-        print(f"视频 {video_id} 没有找到可用的文字稿或文字稿已禁用")
-        article_content = f"无法获取视频 {title} 的文字稿。"
+    except ImportError as e:
+        print(f"YouTube字幕库未安装或导入失败: {e}")
+        article_content = f"无法获取视频 {title} 的文字稿（缺少依赖库）。"
     except Exception as e:
-        print(f"获取YouTube文字稿时出错: {str(e)}")
-        article_content = f"获取视频 {title} 文字稿时出错。"
+        error_msg = str(e).lower()
+        if 'notranscriptfound' in error_msg or 'transcriptsdisabled' in error_msg or 'no transcript found' in error_msg:
+            print(f"视频 {video_id} 没有找到可用的文字稿或文字稿已禁用")
+            article_content = f"无法获取视频 {title} 的文字稿。"
+        else:
+            print(f"获取YouTube文字稿时出错: {str(e)}")
+            article_content = f"获取视频 {title} 文字稿时出错。"
 
     # 获取缩略图
     thumbnail_url = f"https://i.ytimg.com/vi/{video_id}/hqdefault.jpg"
