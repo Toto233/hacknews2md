@@ -18,9 +18,9 @@ def generate_markdown():
     
     # 获取最近24小时内已生成摘要的新闻
     cursor.execute('''
-    SELECT title, title_chs, news_url, discuss_url, content_summary, discuss_summary ,largest_image, image_2, image_3
-    FROM news 
-    WHERE content_summary IS NOT NULL 
+    SELECT title, title_chs, news_url, discuss_url, content_summary, discuss_summary, largest_image, image_2, image_3, screenshot
+    FROM news
+    WHERE content_summary IS NOT NULL
     AND discuss_summary IS NOT NULL
     AND created_at > datetime('now', '-0.5 day', 'localtime')
     ORDER BY created_at DESC
@@ -105,17 +105,20 @@ tags:
     
     
     # 生成新闻内容
-    for idx, (title, title_chs, news_url, discuss_url, content_summary, discuss_summary, largest_image, image_2, image_3) in enumerate(sorted_news_items, 1):
+    for idx, (title, title_chs, news_url, discuss_url, content_summary, discuss_summary, largest_image, image_2, image_3, screenshot) in enumerate(sorted_news_items, 1):
         markdown_content += "---\n\n"
 
         # 标题部分：中文标题(英文标题)
         display_title = f"{title_chs} ({title})" if title_chs else title
         markdown_content += f"## {idx}. {display_title}\n\n"
-        
-        # 插入图片（如果有）
-        for img_url in [largest_image, image_2, image_3]:
-            if img_url:
-                markdown_content += f"![{title_chs} ]({img_url})\n\n"
+
+        # 插入图片（优先使用截图，然后是正常图片）
+        if screenshot:
+            markdown_content += f"![{title_chs} ]({screenshot})\n\n"
+        else:
+            for img_url in [largest_image, image_2, image_3]:
+                if img_url:
+                    markdown_content += f"![{title_chs} ]({img_url})\n\n"
         # 文章摘要
         markdown_content += f"{content_summary}\n\n"
         
