@@ -3,6 +3,12 @@ import os
 # 添加项目根目录到 Python 路径
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..')))
 
+# Windows 下设置 UTF-8 编码输出，防止编码错误
+if sys.platform == 'win32':
+    import io
+    sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding='utf-8', errors='replace')
+    sys.stderr = io.TextIOWrapper(sys.stderr.buffer, encoding='utf-8', errors='replace')
+
 import sqlite3
 import asyncio
 from datetime import datetime
@@ -61,8 +67,80 @@ with open('config/config.json', 'r', encoding='utf-8') as f:
 
 colorama.init()
 
+# ----------------------------
+# Logging Configuration
+# ----------------------------
+import logging
+from datetime import datetime
+
+# 配置日志系统
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s | %(levelname)-8s | %(message)s',
+    datefmt='%Y-%m-%d %H:%M:%S',
+    handlers=[
+        logging.StreamHandler(sys.stdout)
+    ]
+)
+logger = logging.getLogger(__name__)
+
+# 统计信息
+stats = {
+    'total': 0,
+    'crawl_success': 0,
+    'crawl_failed': 0,
+    'summary_success': 0,
+    'summary_failed': 0,
+    'screenshot_used': 0,
+    'fallback_used': 0,
+    'errors': []
+}
+
 # Global settings
 ENABLE_SCREENSHOT = os.environ.get('HN2MD_ENABLE_SCREENSHOT', '1') != '0'
+
+# ----------------------------
+# Safe print helper for Windows
+# ----------------------------
+def safe_print(*args, **kwargs):
+    """安全打印函数，防止编码错误"""
+    try:
+        print(*args, **kwargs)
+    except UnicodeEncodeError:
+        # 如果编码失败，将所有参数转换为 ASCII 安全字符
+        safe_args = []
+        for arg in args:
+            if isinstance(arg, str):
+                safe_args.append(arg.encode('ascii', errors='replace').decode('ascii'))
+            else:
+                safe_args.append(str(arg).encode('ascii', errors='replace').decode('ascii'))
+        print(*safe_args, **kwargs)
+
+def log_step(step: str, news_id: int = None, title: str = None, details: str = None):
+    """记录处理步骤"""
+    parts = [f"[{step}]"]
+    if news_id:
+        parts.append(f"ID:{news_id}")
+    if title:
+        parts.append(f"'{title[:50]}...'" if len(title) > 50 else f"'{title}'")
+    if details:
+        parts.append(details)
+    logger.info(' | '.join(parts))
+
+def log_error(error_type: str, news_id: int = None, title: str = None, error: str = None, action: str = None):
+    """记录错误和解决动作"""
+    parts = [f"[ERROR:{error_type}]"]
+    if news_id:
+        parts.append(f"ID:{news_id}")
+    if title:
+        parts.append(f"'{title[:50]}...'" if len(title) > 50 else f"'{title}'")
+    if error:
+        parts.append(f"错误: {error}")
+    if action:
+        parts.append(f"解决: {action}")
+    logger.warning(' | '.join(parts))
+    # 记录到统计
+    stats['errors'].append({'type': error_type, 'news_id': news_id, 'error': error, 'action': action})
 
 # ----------------------------
 # Helpers: non-blocking LLM
@@ -93,7 +171,7 @@ class AsyncDB:
             cur.execute('PRAGMA busy_timeout=10000;')
             self.conn.commit()
         except Exception as e:
-            print(f"配置SQLite失败: {e}")
+            safe_print(f"配置SQLite失败: {e}")
 
     async def execute(self, sql: str, params: tuple = ()) -> None:
         async with self.lock:
@@ -132,46 +210,50 @@ class NewsCrawler:
         使用 Crawl4AI 抓取文章内容
         返回: (文章内容, 图片URL列表)
         """
+        logger.info(f"[CRAWL] 开始抓取: {url[:80]}...")
+
         try:
-            print(f"使用 Crawl4AI 抓取: {url}")
-            
-            # 使用简化的爬取方式
             result = await self.crawler.arun(url=url)
-            
+
             if result.success:
+                logger.info(f"[CRAWL] 成功 | URL: {url[:60]}...")
+
                 # 提取内容
                 content = ""
                 images = []
-                
+
                 # 从原始HTML中提取内容
                 if hasattr(result, 'html'):
                     from bs4 import BeautifulSoup
                     soup = BeautifulSoup(result.html, 'html.parser')
-                    
+
                     # 提取图片
                     for img in soup.find_all('img'):
                         src = img.get('src') or img.get('data-src')
                         if src and src.startswith('http'):
                             images.append(src)
-                    
+
                     # 智能提取主要内容
                     content = self._extract_main_content(soup)
-                
+
                 # 清理内容
                 content = re.sub(r'\s{2,}', ' ', content)
                 content = re.sub(r'(\n\s*){2,}', '\n\n', content)
-
-                # 确保内容是可打印的文本，过滤掉二进制字符
                 content = ''.join(char for char in content if char.isprintable() or char.isspace())
 
-                print(f"Crawl4AI 抓取成功，内容长度: {len(content)}")
-                return content.strip(), images[:5]  # 最多返回5张图片
+                if len(content) >= MIN_ARTICLE_CONTENT_CHARS:
+                    logger.info(f"[CRAWL] 内容充足 | 长度:{len(content)} 字符 | 图片:{len(images)} 张")
+                else:
+                    logger.warning(f"[CRAWL] 内容过短 | 长度:{len(content)} < {MIN_ARTICLE_CONTENT_CHARS} | 将使用回退方案")
+
+                return content.strip(), images[:5]
             else:
-                print(f"Crawl4AI 抓取失败: {result.error}")
+                error_msg = getattr(result, 'error', '未知错误')
+                logger.warning(f"[CRAWL] 失败 | URL: {url[:60]}... | 错误: {error_msg}")
                 return "", []
-                
+
         except Exception as e:
-            print(f"Crawl4AI 抓取出错: {e}")
+            logger.error(f"[CRAWL] 异常 | URL: {url[:60]}... | 错误: {e}")
             return "", []
 
     def _extract_main_content(self, soup) -> str:
@@ -363,11 +445,12 @@ def _fetch_x_via_selenium(url: str) -> Tuple[str, List[str]]:
 async def get_pdf_content(url: str) -> str:
     """从PDF URL提取文本内容"""
     if PDF_LIBRARY is None:
-        print("未安装PyPDF2库，无法处理PDF文件")
+        logger.warning("[PDF] 未安装PyPDF2库")
         return ""
 
+    logger.info(f"[PDF] 开始提取 | URL: {url[:80]}...")
+
     try:
-        # 下载PDF文件
         headers = {
             'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36',
             'Accept': 'application/pdf,*/*'
@@ -384,26 +467,24 @@ async def get_pdf_content(url: str) -> str:
                 )
 
                 if response.status_code == 200:
+                    logger.info(f"[PDF] 下载成功 | 尝试:{attempt + 1}/{max_retries}")
                     break
-
-                print(f"下载PDF失败（尝试 {attempt + 1}/{max_retries}），状态码: {response.status_code}")
-                if attempt < max_retries - 1:
-                    await asyncio.sleep(2)  # 等待2秒后重试
+                else:
+                    logger.warning(f"[PDF] 下载失败 | 状态码:{response.status_code} | 尝试:{attempt + 1}/{max_retries}")
 
             except (requests.exceptions.ConnectionError, requests.exceptions.Timeout) as e:
-                print(f"PDF下载连接错误（尝试 {attempt + 1}/{max_retries}）: {e}")
-                if attempt < max_retries - 1:
-                    await asyncio.sleep(2)
-                else:
-                    raise
+                logger.warning(f"[PDF] 下载异常 | 尝试:{attempt + 1}/{max_retries} | 错误:{e}")
+
+            if attempt < max_retries - 1:
+                await asyncio.sleep(2)
         else:
-            print(f"所有重试均失败，状态码: {response.status_code}")
+            logger.error(f"[PDF] 所有重试失败 | 状态码:{response.status_code}")
             return ""
 
         # 检查Content-Type
         content_type = response.headers.get('Content-Type', '').lower()
         if 'pdf' not in content_type:
-            print(f"内容类型不是PDF: {content_type}")
+            logger.warning(f"[PDF] 非PDF内容 | Content-Type:{content_type}")
             return ""
 
         # 使用PyPDF2提取文本
@@ -413,7 +494,7 @@ async def get_pdf_content(url: str) -> str:
         # 提取所有页面的文本
         text_content = []
         total_pages = len(pdf_reader.pages)
-        print(f"PDF共有 {total_pages} 页")
+        logger.info(f"[PDF] 共{total_pages}页")
 
         for page_num in range(total_pages):
             page = pdf_reader.pages[page_num]
@@ -428,11 +509,11 @@ async def get_pdf_content(url: str) -> str:
         full_text = re.sub(r'\s+', ' ', full_text).strip()
         full_text = ''.join(char for char in full_text if char.isprintable() or char.isspace())
 
-        print(f"成功提取PDF文本，共 {len(full_text)} 字符")
+        logger.info(f"[PDF] 提取成功 | 长度:{len(full_text)}")
         return full_text
 
     except Exception as e:
-        print(f"提取PDF内容时出错: {e}")
+        logger.error(f"[PDF] 提取异常: {e}")
         traceback.print_exc()
         return ""
 
@@ -454,32 +535,32 @@ async def get_youtube_content(url: str, title: str) -> Tuple[str, List[str], Lis
     if not video_id:
         return "", [], []
 
-    print(f"检测到YouTube链接, 视频ID: {video_id}")
+    logger.info(f"[YOUTUBE] 检测到链接 | ID:{video_id} | '{title[:40]}...'")
 
     article_content = ""
     try:
         from youtube_transcript_api import YouTubeTranscriptApi, NoTranscriptFound, TranscriptsDisabled
 
-        transcript_list = YouTubeTranscriptApi().list(video_id)
+        transcript_list = YouTubeTranscriptApi.list(video_id)
         transcript = transcript_list.find_generated_transcript(['zh-Hans', 'zh-Hant', 'en'])
         transcript_data = transcript.fetch()
         article_content = " ".join([item.text for item in transcript_data])
-        print("成功获取YouTube文字稿")
+        logger.info(f"[YOUTUBE] 字幕提取成功 | 长度:{len(article_content)}")
     except ImportError as e:
-        print(f"YouTube字幕库未安装或导入失败: {e}")
-        article_content = f"无法获取视频 {title} 的文字稿（缺少依赖库）。"
+        logger.warning(f"[YOUTUBE] 字幕库未安装: {e}")
+        article_content = f"无法获取视频 {title} 的字幕（缺少依赖库）。"
     except Exception as e:
         error_msg = str(e).lower()
         if 'notranscriptfound' in error_msg or 'transcriptsdisabled' in error_msg or 'no transcript found' in error_msg:
-            print(f"视频 {video_id} 没有找到可用的文字稿或文字稿已禁用")
-            article_content = f"无法获取视频 {title} 的文字稿。"
+            logger.warning(f"[YOUTUBE] 无可用字幕 | ID:{video_id}")
+            article_content = f"无法获取视频 {title} 的字幕。"
         else:
-            print(f"获取YouTube文字稿时出错: {str(e)}")
-            article_content = f"获取视频 {title} 文字稿时出错。"
+            logger.error(f"[YOUTUBE] 异常: {e}")
+            article_content = f"获取视频 {title} 字幕时出错。"
 
     # 获取缩略图
     thumbnail_url = f"https://i.ytimg.com/vi/{video_id}/hqdefault.jpg"
-    print(f"YouTube缩略图URL: {thumbnail_url}")
+    logger.info(f"[YOUTUBE] 缩略图 | {thumbnail_url}")
 
     thumbnail_path = save_article_image(thumbnail_url, url, f"{title}_1")
     image_paths = [thumbnail_path] if thumbnail_path else []
@@ -556,12 +637,12 @@ def save_article_image(image_url: str, referer_url: str, title: Optional[str] = 
                         png_path = full_path.replace(ext, '.png')
                         img.save(png_path, 'PNG')
                         os.remove(full_path)  # 删除原始文件
-                        print(f"已将 {ext} 图片转换为 png: {png_path}")
+                        safe_print(f"已将 {ext} 图片转换为 png: {png_path}")
                         return os.path.abspath(png_path)
 
                     return os.path.abspath(full_path)
             except Exception as e:
-                print(f"处理图片时出错: {e}")
+                safe_print(f"处理图片时出错: {e}")
                 if os.path.exists(full_path):
                     os.remove(full_path)
                 return None
@@ -619,7 +700,7 @@ def save_page_screenshot(url: str, title: str) -> Optional[str]:
             break
         index += 1
 
-    print(f"Screenshot will be saved to: {image_save_path}")
+    logger.info(f"[SCREENSHOT] 准备截图 | '{title[:40]}...' | 路径:{image_save_path}")
 
     options = ChromeOptions()
     options.add_argument("--headless")
@@ -633,21 +714,21 @@ def save_page_screenshot(url: str, title: str) -> Optional[str]:
     saved_screenshot_path = None
 
     try:
-        print(f"Attempting to initialize WebDriver for {url}")
+        logger.debug(f"[SCREENSHOT] 初始化WebDriver | {url}")
         driver = webdriver.Chrome(options=options)
-        print(f"WebDriver initialized. Navigating to {url}")
+        logger.debug(f"[SCREENSHOT] 导航到页面 | {url}")
         driver.get(url)
-        print(f"Waiting 10 seconds for page load: {url}")
+        logger.debug(f"[SCREENSHOT] 等待页面加载 | 10秒")
         time.sleep(10)
         driver.save_screenshot(image_save_path)
-        print(f"Screenshot saved to {image_save_path}")
         saved_screenshot_path = os.path.abspath(image_save_path)
+        logger.info(f"[SCREENSHOT] 成功 | {saved_screenshot_path}")
     except Exception as e:
-        print(f"Error in save_page_screenshot for {url}: {e}")
+        logger.error(f"[SCREENSHOT] 失败 | 错误:{e}")
         saved_screenshot_path = None
     finally:
         if driver:
-            print(f"Quitting WebDriver for {url}")
+            logger.debug(f"[SCREENSHOT] 关闭WebDriver")
             driver.quit()
 
     return saved_screenshot_path
@@ -672,7 +753,7 @@ def get_summary_from_screenshot(news_url: str, title: str, llm_type: str) -> Opt
         )
         _ = generate_summary_from_image(base64_image_data, image_prompt, llm_type)
     except Exception as e:
-        print(f"Error in get_summary_from_screenshot for {news_url}: {e}")
+        safe_print(f"Error in get_summary_from_screenshot for {news_url}: {e}")
         return None
 
     return saved_screenshot_path
@@ -682,7 +763,7 @@ def get_summary_from_screenshot(news_url: str, title: str, llm_type: str) -> Opt
 # ----------------------------
 async def fallback_content_extraction(url: str, title: str) -> Tuple[str, List[str], List[str]]:
     """回退方案：使用requests和BeautifulSoup进行内容提取"""
-    print("使用回退方案：requests + BeautifulSoup 获取内容...")
+    logger.info(f"[FALLBACK] 启动回退方案 | 标题: '{title[:40]}...'")
 
     headers = {
         'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36',
@@ -695,57 +776,49 @@ async def fallback_content_extraction(url: str, title: str) -> Tuple[str, List[s
     }
 
     try:
-        # 在异步上下文中运行同步请求
         loop = asyncio.get_event_loop()
         response = await loop.run_in_executor(
             None,
             lambda: requests.get(url, headers=headers, verify=False, timeout=20)
         )
 
-        print("\n回退方案调试信息:")
-        print(f"状态码: {response.status_code}")
-        print(f"原始编码: {response.encoding}")
-        print(f"Apparent Encoding: {response.apparent_encoding}")
-        print(f"Content-Type: {response.headers.get('Content-Type', 'unknown')}")
+        logger.info(f"[FALLBACK] HTTP请求 | 状态码:{response.status_code} | Content-Type:{response.headers.get('Content-Type', 'unknown')}")
 
         response.raise_for_status()
 
         # 检查是否为HTML内容
         content_type = response.headers.get('Content-Type', '').lower()
         if 'text/html' not in content_type and 'text/plain' not in content_type and 'application/xhtml+xml' not in content_type:
-            print(f"非文本内容类型: {content_type}，跳过")
+            logger.warning(f"[FALLBACK] 非文本内容 | 类型:{content_type} | 跳过")
             return "", [], []
 
         content = response.content
-
-        # 确定最终编码
         final_encoding = response.encoding if response.encoding else response.apparent_encoding or 'utf-8'
-        print(f"最终用于解析的编码: {final_encoding}")
 
         try:
             soup = BeautifulSoup(content, 'lxml', from_encoding=final_encoding)
         except Exception as e_lxml:
-            print(f"使用lxml解析失败 (编码: {final_encoding}): {e_lxml}，尝试html.parser...")
+            safe_print(f"使用lxml解析失败 (编码: {final_encoding}): {e_lxml}，尝试html.parser...")
             try:
                 soup = BeautifulSoup(content, 'html.parser', from_encoding=final_encoding)
             except Exception as e_parser:
-                print(f"使用html.parser解析也失败 (编码: {final_encoding}): {e_parser}")
+                safe_print(f"使用html.parser解析也失败 (编码: {final_encoding}): {e_parser}")
                 try:
                     raw_text = content.decode(final_encoding, errors='ignore')
-                    print("解析HTML失败，尝试返回原始文本内容")
+                    safe_print("解析HTML失败，尝试返回原始文本内容")
                     cleaned_text = re.sub(r'<script.*?</script>', '', raw_text, flags=re.DOTALL | re.IGNORECASE)
                     cleaned_text = re.sub(r'<style.*?</style>', '', cleaned_text, flags=re.DOTALL | re.IGNORECASE)
                     cleaned_text = re.sub(r'<.*?>', ' ', cleaned_text)
                     cleaned_text = re.sub(r'\s+', ' ', cleaned_text).strip()
                     if len(cleaned_text) < 50:
-                        print("解析后文本内容过短，视作失败")
+                        safe_print("解析后文本内容过短，视作失败")
                         return "", [], []
                     return cleaned_text, [], []
                 except Exception as decode_err:
-                    print(f"解码原始文本也失败: {decode_err}")
+                    safe_print(f"解码原始文本也失败: {decode_err}")
                     return "", [], []
 
-        print(f"页面标题: {soup.title.string.strip() if soup.title and soup.title.string else 'No title found'}")
+        safe_print(f"页面标题: {soup.title.string.strip() if soup.title and soup.title.string else 'No title found'}")
 
         # 图片处理逻辑
         images = []
@@ -795,14 +868,14 @@ async def fallback_content_extraction(url: str, title: str) -> Tuple[str, List[s
         article_content = article_content.strip()
 
         if len(article_content) < 50:
-            print("回退方案提取的文本内容过短，视作失败")
+            safe_print("回退方案提取的文本内容过短，视作失败")
             return "", [], []
 
-        print(f"回退方案成功提取内容，长度: {len(article_content)} 字符")
+        safe_print(f"回退方案成功提取内容，长度: {len(article_content)} 字符")
         return article_content, image_paths, image_paths
 
     except Exception as e:
-        print(f"回退方案失败: {e}")
+        safe_print(f"回退方案失败: {e}")
         traceback.print_exc()
         return "", [], []
 
@@ -815,70 +888,73 @@ async def get_article_content_async(url: str, title: str) -> Tuple[str, List[str
 
     # 检查是否为PDF链接
     if url.lower().endswith('.pdf'):
-        print("检测到PDF链接，尝试提取文本...")
+        logger.info(f"[PDF] 检测到PDF链接 | '{title[:40]}...'")
         pdf_content = await get_pdf_content(url)
 
         # 无论PDF文本提取是否成功，都尝试生成截图
-        print("正在为PDF生成截图...")
+        logger.info(f"[PDF] 生成截图中...")
         pdf_screenshot_path = await asyncio.to_thread(save_page_screenshot, url, title)
 
         if pdf_content:
-            print(f"成功提取PDF内容，长度: {len(pdf_content)}")
+            logger.info(f"[PDF] 文本提取成功 | 长度:{len(pdf_content)}")
             if pdf_screenshot_path:
-                print(f"PDF截图已保存到: {pdf_screenshot_path}")
+                logger.info(f"[PDF] 截图保存成功 | {pdf_screenshot_path}")
                 return pdf_content, [], [pdf_screenshot_path]
             else:
-                print("PDF截图生成失败，但已提取文本内容")
+                logger.info(f"[PDF] 截图失败，但有文本内容")
                 return pdf_content, [], []
         else:
-            print("PDF文本提取失败")
+            logger.warning(f"[PDF] 文本提取失败")
             if pdf_screenshot_path:
-                print(f"虽然PDF文本提取失败，但截图已保存到: {pdf_screenshot_path}")
-                # 返回空文本，但包含截图路径，后续可以用截图生成摘要
+                logger.info(f"[PDF] 截图成功，作为回退 | {pdf_screenshot_path}")
                 return "", [], [pdf_screenshot_path]
             else:
-                print("PDF文本提取和截图都失败")
+                logger.error(f"[PDF] 文本和截图都失败")
                 return "", [], []
 
     # 检查是否为YouTube链接
     if parsed_url.netloc in ('www.youtube.com', 'youtube.com', 'youtu.be'):
+        logger.info(f"[YOUTUBE] 检测到YouTube链接 | '{title[:40]}...'")
         return await get_youtube_content(url, title)
-    
+
     # 检查是否为X/Twitter链接
     if _is_x_url(url):
-        print("检测到X/Twitter链接，尝试获取内容...")
+        logger.info(f"[X] 检测到X/Twitter链接 | '{title[:40]}...'")
         tweet_id = _extract_tweet_id(url)
-        
+
         # 尝试多种方式获取X/Twitter内容
         text, images = _fetch_x_via_vxtwitter(tweet_id)
         if not text:
-            print("vxtwitter API失败，尝试Selenium...")
+            logger.info("[X] vxtwitter失败，尝试Selenium...")
             text, images = _fetch_x_via_selenium(url)
-        
+
         if text:
-            print("成功提取X/Twitter内容")
+            logger.info(f"[X] 内容获取成功 | 长度:{len(text)} | 图片:{len(images)}")
             image_paths = []
             for i, img_url in enumerate(images[:3], 1):
                 saved = save_article_image(img_url, url, f"{title}_{i}")
                 if saved:
                     image_paths.append(saved)
             return text, image_paths, image_paths
-    
+        else:
+            logger.warning(f"[X] 内容获取失败")
+
     # 使用 Crawl4AI 获取普通网页内容
-    print("使用 Crawl4AI 获取网页内容...")
+    logger.info(f"[CRAWL4AI] 开始抓取 | '{title[:40]}...'")
     crawler = NewsCrawler()
     content, image_urls = await crawler.crawl_article(url)
 
     # 如果 Crawl4AI 没有获取到内容，使用回退方案
     if not content or len(content.strip()) < MIN_ARTICLE_CONTENT_CHARS:
-        print(f"Crawl4AI 未获取到有效内容 (长度: {len(content) if content else 0})，启动回退方案...")
+        logger.warning(f"[CRAWL4AI] 内容不足 | 长度:{len(content) if content else 0} | 启动回退方案")
+        stats['fallback_used'] += 1
         fallback_content, fallback_image_urls, fallback_image_paths = await fallback_content_extraction(url, title)
 
         if fallback_content and len(fallback_content.strip()) >= MIN_ARTICLE_CONTENT_CHARS:
-            print("回退方案成功获取内容")
+            logger.info(f"[FALLBACK] 成功 | 长度:{len(fallback_content)}")
             return fallback_content, fallback_image_urls, fallback_image_paths
         else:
-            print("回退方案也未能获取到有效内容")
+            logger.error(f"[FALLBACK] 失败 | 内容仍然过短或为空")
 
     # 保存图片（仅在 Crawl4AI 成功时），只保留本地路径
     image_paths = []
@@ -896,13 +972,13 @@ async def get_discussion_content_async(url: str) -> str:
     """获取讨论内容，包括主贴和限制字数的评论"""
     if not url:
         return ""
-    
+
+    logger.info(f"[DISCUSSION] 开始获取 | URL: {url[:80]}...")
+
     try:
-        print(f"开始获取讨论内容: {url}")
-        
         import aiohttp
         from bs4 import BeautifulSoup
-        
+
         headers = {
             'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
             'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8',
@@ -911,7 +987,7 @@ async def get_discussion_content_async(url: str) -> str:
             'Connection': 'keep-alive',
             'Upgrade-Insecure-Requests': '1',
         }
-        
+
         # 首先尝试使用 aiohttp 获取
         html = None
         async with aiohttp.ClientSession() as session:
@@ -919,25 +995,24 @@ async def get_discussion_content_async(url: str) -> str:
                 async with session.get(url, headers=headers, timeout=aiohttp.ClientTimeout(total=30)) as response:
                     if response.status == 200:
                         html = await response.text()
-                        print(f"成功获取HTML，长度: {len(html)}")
+                        logger.info(f"[DISCUSSION] aiohttp成功 | 长度:{len(html)}")
                     else:
-                        print(f"HTTP状态码错误: {response.status}")
+                        logger.warning(f"[DISCUSSION] aiohttp状态码错误:{response.status}")
             except Exception as e:
-                print(f"aiohttp请求失败: {e}")
-        
+                logger.warning(f"[DISCUSSION] aiohttp失败:{e}")
+
         # 如果 aiohttp 失败，尝试使用 Selenium
         if not html or len(html) < 1000:
-            print("aiohttp获取的内容可能不完整，尝试使用Selenium...")
+            logger.info("[DISCUSSION] aiohttp内容不足，尝试Selenium...")
             try:
                 html = await asyncio.to_thread(_fetch_discussion_via_selenium, url)
                 if html:
-                    print(f"Selenium成功获取HTML，长度: {len(html)}")
+                    logger.info(f"[DISCUSSION] Selenium成功 | 长度:{len(html)}")
             except Exception as e:
-                print(f"Selenium获取失败: {e}")
-                traceback.print_exc()
-        
+                logger.error(f"[DISCUSSION] Selenium失败:{e}")
+
         if not html:
-            print("无法获取页面HTML内容")
+            logger.error("[DISCUSSION] 获取失败")
             return ""
         
         # 解析HTML
@@ -1006,24 +1081,24 @@ async def get_discussion_content_async(url: str) -> str:
         
         # 方法1: Hacker News 标准的 tr.comtr 结构
         comment_elements = soup.select('tr.comtr')
-        print(f"使用 tr.comtr 选择器找到 {len(comment_elements)} 条评论")
+        safe_print(f"使用 tr.comtr 选择器找到 {len(comment_elements)} 条评论")
         
         # 方法2: 如果没有找到，尝试其他选择器
         if not comment_elements:
             comment_elements = soup.select('tr[class*="comtr"]')
-            print(f"使用 tr[class*='comtr'] 选择器找到 {len(comment_elements)} 条评论")
+            safe_print(f"使用 tr[class*='comtr'] 选择器找到 {len(comment_elements)} 条评论")
         
         if not comment_elements:
             comment_elements = soup.select('div.comment')
-            print(f"使用 div.comment 选择器找到 {len(comment_elements)} 条评论")
+            safe_print(f"使用 div.comment 选择器找到 {len(comment_elements)} 条评论")
         
         if not comment_elements:
             comment_elements = soup.select('.comment-tree .comment, .comment')
-            print(f"使用通用comment选择器找到 {len(comment_elements)} 条评论")
+            safe_print(f"使用通用comment选择器找到 {len(comment_elements)} 条评论")
         
         # 记录找到的评论总数
         total_comments_found = len(comment_elements)
-        print(f"总共找到 {total_comments_found} 条评论元素")
+        safe_print(f"总共找到 {total_comments_found} 条评论元素")
         
         # 限制处理的评论数量
         max_comments_to_process = 30
@@ -1139,26 +1214,26 @@ async def get_discussion_content_async(url: str) -> str:
                             comment_count += 1
             
             except Exception as e:
-                print(f"处理第{i}条评论时出错: {e}")
+                logger.warning(f"[DISCUSSION] 处理评论异常 | 第{i}条 | 错误:{e}")
                 continue
-        
+
         if comments:
             all_content += f"评论 (共找到{total_comments_found}条，显示{comment_count}条):\n\n"
             all_content += "\n\n".join(comments)
+            logger.info(f"[DISCUSSION] 成功 | 总长度:{len(all_content)} | 主贴:{main_content_length} | 评论:{total_comment_length} | 数量:{comment_count}/{total_comments_found}")
         else:
-            print(f"警告: 未找到任何评论。HTML长度: {len(html)}, 主贴内容: {main_content_length}")
+            logger.warning(f"[DISCUSSION] 未找到评论 | HTML:{len(html)} | 主贴:{main_content_length}")
             # 保存HTML用于调试（仅在开发时）
             if os.environ.get('DEBUG_HTML'):
                 debug_file = f"debug_discussion_{int(time.time())}.html"
                 with open(debug_file, 'w', encoding='utf-8') as f:
                     f.write(html)
-                print(f"调试HTML已保存到: {debug_file}")
-        
-        print(f"成功获取讨论内容，总长度: {len(all_content)}, 主贴长度: {main_content_length}, 评论长度: {total_comment_length}, 评论数: {comment_count}/{total_comments_found}")
+                logger.info(f"[DEBUG] HTML已保存: {debug_file}")
+
         return all_content
-        
+
     except Exception as e:
-        print(f"Error fetching discussion content: {e}")
+        logger.error(f"[DISCUSSION] 异常: {e}")
         traceback.print_exc()
         return ""
 
@@ -1175,21 +1250,19 @@ def _fetch_discussion_via_selenium(url: str) -> str:
     options.add_experimental_option('excludeSwitches', ['enable-automation'])
     options.add_experimental_option('useAutomationExtension', False)
     options.add_argument('user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Safari/537.36')
-    
+
     driver = None
     try:
         driver = webdriver.Chrome(options=options)
         driver.get(url)
-        # 等待页面加载
         WebDriverWait(driver, 15).until(
             EC.presence_of_element_located((By.TAG_NAME, "body"))
         )
-        # 额外等待一下，确保评论加载完成
         time.sleep(2)
         html = driver.page_source
         return html
     except Exception as e:
-        print(f"Selenium获取失败: {e}")
+        logger.warning(f"[SELENIUM] 获取失败: {e}")
         return ""
     finally:
         if driver:
@@ -1205,24 +1278,19 @@ async def process_single_news(news_item, illegal_keywords, fetch_semaphore: asyn
     async with fetch_semaphore:
         news_id, title, news_url, discuss_url, article_content, discussion_content = news_item[:6]
 
+        log_step("开始处理", news_id, title)
+
         # 获取文章内容
         if (article_content is None or len(str(article_content).strip()) == 0) and news_url:
-            print(f"\n处理文章: {title}")
-            print(f"URL: {news_url}")
+            log_step("抓取文章", news_id, title, f"URL: {news_url[:70]}...")
             article_content, image_urls, image_paths = await get_article_content_async(news_url, title)
-            print(f"抓取文章正文完成，长度: {len(article_content or '')}")
-            
-            # 应用最小正文长度阈值：短于阈值视为“空”，不入库，触发兜底
+
             content_len = len((article_content or '').strip())
-            print(f"抓取正文字数: {content_len}，阈值: {MIN_ARTICLE_CONTENT_CHARS}")
+
             if article_content and content_len >= MIN_ARTICLE_CONTENT_CHARS:
+                log_step("文章抓取成功", news_id, title, f"长度:{content_len} 字符")
                 await db.execute('UPDATE news SET article_content = ? WHERE id = ?', (article_content.strip(), news_id))
-                # 写入后立即回读确认
-                latest = await db.fetchone('SELECT article_content FROM news WHERE id = ?', (news_id,))
-                if latest and latest[0]:
-                    article_content = latest[0]
-                print(f"DB回读 article_content 长度: {len(article_content or '')}")
-                
+
                 # 保存图片信息
                 if image_urls:
                     await db.execute('UPDATE news SET largest_image = ? WHERE id = ?', (image_urls[0], news_id))
@@ -1230,21 +1298,20 @@ async def process_single_news(news_item, illegal_keywords, fetch_semaphore: asyn
                         await db.execute('UPDATE news SET image_2 = ? WHERE id = ?', (image_urls[1], news_id))
                     if len(image_urls) > 2:
                         await db.execute('UPDATE news SET image_3 = ? WHERE id = ?', (image_urls[2], news_id))
-                    for i, path in enumerate(image_paths, 1):
-                        print(f"第{i}张图片已保存到: {path}")
+                    logger.info(f"[图片] 保存 {len(image_urls)} 张 | ID:{news_id}")
             else:
-                # 过短内容直接视为“空”，后续触发截图兜底
-                if content_len > 0:
-                    print(f"正文长度低于阈值，丢弃文本并进入兜底流程: {content_len} < {MIN_ARTICLE_CONTENT_CHARS}")
+                log_error("内容过短", news_id, title, f"长度:{content_len} < {MIN_ARTICLE_CONTENT_CHARS}", "将使用截图兜底")
                 article_content = ''
-            print("文章内容和图片已更新")
 
         # 获取讨论内容
         if not discussion_content and discuss_url:
-            print(f"\n获取讨论内容: {title}")
+            log_step("获取讨论", news_id, title)
             discussion_content = await get_discussion_content_async(discuss_url)
-            await db.execute('UPDATE news SET discussion_content = ? WHERE id = ?', (discussion_content, news_id))
-            print(f"讨论内容已更新: {title}")
+            if discussion_content:
+                log_step("讨论获取成功", news_id, title, f"长度:{len(discussion_content)} 字符")
+                await db.execute('UPDATE news SET discussion_content = ? WHERE id = ?', (discussion_content, news_id))
+            else:
+                log_error("讨论获取失败", news_id, title, "内容为空", "跳过讨论摘要")
 
         # 从数据库获取最新内容
         result = await db.fetchone('SELECT article_content, discussion_content FROM news WHERE id = ?', (news_id,))
@@ -1259,22 +1326,32 @@ async def process_single_news(news_item, illegal_keywords, fetch_semaphore: asyn
         content_summary = ""
         discuss_summary = ""
 
+        # 文章摘要
         if article_content and len(article_content.strip()) > 0:
-            print(f"为文章生成摘要: {title}")
+            log_step("生成文章摘要", news_id, title)
             async with llm_semaphore:
                 content_summary = await async_generate_summary(article_content.strip(), 'article')
-            print(f"文章摘要生成完成: {title}")
+
+            if content_summary and content_summary != "null":
+                log_step("文章摘要成功", news_id, title, f"长度:{len(content_summary)} 字符")
+                stats['summary_success'] += 1
+            else:
+                log_error("文章摘要失败", news_id, title, "返回null或空", "尝试截图兜底")
+                stats['summary_failed'] += 1
         else:
-            print(f"文章内容为空，跳过摘要生成: {title}")
+            log_error("无文章内容", news_id, title, "article_content为空", "直接使用截图兜底")
 
         # 截图兜底
-        if not content_summary:
+        if not content_summary or content_summary == "null":
             if (not article_content or len(article_content.strip()) == 0) and ENABLE_SCREENSHOT:
-                print(f"Text summarization failed and article_content is empty/short for '{title}', attempting screenshot processing.")
+                log_step("启动截图兜底", news_id, title)
                 screenshot_image_path = await asyncio.to_thread(get_summary_from_screenshot, news_url, title, DEFAULT_LLM)
+
                 if screenshot_image_path:
-                    print(f"Screenshot successfully saved to: {screenshot_image_path}")
-                    await db.execute('UPDATE news SET image_3= ? WHERE id = ?', (screenshot_image_path, news_id))
+                    log_step("截图保存成功", news_id, title, screenshot_image_path)
+                    await db.execute('UPDATE news SET screenshot = ? WHERE id = ?', (screenshot_image_path, news_id))
+                    stats['screenshot_used'] += 1
+
                     try:
                         with open(screenshot_image_path, "rb") as image_file:
                             base64_image_data = base64.b64encode(image_file.read()).decode('utf-8')
@@ -1284,60 +1361,43 @@ async def process_single_news(news_item, illegal_keywords, fetch_semaphore: asyn
                         )
                         async with llm_semaphore:
                             content_summary = await async_generate_summary_from_image(base64_image_data, image_prompt, DEFAULT_LLM)
-                        if content_summary:
+                        if content_summary and content_summary != "null":
                             await db.execute('UPDATE news SET content_summary = ? WHERE id = ?', (content_summary, news_id))
-                            print("已将图片摘要保存到 content_summary 字段。")
-                    except Exception as e:
-                        print(f"图片摘要生成或保存失败: {e}")
-                else:
-                    print(f"Screenshot processing failed for '{title}'.")
-
-        # 检查是否需要补充截图（即使已有摘要，但没有保存任何图片）
-        if ENABLE_SCREENSHOT and news_url:
-            # 检查是否有保存的图片
-            result = await db.fetchone('SELECT largest_image, image_2, image_3 FROM news WHERE id = ?', (news_id,))
-            if result:
-                largest_image, image_2, image_3 = result
-                # 如果三个图片字段都为空，则进行截图
-                if not largest_image and not image_2 and not image_3:
-                    print(f"未保存任何图片，为 '{title}' 生成补充截图（仅用于存档，不生成摘要）")
-                    try:
-                        fallback_screenshot_path = await asyncio.to_thread(save_page_screenshot, news_url, title)
-                        if fallback_screenshot_path:
-                            print(f"补充截图已保存到: {fallback_screenshot_path}")
-                            await db.execute('UPDATE news SET image_3= ? WHERE id = ?', (fallback_screenshot_path, news_id))
+                            log_step("图片摘要成功", news_id, title, f"长度:{len(content_summary)} 字符")
                         else:
-                            print(f"补充截图生成失败: '{title}'")
+                            log_error("图片摘要失败", news_id, title, "返回null", "无法生成摘要")
                     except Exception as e:
-                        print(f"补充截图过程出错: {e}")
+                        log_error("图片摘要异常", news_id, title, str(e), "跳过")
+                else:
+                    log_error("截图失败", news_id, title, "无法保存截图", "无法生成摘要")
 
-        # 生成讨论摘要
+        # 讨论摘要
         if discussion_content:
-            print(f"为讨论生成摘要: {title}")
+            log_step("生成讨论摘要", news_id, title)
             async with llm_semaphore:
                 discuss_summary = await async_generate_summary(discussion_content, 'discussion')
-            print(f"讨论摘要生成完成: {title}")
-        else:
-            print(f"讨论内容为空，跳过摘要生成: {title}")
+            if discuss_summary and discuss_summary != "null":
+                log_step("讨论摘要成功", news_id, title, f"长度:{len(discuss_summary)} 字符")
+            else:
+                log_error("讨论摘要失败", news_id, title, "返回null或空", "跳过")
 
-        # 翻译标题 - 使用负载均衡的模型
+        # 翻译标题
         result = await db.fetchone('SELECT title_chs FROM news WHERE id = ?', (news_id,))
-        if result and not result[0] and content_summary:
+        if result and not result[0]:
+            log_step("翻译标题", news_id, title)
             async with llm_semaphore:
                 title_chs = await async_translate_title(title, content_summary)
             if title_chs:
                 await db.execute('UPDATE news SET title_chs = ? WHERE id = ?', (title_chs, news_id))
-                print(f"已翻译标题: {title_chs}")
+                logger.info(f"[翻译] ID:{news_id} | '{title_chs}'")
 
         # 检查违法关键字
         content_illegal_keywords = db_utils.check_illegal_content(content_summary, illegal_keywords)
         discuss_illegal_keywords = db_utils.check_illegal_content(discuss_summary, illegal_keywords)
         if content_illegal_keywords:
-            print(f"\n{colorama.Fore.YELLOW}警告: 文章摘要包含违法关键字:{colorama.Fore.RESET}")
-            print(db_utils.highlight_keywords(content_summary, content_illegal_keywords))
+            logger.warning(f"[违禁] 文章摘要包含违法关键字 | ID:{news_id} | 关键字:{content_illegal_keywords}")
         if discuss_illegal_keywords:
-            print(f"\n{colorama.Fore.YELLOW}警告: 讨论摘要包含违法关键字:{colorama.Fore.RESET}")
-            print(db_utils.highlight_keywords(discuss_summary, discuss_illegal_keywords))
+            logger.warning(f"[违禁] 讨论摘要包含违法关键字 | ID:{news_id} | 关键字:{discuss_illegal_keywords}")
 
         # 保存摘要
         if content_summary or discuss_summary:
@@ -1345,7 +1405,9 @@ async def process_single_news(news_item, illegal_keywords, fetch_semaphore: asyn
                 'UPDATE news SET content_summary = ?, discuss_summary = ? WHERE id = ?',
                 (content_summary, discuss_summary, news_id)
             )
-            print(f"摘要已更新: {title}")
+
+        stats['total'] += 1
+        log_step("处理完成", news_id, title)
 
         return f"完成处理: {title}"
 
@@ -1354,25 +1416,39 @@ async def process_single_news(news_item, illegal_keywords, fetch_semaphore: asyn
 # ----------------------------
 async def process_news_parallel():
     """并行处理新闻的主函数"""
+    # 重置统计
+    stats['total'] = 0
+    stats['crawl_success'] = 0
+    stats['crawl_failed'] = 0
+    stats['summary_success'] = 0
+    stats['summary_failed'] = 0
+    stats['screenshot_used'] = 0
+    stats['fallback_used'] = 0
+    stats['errors'] = []
+
+    logger.info("=" * 80)
+    logger.info("HackNews 摘要生成启动")
+    logger.info("=" * 80)
+
     db_utils.init_database()
     illegal_keywords = db_utils.get_illegal_keywords()
 
     db = AsyncDB('data/hacknews.db')
     news_items = await db.fetchall('''
-    SELECT id, title, news_url, discuss_url, article_content, discussion_content, largest_image, image_2, image_3 
-    FROM news 
-    WHERE title_chs IS NULL OR title_chs = '' 
-       OR article_content IS NULL 
-       OR discussion_content IS NULL 
-       OR content_summary IS NULL OR content_summary = '' 
+    SELECT id, title, news_url, discuss_url, article_content, discussion_content, largest_image, image_2, image_3, screenshot
+    FROM news
+    WHERE title_chs IS NULL OR title_chs = ''
+       OR article_content IS NULL
+       OR discussion_content IS NULL
+       OR content_summary IS NULL OR content_summary = ''
        OR discuss_summary IS NULL OR discuss_summary = ''
     ''')
 
     if not news_items:
-        print("没有需要处理的新闻")
+        logger.info("没有需要处理的新闻")
         return
 
-    print(f"开始并行处理 {len(news_items)} 条新闻...")
+    logger.info(f"找到 {len(news_items)} 条待处理新闻")
 
     max_fetch_concurrency = int(os.environ.get('HN2MD_FETCH_CONCURRENCY', '5'))
     max_llm_concurrency = int(os.environ.get('HN2MD_LLM_CONCURRENCY', '3'))
@@ -1382,7 +1458,11 @@ async def process_news_parallel():
     # 这里设置并发数为 5，让底层限流器控制实际速率
     if DEFAULT_LLM.lower() == 'gemini':
         max_llm_concurrency = 5
-        print(f"检测到使用Gemini，LLM并发设置为 {max_llm_concurrency}，底层限流器将根据模型类型控制速率")
+        logger.info(f"检测到使用Gemini，LLM并发设置为 {max_llm_concurrency}，底层限流器将根据模型类型控制速率")
+
+    logger.info(f"并发设置 | 抓取:{max_fetch_concurrency} | LLM:{max_llm_concurrency}")
+    logger.info(f"默认LLM: {DEFAULT_LLM}")
+    logger.info("-" * 80)
 
     fetch_semaphore = asyncio.Semaphore(max_fetch_concurrency)
     llm_semaphore = asyncio.Semaphore(max_llm_concurrency)
@@ -1392,28 +1472,45 @@ async def process_news_parallel():
         for item in news_items
     ]
     results = await asyncio.gather(*tasks, return_exceptions=True)
-    
+
     for result in results:
         if isinstance(result, Exception):
-            print(f"处理新闻时发生错误: {result}")
-        else:
-            print(result)
+            logger.error(f"处理异常: {result}")
+            stats['errors'].append({'type': 'exception', 'error': str(result)})
 
-    print("\n所有新闻处理完成")
+    logger.info("-" * 80)
+    logger.info("处理统计:")
+    logger.info(f"  总计处理: {stats['total']} 条")
+    logger.info(f"  摘要成功: {stats['summary_success']} 条")
+    logger.info(f"  摘要失败: {stats['summary_failed']} 条")
+    logger.info(f"  截图兜底: {stats['screenshot_used']} 条")
+    logger.info(f"  回退方案: {stats['fallback_used']} 条")
+
+    if stats['errors']:
+        logger.warning(f"  错误总数: {len(stats['errors'])} 条")
+        # 显示最近的5个错误
+        recent_errors = stats['errors'][-5:]
+        for err in recent_errors:
+            logger.warning(f"    - {err.get('type', 'unknown')}: {err.get('error', '')[:60]}...")
+
+    logger.info("=" * 80)
+    logger.info("所有新闻处理完成")
+    logger.info("=" * 80)
+
     db.close()
 
 async def main_async():
     """主异步函数"""
     if DEFAULT_LLM.lower() == 'grok' and not GROK_API_KEY:
-        print("错误: GROK_API_KEY配置变量未设置")
+        logger.error("配置错误: GROK_API_KEY 未设置")
         return
     elif DEFAULT_LLM.lower() == 'gemini' and not GEMINI_API_KEY:
-        print("错误: GEMINI_API_KEY配置变量未设置")
+        logger.error("配置错误: GEMINI_API_KEY 未设置")
         return
-    
+
     db_utils.init_database()
     await process_news_parallel()
-    print("所有新闻项目处理完成。")
+    logger.info("程序执行完成")
 
 if __name__ == '__main__':
     asyncio.run(main_async())

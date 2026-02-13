@@ -31,10 +31,31 @@ def generate_summary(text, prompt_type='article', llm_type=None, model=None):
         summary = call_llm(prompt, llm_type=llm_type, system_content=system_content, model=model)
         if summary.lower() == "null":
             return ""
-        # 句号分割，去掉最后一句
-        sentences = summary.split('。')
-        if len(sentences) > 1:
-            return '。'.join(sentences[:-1]) + '。'
+
+        # 字数限制：文章摘要300-400字，讨论摘要保持原逻辑
+        if prompt_type == 'article':
+            # 如果超过400字，按句子截断
+            if len(summary) > 400:
+                sentences = summary.split('。')
+                result = ''
+                for sent in sentences:
+                    if len(result + sent) <= 400:
+                        result += sent + '。'
+                    else:
+                        break
+                summary = result if result.endswith('。') else result + '。'
+                print(f"[截断] 文章摘要从 {len(summary)} 字截取到 {len(summary)} 字")
+            else:
+                # 句号分割，去掉最后一句
+                sentences = summary.split('。')
+                if len(sentences) > 1:
+                    summary = '。'.join(sentences[:-1]) + '。'
+        else:
+            # 讨论摘要保持原逻辑
+            sentences = summary.split('。')
+            if len(sentences) > 1:
+                summary = '。'.join(sentences[:-1]) + '。'
+
         return summary
     except Exception as e:
         print(f"生成摘要时出错: {e}")

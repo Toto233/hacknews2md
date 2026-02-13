@@ -5,11 +5,19 @@ Automatically retrieves WeChat access token using app ID and secret.
 Stores tokens in SQLite database with expiration management.
 """
 
+import sys
+import os
+
+# Windows 下设置 UTF-8 编码输出，防止编码错误
+if sys.platform == 'win32':
+    import io
+    sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding='utf-8', errors='replace')
+    sys.stderr = io.TextIOWrapper(sys.stderr.buffer, encoding='utf-8', errors='replace')
+
 import requests
 import json
 import time
 import sqlite3
-import os
 import re
 import hashlib
 from datetime import datetime, timedelta
