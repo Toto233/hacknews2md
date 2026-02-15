@@ -37,6 +37,8 @@ def init_database():
         cursor.execute('ALTER TABLE news ADD COLUMN image_2 TEXT')
     if 'image_3' not in columns:
         cursor.execute('ALTER TABLE news ADD COLUMN image_3 TEXT')
+    if 'screenshot' not in columns:
+        cursor.execute('ALTER TABLE news ADD COLUMN screenshot TEXT')
 
     # 创建过滤域名表
     cursor.execute('''
