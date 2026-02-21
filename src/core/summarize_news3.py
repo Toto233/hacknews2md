@@ -671,7 +671,7 @@ def get_extension_from_content_type(content_type: str) -> Optional[str]:
 # Screenshot Handler
 # ----------------------------
 def save_page_screenshot(url: str, title: str) -> Optional[str]:
-    """保存网页截图到本地
+    """保存网页截图到本地（横向，适合公众号）
 
     Args:
         url: 网页URL
@@ -705,10 +705,10 @@ def save_page_screenshot(url: str, title: str) -> Optional[str]:
     options = ChromeOptions()
     options.add_argument("--headless")
     options.add_argument("--disable-gpu")
-    options.add_argument("--window-size=1920,1200")
     options.add_argument("--no-sandbox")
     options.add_argument("--disable-dev-shm-usage")
-    options.add_argument("user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/98.0.4758.102 Safari/537.36")
+    options.add_argument("--window-size=1920,1080")  # 横向 16:9，适合公众号
+    options.add_argument("user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36")
 
     driver = None
     saved_screenshot_path = None
@@ -761,9 +761,23 @@ def get_summary_from_screenshot(news_url: str, title: str, llm_type: str) -> Opt
 # ----------------------------
 # Fallback Content Extraction
 # ----------------------------
+
+def _is_reuters_url(url: str) -> bool:
+    """检查是否为路透社链接"""
+    try:
+        netloc = urlparse(url).netloc.lower()
+        return 'reuters.com' in netloc
+    except Exception:
+        return False
+
 async def fallback_content_extraction(url: str, title: str) -> Tuple[str, List[str], List[str]]:
     """回退方案：使用requests和BeautifulSoup进行内容提取"""
     logger.info(f"[FALLBACK] 启动回退方案 | 标题: '{title[:40]}...'")
+
+    # 首先检查是否是路透社链接，直接跳过
+    if _is_reuters_url(url):
+        logger.info(f"[FALLBACK] 检测到路透社链接，直接跳过")
+        return "", [], []
 
     headers = {
         'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36',
@@ -938,6 +952,13 @@ async def get_article_content_async(url: str, title: str) -> Tuple[str, List[str
             return text, image_paths, image_paths
         else:
             logger.warning(f"[X] 内容获取失败")
+
+    # 检查是否为路透社链接 - 直接跳过，不处理
+    if _is_reuters_url(url):
+        logger.info(f"[REUTERS] 检测到路透社链接，跳过处理 | '{title[:40]}...'")
+        logger.info(f"[REUTERS] 路透社使用 DataDome 反爬虫保护，无法抓取，直接跳过")
+        # 返回空内容，系统会跳过此新闻
+        return "", [], []
 
     # 使用 Crawl4AI 获取普通网页内容
     logger.info(f"[CRAWL4AI] 开始抓取 | '{title[:40]}...'")
