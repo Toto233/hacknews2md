@@ -44,7 +44,43 @@
   - 智能图片过滤：自动过滤尺寸小于 100x100 的图片
   - 本地存储：所有图片下载到本地并按日期分类保存
 
-### 3. Markdown 生成模块 (generate_markdown.py)
+### 3. 新闻审计模块 (audit_news.py)
+- 检查数据库中未正确获取正文的新闻（正文为空、过短、中文摘要缺失）
+- **两种使用方式**：
+  - **终端交互模式**：逐条处理，支持粘贴正文、自动/手动生成摘要和标题
+  - **CLI 子命令模式**：输出 JSON，供脚本或外部工具调用
+- 支持 `--llm grok` / `--llm gemini` 指定 LLM 供应商
+- 集成在 `auto_process.py` 流程中，摘要生成后、Markdown 生成前自动执行
+
+#### CLI 子命令
+
+```bash
+# 终端交互模式（每次处理一条）
+python src/core/audit_news.py
+python src/core/audit_news.py --llm grok
+
+# 列出所有问题新闻（JSON）
+python src/core/audit_news.py list
+
+# 查看单条新闻详情（JSON）
+python src/core/audit_news.py show <id>
+
+# 从文件写入英文正文
+python src/core/audit_news.py set-content <id> <file>
+
+# 自动生成中文摘要/标题
+python src/core/audit_news.py gen-summary <id> --llm grok
+python src/core/audit_news.py gen-title <id> --llm grok
+
+# 手动设置中文摘要/标题
+python src/core/audit_news.py set-summary <id> <text>
+python src/core/audit_news.py set-title <id> <text>
+
+# 删除新闻
+python src/core/audit_news.py delete <id>
+```
+
+### 4. Markdown 生成模块 (generate_markdown.py)
 - 将处理后的新闻数据生成美观的 Markdown 文档
 - 包含新闻标题、原文链接、内容摘要和讨论摘要
 - 自动添加时间戳和格式化处理
@@ -53,11 +89,11 @@
   - 智能路径转换，支持WSL环境下的路径处理
   - 可配置作者、摘要等文章元信息
 
-### 4. Markdown 转微信公众号 HTML 模块 (markdown_to_html_converter.py)
+### 5. Markdown 转微信公众号 HTML 模块 (markdown_to_html_converter.py)
 - 将带 YAML Front Matter 的 Markdown 转为微信公众号友好 HTML
 - 支持标题、图片、链接行、分隔线、行内代码；内置响应式样式
 
-### 5. 浏览器管理模块 (browser_manager.py)
+### 6. 浏览器管理模块 (browser_manager.py)
 - 在浏览器中预览 HTML，支持自动/手动关闭，便于复制到公众号
 
 ## 🤖 AI 模型配置
@@ -191,6 +227,9 @@ python src/core/fetch_news.py
 # 生成新闻摘要
 python src/core/summarize_news3.py
 
+# 审计问题新闻（检查正文缺失，交互式修复）
+python src/core/audit_news.py
+
 # 生成 Markdown 报告
 python src/core/generate_markdown.py
 ```
@@ -305,6 +344,7 @@ hacknews/
 │   ├── core/                     # 核心功能模块
 │   │   ├── fetch_news.py         # 新闻抓取
 │   │   ├── summarize_news3.py    # 摘要生成
+│   │   ├── audit_news.py         # 新闻审计（正文/摘要检查与修复）
 │   │   ├── generate_markdown.py  # Markdown 生成
 │   │   └── archive_news.py       # 归档功能
 │   ├── llm/                      # LLM 相关模块
@@ -322,7 +362,7 @@ hacknews/
 │       ├── proxy_config.py       # 代理配置
 │       └── browser_manager.py    # 浏览器管理
 ├── scripts/                      # 可执行脚本
-│   └── auto_process.py           # 自动化处理
+│   └── audit_news.py             # 审计脚本入口
 ├── config/                       # 配置文件
 │   ├── config.json               # 主配置
 │   └── config.json.example       # 配置模板
