@@ -1324,6 +1324,17 @@ async def process_single_news(news_item, illegal_keywords, fetch_semaphore: asyn
                 log_error("内容过短", news_id, title, f"长度:{content_len} < {MIN_ARTICLE_CONTENT_CHARS}", "将使用截图兜底")
                 article_content = ''
 
+        # 截图（所有新闻都截图作为首图）
+        screenshot_image_path = None
+        if news_url and ENABLE_SCREENSHOT:
+            log_step("截取首图", news_id, title)
+            screenshot_image_path = await asyncio.to_thread(save_page_screenshot, news_url, title)
+            if screenshot_image_path:
+                log_step("截图成功", news_id, title, screenshot_image_path)
+                await db.execute('UPDATE news SET screenshot = ? WHERE id = ?', (screenshot_image_path, news_id))
+            else:
+                log_error("截图失败", news_id, title, "无法保存截图", "继续处理")
+
         # 获取讨论内容
         if not discussion_content and discuss_url:
             log_step("获取讨论", news_id, title)
@@ -1362,35 +1373,28 @@ async def process_single_news(news_item, illegal_keywords, fetch_semaphore: asyn
         else:
             log_error("无文章内容", news_id, title, "article_content为空", "直接使用截图兜底")
 
-        # 截图兜底
-        if not content_summary or content_summary == "null":
-            if (not article_content or len(article_content.strip()) == 0) and ENABLE_SCREENSHOT:
+        # 截图兜底（仅在无文章内容时使用LLM理解截图）
+        if (not content_summary or content_summary == "null") and screenshot_image_path:
+            if not article_content or len(article_content.strip()) == 0:
                 log_step("启动截图兜底", news_id, title)
-                screenshot_image_path = await asyncio.to_thread(get_summary_from_screenshot, news_url, title, DEFAULT_LLM)
+                stats['screenshot_used'] += 1
 
-                if screenshot_image_path:
-                    log_step("截图保存成功", news_id, title, screenshot_image_path)
-                    await db.execute('UPDATE news SET screenshot = ? WHERE id = ?', (screenshot_image_path, news_id))
-                    stats['screenshot_used'] += 1
-
-                    try:
-                        with open(screenshot_image_path, "rb") as image_file:
-                            base64_image_data = base64.b64encode(image_file.read()).decode('utf-8')
-                        image_prompt = (
-                            '这是一个关于网页的截图。请用中文描述其内容，字数在200到250字之间。总结应专业、简洁，并符合中文新闻报道的习惯。'
-                            '如果图片内容无法辨认，或者无法理解，请只返回"null"。不要添加任何其他说明或开场白，直接给出总结。网页标题是："{}"。'.format(title)
-                        )
-                        async with llm_semaphore:
-                            content_summary = await async_generate_summary_from_image(base64_image_data, image_prompt, DEFAULT_LLM)
-                        if content_summary and content_summary != "null":
-                            await db.execute('UPDATE news SET content_summary = ? WHERE id = ?', (content_summary, news_id))
-                            log_step("图片摘要成功", news_id, title, f"长度:{len(content_summary)} 字符")
-                        else:
-                            log_error("图片摘要失败", news_id, title, "返回null", "无法生成摘要")
-                    except Exception as e:
-                        log_error("图片摘要异常", news_id, title, str(e), "跳过")
-                else:
-                    log_error("截图失败", news_id, title, "无法保存截图", "无法生成摘要")
+                try:
+                    with open(screenshot_image_path, "rb") as image_file:
+                        base64_image_data = base64.b64encode(image_file.read()).decode('utf-8')
+                    image_prompt = (
+                        '这是一个关于网页的截图。请用中文描述其内容，字数在200到250字之间。总结应专业、简洁，并符合中文新闻报道的习惯。'
+                        '如果图片内容无法辨认，或者无法理解，请只返回"null"。不要添加任何其他说明或开场白，直接给出总结。网页标题是："{}"。'.format(title)
+                    )
+                    async with llm_semaphore:
+                        content_summary = await async_generate_summary_from_image(base64_image_data, image_prompt, DEFAULT_LLM)
+                    if content_summary and content_summary != "null":
+                        await db.execute('UPDATE news SET content_summary = ? WHERE id = ?', (content_summary, news_id))
+                        log_step("图片摘要成功", news_id, title, f"长度:{len(content_summary)} 字符")
+                    else:
+                        log_error("图片摘要失败", news_id, title, "返回null", "无法生成摘要")
+                except Exception as e:
+                    log_error("图片摘要异常", news_id, title, str(e), "跳过")
 
         # 讨论摘要
         if discussion_content:
