@@ -112,13 +112,10 @@ tags:
         display_title = f"{title_chs} ({title})" if title_chs else title
         markdown_content += f"## {idx}. {display_title}\n\n"
 
-        # 插入图片（优先使用截图，然后是正常图片）
-        if screenshot:
-            markdown_content += f"![{title_chs} ]({screenshot})\n\n"
-        else:
-            for img_url in [largest_image, image_2, image_3]:
-                if img_url:
-                    markdown_content += f"![{title_chs} ]({img_url})\n\n"
+        # 插入所有可用图片（截图 + 正文图片），后续流程中手动精选
+        for img_url in [screenshot, largest_image, image_2, image_3]:
+            if img_url:
+                markdown_content += f"![{title_chs} ]({img_url})\n\n"
         # 文章摘要
         markdown_content += f"{content_summary}\n\n"
         
