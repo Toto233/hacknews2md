@@ -211,10 +211,17 @@ def call_grok_api(prompt, system_content=None, model=None, temperature=None, max
                 print(f"[Grok] 第 {attempt + 1}/{max_retries + 1} 次尝试，等待 {wait_time:.1f} 秒...")
                 time.sleep(wait_time)
 
-            # 优先使用 curl-cffi (使用系统 libcurl，SSL 兼容性更好)
+            # 优先使用 httpx（Windows 上 SSL 兼容性更好）
             try:
+                import httpx
+                print(f"[Grok] 使用 httpx 发送请求...")
+                with httpx.Client(verify=False, timeout=120.0, follow_redirects=True) as client:
+                    response = client.post(api_url, headers=headers, json=data)
+                    response.raise_for_status()
+            except ImportError:
+                # 回退到 curl-cffi
                 from curl_cffi import requests as curl_requests
-                print(f"[Grok] 使用 curl-cffi 发送请求...")
+                print(f"[Grok] httpx 不可用，使用 curl-cffi...")
                 response = curl_requests.post(
                     api_url,
                     headers=headers,
@@ -223,13 +230,6 @@ def call_grok_api(prompt, system_content=None, model=None, temperature=None, max
                     verify=False
                 )
                 response.raise_for_status()
-            except ImportError:
-                # 回退到 httpx
-                import httpx
-                print(f"[Grok] curl-cffi 不可用，使用 httpx...")
-                with httpx.Client(verify=False, timeout=120.0, follow_redirects=True) as client:
-                    response = client.post(api_url, headers=headers, json=data)
-                    response.raise_for_status()
 
             response_json = response.json()
             if 'choices' in response_json:
