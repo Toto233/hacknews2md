@@ -5,11 +5,41 @@ sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..',
 
 import sqlite3
 import re
+import shutil
 from datetime import datetime
 from bs4 import BeautifulSoup
 from src.llm.llm_evaluator import evaluate_news_attraction
 from src.llm.llm_tag_extractor import extract_tags_with_llm
 from src.integrations.markdown_to_html_converter import convert_markdown_to_html
+
+# Astro 博客项目路径
+ASTRO_PROJECT_DIR = r'D:\node\hacknews_recap'
+ASTRO_BLOG_DIR = os.path.join(ASTRO_PROJECT_DIR, 'src', 'data', 'blog')
+ASTRO_PUBLIC_IMAGES_DIR = os.path.join(ASTRO_PROJECT_DIR, 'public', 'images')
+
+
+def copy_images_to_astro(image_paths, astro_images_dir):
+    """将图片复制到 Astro 的 public/images/ 目录，返回 {绝对路径: web路径} 的映射"""
+    path_mapping = {}
+    for abs_path in image_paths:
+        if not abs_path or not os.path.exists(abs_path):
+            continue
+        # 从路径中提取日期目录和文件名，如 ...\images\20260301\xxx.png
+        parts = abs_path.replace('/', '\\').split('\\')
+        # 找到 images 目录后的日期目录
+        try:
+            images_idx = parts.index('images')
+            date_dir = parts[images_idx + 1]
+            filename = parts[images_idx + 2]
+        except (ValueError, IndexError):
+            continue
+        dest_dir = os.path.join(astro_images_dir, date_dir)
+        os.makedirs(dest_dir, exist_ok=True)
+        dest_path = os.path.join(dest_dir, filename)
+        shutil.copy2(abs_path, dest_path)
+        web_path = f"/images/{date_dir}/{filename}"
+        path_mapping[abs_path] = web_path
+    return path_mapping
 
 
 def generate_markdown():
@@ -144,6 +174,22 @@ tags:
         f.write(html_content)
 
     print(f'Successfully generated HTML file: {html_filename}')
+
+    # --- 生成 Astro 博客版本 ---
+    # 收集 markdown 中所有本地图片绝对路径
+    image_paths = re.findall(r'!\[.*?\]\(((?:[A-Za-z]:\\|/).+?\.(?:png|jpg|jpeg|gif|webp))\)', markdown_content)
+    # 复制图片到 Astro public/images/ 并获取路径映射
+    path_mapping = copy_images_to_astro(image_paths, ASTRO_PUBLIC_IMAGES_DIR)
+    # 将绝对路径替换为 web 路径
+    astro_content = markdown_content
+    for abs_path, web_path in path_mapping.items():
+        astro_content = astro_content.replace(abs_path, web_path)
+    # 写入 Astro blog 目录
+    os.makedirs(ASTRO_BLOG_DIR, exist_ok=True)
+    astro_md_filename = os.path.join(ASTRO_BLOG_DIR, os.path.basename(md_filename))
+    with open(astro_md_filename, 'w', encoding='utf-8') as f:
+        f.write(astro_content)
+    print(f'Successfully generated Astro blog file: {astro_md_filename}')
 
     # 复制YAML标题到剪贴板
     try:
