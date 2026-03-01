@@ -6,7 +6,7 @@ sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..',
 import sqlite3
 import re
 import shutil
-from datetime import datetime
+from datetime import datetime, timedelta
 from bs4 import BeautifulSoup
 from src.llm.llm_evaluator import evaluate_news_attraction
 from src.llm.llm_tag_extractor import extract_tags_with_llm
@@ -40,6 +40,22 @@ def copy_images_to_astro(image_paths, astro_images_dir):
         web_path = f"/images/{date_dir}/{filename}"
         path_mapping[abs_path] = web_path
     return path_mapping
+
+
+def cleanup_old_astro_images(astro_images_dir, days=10):
+    """删除 Astro public/images/ 下超过指定天数的日期目录"""
+    if not os.path.exists(astro_images_dir):
+        return
+    cutoff = datetime.now() - timedelta(days=days)
+    cutoff_str = cutoff.strftime('%Y%m%d')
+    for name in os.listdir(astro_images_dir):
+        dir_path = os.path.join(astro_images_dir, name)
+        if not os.path.isdir(dir_path):
+            continue
+        # 目录名应为 YYYYMMDD 格式
+        if re.match(r'^\d{8}$', name) and name < cutoff_str:
+            shutil.rmtree(dir_path)
+            print(f'Cleaned up old Astro images: {dir_path}')
 
 
 def generate_markdown():
@@ -176,14 +192,22 @@ tags:
     print(f'Successfully generated HTML file: {html_filename}')
 
     # --- 生成 Astro 博客版本 ---
-    # 收集 markdown 中所有本地图片绝对路径
-    image_paths = re.findall(r'!\[.*?\]\(((?:[A-Za-z]:\\|/).+?\.(?:png|jpg|jpeg|gif|webp))\)', markdown_content)
-    # 复制图片到 Astro public/images/ 并获取路径映射
-    path_mapping = copy_images_to_astro(image_paths, ASTRO_PUBLIC_IMAGES_DIR)
-    # 将绝对路径替换为 web 路径
+    # 收集所有截图路径（仅截图，不含正文大图）
+    screenshot_paths = set()
+    for item in sorted_news_items:
+        screenshot = item[9]  # screenshot 字段
+        if screenshot:
+            screenshot_paths.add(screenshot)
+    # 仅复制截图到 Astro public/images/
+    path_mapping = copy_images_to_astro(screenshot_paths, ASTRO_PUBLIC_IMAGES_DIR)
+    # 生成 Astro 版 markdown：替换截图路径为 web 路径，移除其他本地图片行
     astro_content = markdown_content
     for abs_path, web_path in path_mapping.items():
         astro_content = astro_content.replace(abs_path, web_path)
+    # 移除仍含本地绝对路径的图片行（即非截图的大图）
+    astro_content = re.sub(r'!\[.*?\]\((?:[A-Za-z]:\\|/).+?\.(?:png|jpg|jpeg|gif|webp)\)\n\n', '', astro_content)
+    # 清理 10 天前的旧图片
+    cleanup_old_astro_images(ASTRO_PUBLIC_IMAGES_DIR)
     # 写入 Astro blog 目录
     os.makedirs(ASTRO_BLOG_DIR, exist_ok=True)
     astro_md_filename = os.path.join(ASTRO_BLOG_DIR, os.path.basename(md_filename))
