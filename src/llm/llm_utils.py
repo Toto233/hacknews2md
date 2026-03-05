@@ -56,8 +56,8 @@ class GeminiModelBalancer:
     """Gemini模型负载均衡器 - 在多个模型间轮换以分担每日配额"""
     def __init__(self):
         self.models = [
-            'gemini-2.5-flash',
-            'gemini-2.5-flash-lite',
+            'gemini-3-flash-preview',           # 20次/天 (优先使用)
+            'gemini-3.1-flash-lite-preview',    # 500次/天 (备用)
         ]
         self.current_index = 0
         self.lock = Lock()
@@ -328,8 +328,7 @@ def call_gemini_api(prompt, model=None, temperature=None, max_tokens=None, respo
     """
     config = load_llm_config()['gemini']
     api_key = config['api_key']
-    api_url = config['api_url']
-
+    
     # 使用负载均衡器选择模型
     if model is None:
         # 如果没有指定模型，使用负载均衡器选择
@@ -340,19 +339,27 @@ def call_gemini_api(prompt, model=None, temperature=None, max_tokens=None, respo
         # 对于其他模型或配置默认模型，使用负载均衡器
         model = gemini_balancer.get_next_model(preferred_model=model)
 
+    # 根据实际使用的模型动态构建 API URL
+    api_url = f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent"
+    print(f"[动态URL] 使用模型 {model} 的专用API端点")
+
     # 根据模型类型设置不同的限流参数
-    # gemini-2.5-pro: 2次/分钟
-    # gemini-2.5-flash: 10次/分钟
-    if 'pro' in model.lower():
-        max_requests = 2
-        print(f"Gemini Pro 模型限流: {max_requests}次/分钟")
+    # gemini-3-flash-preview: 20次/天 ≈ 0.8次/小时，严格设为1次/2分钟
+    # gemini-3.1-flash-lite-preview: 500次/天 ≈ 21次/小时 ≈ 0.35次/分钟，保守设为5次/分钟
+    if model == 'gemini-3-flash-preview':
+        max_requests = 1
+        window_seconds = 120  # 2分钟
+        print(f"Gemini 3 Flash Preview 模型限流: {max_requests}次/{window_seconds}秒 (配额极少)")
+    elif '3.1-flash-lite-preview' in model:
+        max_requests = 5
+        print(f"Gemini 3.1 Flash Lite Preview 模型限流: {max_requests}次/分钟")
     else:
-        max_requests = 8  # Flash模型，设置为8留出安全余量（实际限制10次）
+        max_requests = 8  # 其他Flash模型
         print(f"Gemini Flash 模型限流: {max_requests}次/分钟")
 
-    # 使用模型名作为限流key，使得pro和flash分别计数
+    # 使用模型名作为限流key，使得不同模型分别计数
     rate_limiter_key = f'gemini-{model}'
-    rate_limiter.wait_if_needed(rate_limiter_key, max_requests=max_requests, window_seconds=60)
+    rate_limiter.wait_if_needed(rate_limiter_key, max_requests=max_requests, window_seconds=window_seconds if 'window_seconds' in locals() else 60)
 
     print(f"Gemini API调用: {prompt}")
     temperature = temperature if temperature is not None else config.get('temperature', 0.7)
