@@ -17,20 +17,19 @@ def extract_tags_with_llm(news_titles):
         else:
             prompt += f"{idx}. {en}\n"
     llm_config = load_llm_config()
-    # 先用 Grok 4.1 Fast
-    try:
-        tags = extract_with_grok(prompt, llm_config['grok'])
-        if tags:
-            return tags
-    except Exception as e:
-        print(f"Grok调用失败: {e}")
-    # Grok 失败再用 Gemini
-    try:
-        tags = extract_with_gemini(prompt, llm_config['gemini'])
-        if tags:
-            return tags
-    except Exception as e:
-        print(f"Gemini调用失败: {e}")
+    default_llm = (llm_config.get('default') or 'gemini').lower()
+    call_order = ['gemini', 'grok'] if default_llm == 'gemini' else ['grok', 'gemini']
+
+    for llm_name in call_order:
+        try:
+            if llm_name == 'gemini':
+                tags = extract_with_gemini(prompt, llm_config['gemini'])
+            else:
+                tags = extract_with_grok(prompt, llm_config['grok'])
+            if tags:
+                return tags
+        except Exception as e:
+            print(f"{llm_name}调用失败: {e}")
     return []
 
 

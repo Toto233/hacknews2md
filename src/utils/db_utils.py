@@ -103,6 +103,21 @@ def init_database():
     )
     ''')
 
+    # 创建 LLM 模型当日状态表（用于按天熔断/恢复）
+    cursor.execute('''
+    CREATE TABLE IF NOT EXISTS llm_model_daily_status (
+        provider TEXT NOT NULL,
+        model TEXT NOT NULL,
+        status_date DATE NOT NULL,
+        is_disabled INTEGER NOT NULL DEFAULT 0,
+        reason TEXT,
+        last_error TEXT,
+        disabled_at TIMESTAMP,
+        updated_at TIMESTAMP NOT NULL DEFAULT (datetime('now', 'localtime')),
+        PRIMARY KEY (provider, model, status_date)
+    )
+    ''')
+
     conn.commit()
     conn.close()
     print("数据库所有表结构已初始化/升级")
