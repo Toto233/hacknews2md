@@ -13,7 +13,7 @@ from urllib.parse import parse_qs, urlparse
 
 from _bootstrap import DB_PATH
 
-from src.core.summarize_news4 import get_discussion_content_async  # noqa: E402
+from src.core.summarize_news5 import get_discussion_content_async  # noqa: E402
 
 
 def strip_html(value: str) -> str:

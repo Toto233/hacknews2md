@@ -7,6 +7,7 @@ pillow-avif-plugin
 chardet
 brotli
 youtube-transcript-api
+twscrape
 lxml
 google-genai
 httpx

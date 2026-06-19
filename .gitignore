@@ -16,6 +16,9 @@ __pycache__/
 # 临时工作目录
 tmp/
 
+# twscrape 账号数据库（含敏感 cookie）
+accounts.db
+
 # 数据库文件 - 整个data目录都应该被忽略
 data/
 

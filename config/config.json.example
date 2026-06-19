@@ -22,5 +22,9 @@
     "wechat": {
         "appid": "your-appid-here",
         "appsec": "your-appsec-here"
+    },
+    "twitter": {
+        "auth_token": "从浏览器Cookie获取",
+        "ct0": "从浏览器Cookie获取"
     }
 }

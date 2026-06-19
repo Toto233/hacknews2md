@@ -9,7 +9,7 @@ from datetime import datetime
 
 from _bootstrap import DB_PATH, REPO_ROOT
 
-from src.core.summarize_news4 import (  # noqa: E402
+from src.core.summarize_news5 import (  # noqa: E402
     MIN_ARTICLE_CONTENT_CHARS,
     get_article_content_async,
     get_discussion_content_async,
