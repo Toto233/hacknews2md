@@ -40,6 +40,13 @@ sqlite3 -header -column ".\data\hacknews.db" "select id, length(coalesce(article
 - 用户确认交互式页面本来就短时，可结合英文标题、页面性质和 HN 讨论补充说明后继续。
 - 遇到稳定 401/403、订阅墙或已知付费墙要主动告知，不自动删除。
 - 高度警惕 `www.thetimes.com`、`www.ft.com`、`www.economist.com`。
+- 正文不完整（只有标题、只有片段、明显被截断）时，调用以下 Python 脚本记录该域名：
+
+```powershell
+python -c "from src.utils.scraper_failures import record_scraper_failure, extract_domain; domain = extract_domain('<news_url>'); count = record_scraper_failure(domain, '<news_url>'); print(f'{domain} 已经第 {count} 次抓取失败' + ('，建议适配该网站' if count >= 2 else ''))"
+```
+
+将 `<news_url>` 替换为实际 URL。记录后继续发布流程，不阻塞。
 
 补抓空讨论：
 
