@@ -18,6 +18,20 @@ ASTRO_BLOG_DIR = os.path.join(ASTRO_PROJECT_DIR, 'src', 'data', 'blog')
 ASTRO_PUBLIC_IMAGES_DIR = os.path.join(ASTRO_PROJECT_DIR, 'public', 'images')
 
 
+def yaml_quote(value):
+    """Serialize a scalar safely for YAML frontmatter."""
+    text = "" if value is None else str(value)
+    text = (
+        text.replace("\\", "\\\\")
+        .replace('"', '\\"')
+        .replace("\r\n", "\\n")
+        .replace("\n", "\\n")
+        .replace("\r", "\\n")
+        .replace("\t", "\\t")
+    )
+    return f'"{text}"'
+
+
 def copy_images_to_astro(image_paths, astro_images_dir):
     """将图片复制到 Astro 的 public/images/ 目录，返回 {绝对路径: web路径} 的映射"""
     path_mapping = {}
@@ -133,16 +147,16 @@ def generate_markdown():
 
     # 组装YAML头部，包含微信公众号所需的元数据
     yaml_header = f"""---
-title: '{yaml_title}'
-author: 'hacknews'
-description: ''
-digest: '{first_content_summary[:120] if first_content_summary else ""}'
-source_url: '{sorted_news_items[0][2] if sorted_news_items else ""}'
+title: {yaml_quote(yaml_title)}
+author: {yaml_quote('hacknews')}
+description: {yaml_quote('')}
+digest: {yaml_quote(first_content_summary[:120] if first_content_summary else "")}
+source_url: {yaml_quote(sorted_news_items[0][2] if sorted_news_items else "")}
 pubDatetime: {pub_datetime}
 tags:
 """
     for tag in tags:
-        yaml_header += f"  - {tag}\n"
+        yaml_header += f"  - {yaml_quote(tag)}\n"
     yaml_header += "---\n\n"
 
     # 生成markdown内容，先插入YAML头部

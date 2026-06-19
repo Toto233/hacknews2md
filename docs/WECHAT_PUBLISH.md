@@ -1,108 +1,111 @@
 # 微信公众号发布指南
 
-本文档说明如何使用分离后的微信公众号发布功能。
+微信公众号发布读取已经生成的 HackNews Markdown，将正文中的本地图片上传到微信素材服务，并在草稿箱创建文章。
 
-## 工作流程
+## 前置配置
 
-现在的微信公众号发布功能已经分离为两个独立的步骤：
-
-1. **生成 Markdown** - `generate_markdown.py` 生成包含元数据的 Markdown 文件
-2. **发布到微信** - `publish_wechat.py` 读取 Markdown 文件并发布到微信公众号
-
-## 使用方法
-
-### 步骤 1: 生成 Markdown
-
-运行 `generate_markdown.py` 生成包含微信公众号所需元数据的 Markdown 文件：
-
-```bash
-python src/core/generate_markdown.py
-```
-
-这将生成：
-- `output/markdown/hacknews_summary_YYYYMMDD_HHMM.md` - Markdown 文件
-- `output/markdown/hacknews_summary_YYYYMMDD_HHMM.html` - HTML 文件（用于预览）
-
-Markdown 文件的 YAML front matter 包含以下微信元数据：
-
-```yaml
----
-title: '文章标题 | Hacker News 摘要 (2025-01-31)'
-author: 'hacknews'
-description: ''
-digest: '文章摘要内容（最多120字）'
-source_url: 'https://原文链接.com'
-pubDatetime: 2025-01-31 12:00:00.000+08:00
-tags:
-  - AI
-  - Linux
----
-```
-
-### 步骤 2: 发布到微信公众号
-
-使用 `publish_wechat.py` 将 Markdown 文件发布到微信公众号草稿箱：
-
-```bash
-# 基本用法
-python scripts/publish_wechat.py output/markdown/hacknews_summary_20250131_1200.md
-
-# 指定作者和摘要
-python scripts/publish_wechat.py output/markdown/hacknews_summary_20250131_1200.md --author "我的公众号" --digest "今日摘要"
-
-# 预览模式（只显示信息，不上传）
-python scripts/publish_wechat.py output/markdown/hacknews_summary_20250131_1200.md --preview
-```
-
-## 配置
-
-确保 `config/config.json` 中包含正确的微信配置：
+在不纳入 Git 的 `config/config.json` 中配置：
 
 ```json
 {
-  "WECHAT_APPID": "你的AppID",
-  "WECHAT_APPSEC": "你的AppSecret"
+  "wechat": {
+    "appid": "your-appid",
+    "appsec": "your-app-secret"
+  }
 }
 ```
 
+也可以设置：
+
+```text
+WECHAT_APPID
+WECHAT_APPSEC
+```
+
+## 生成发布文件
+
+Codex skill 根据 plan JSON 生成 Markdown 和 HTML：
+
+```powershell
+python .\skills\publish-hacknews-codex\scripts\render_manual_markdown.py `
+  ".\output\codex\hacknews_plan_YYYYMMDD_HHMMSS.json"
+```
+
+输出路径：
+
+```text
+output/markdown/hacknews_summary_YYYYMMDD_HHMM.md
+output/markdown/hacknews_summary_YYYYMMDD_HHMM.html
+```
+
+若部署配置启用了 Astro，还会把无本地图片版本写入独立博客仓库。
+
+## 生成 AI 题图
+
+先从头条英文标题和正文提炼 10–15 字的“主体 + 事件”短标题：
+
+```powershell
+python .\scripts\generate_wechat_cover_ai.py `
+  ".\output\markdown\hacknews_summary_YYYYMMDD_HHMM.md" `
+  --target-word "主体加事件" `
+  -o ".\output\images\YYYYMMDD\hacknews_cover_ai_YYYYMMDD.png"
+```
+
+脚本读取 `prompts/cover-prompt.md`，调用配置的 `gpt-image-2-skill` wrapper 生成原图，再裁剪为 900×383。
+
+生成后应检查：
+
+- 文字是否准确且可读
+- 是否保留原标题主体与事件
+- 是否适合 2.45:1 横版封面
+- 是否有过多细线或过小文字
+
+题图生成失败时，公众号脚本会回退到第一篇新闻的首张图片。
+
+## 发布草稿
+
+显式使用检查通过的题图：
+
+```powershell
+python .\scripts\publish_wechat.py `
+  ".\output\markdown\hacknews_summary_YYYYMMDD_HHMM.md" `
+  --cover-image ".\output\images\YYYYMMDD\hacknews_cover_ai_YYYYMMDD.png"
+```
+
+不指定题图时使用自动题图和原图回退逻辑：
+
+```powershell
+python .\scripts\publish_wechat.py `
+  ".\output\markdown\hacknews_summary_YYYYMMDD_HHMM.md"
+```
+
+成功后终端会输出公众号草稿的 Media ID。
+
+## 图片规则
+
+- 正文图片会上传并替换为微信图片 URL。
+- 超过微信上传限制的图片会跳过，并在日志中列出，供人工处理。
+- 题图使用永久素材上传，正文图片使用文章图片接口。
+- Astro 版本不包含本地图片路径。
+
 ## 常见问题
 
-### 1. 生成 Markdown 后标题已复制到剪贴板
+### Token 过期
 
-运行 `generate_markdown.py` 后，文章标题会自动复制到剪贴板，方便后续粘贴到微信公众号编辑器。
+脚本会自动获取新 token 并保存到本地数据库，无需手工刷新。
 
-### 2. 图片处理
+### 题图 wrapper 未找到
 
-- Markdown 文件中的本地图片路径会自动转换为微信可用的 URL
-- 第一篇文章的第一张图片会自动用作封面图
-- 如果第一篇文章没有图片，将使用默认封面图
+设置 `HACKNEWS_IMAGE_WRAPPER`，或在 `config/deployment.local.json` 中配置：
 
-### 3. 预览 HTML
-
-如果需要在浏览器中预览 HTML 效果：
-
-```bash
-# 在浏览器中打开 HTML 文件
-start output/markdown/hacknews_summary_YYYYMMDD_HHMM.html   # Windows
-open output/markdown/hacknews_summary_YYYYMMDD_HHMM.html    # macOS
-xdg-open output/markdown/hacknews_summary_YYYYMMDD_HHMM.html  # Linux
+```json
+{
+  "image_generator": {
+    "wrapper_path": "path/to/gpt_image_2_skill.cjs"
+  }
+}
 ```
 
-## 命令行参数
+### Markdown frontmatter 编译失败
 
-### publish_wechat.py
-
-```
-usage: publish_wechat.py [-h] [--author AUTHOR] [--digest DIGEST] [--preview] md_file
-
-微信公众号发布工具
-
-positional arguments:
-  md_file               要发布的 Markdown 文件路径
-
-optional arguments:
-  -h, --help            显示帮助信息
-  --author AUTHOR       文章作者（覆盖 YAML 中的值）
-  --digest DIGEST       文章摘要（覆盖 YAML 中的值）
-  --preview, -p         预览模式，只显示信息不上传
-```
+Codex 渲染脚本会安全转义标题、摘要、URL 和标签中的引号、冒号及换行。不要手工拼接裸 YAML 字符串。

@@ -9,6 +9,9 @@ from collections import defaultdict, deque
 
 # LLM配置加载
 LLM_STATUS_DB_PATH = 'data/hacknews.db'
+GEMINI_FALLBACK_MODEL = 'gemini-3.1-flash-lite-preview'
+GEMINI_STRICT_LIMIT_PER_MINUTE = 5
+GEMINI_STRICT_LIMIT_PER_DAY = 20
 
 
 def _today_str():
@@ -16,7 +19,7 @@ def _today_str():
 
 
 def _ensure_llm_status_table():
-    """确保模型当日状态表存在。"""
+    """确保模型当日状态与用量表存在。"""
     conn = sqlite3.connect(LLM_STATUS_DB_PATH)
     try:
         cursor = conn.cursor()
@@ -33,7 +36,71 @@ def _ensure_llm_status_table():
             PRIMARY KEY (provider, model, status_date)
         )
         ''')
+        cursor.execute('''
+        CREATE TABLE IF NOT EXISTS llm_model_daily_usage (
+            provider TEXT NOT NULL,
+            model TEXT NOT NULL,
+            usage_date DATE NOT NULL,
+            request_count INTEGER NOT NULL DEFAULT 0,
+            updated_at TIMESTAMP NOT NULL DEFAULT (datetime('now', 'localtime')),
+            PRIMARY KEY (provider, model, usage_date)
+        )
+        ''')
         conn.commit()
+    finally:
+        conn.close()
+
+
+def _is_forbidden_gemini_model(model):
+    """禁止使用所有 Gemini 2.5 系列模型。"""
+    if not model:
+        return False
+    model_l = model.lower()
+    return model_l.startswith('gemini-2.5-')
+
+
+def _is_strict_capped_gemini_model(model):
+    """对 Gemini 3 Flash 执行严格限流与日限额。"""
+    if not model:
+        return False
+    model_l = model.lower()
+    return model_l.startswith('gemini-3-flash')
+
+
+def _reserve_daily_request_slot(provider, model, daily_limit):
+    """预占当天请求配额；达到上限返回False。"""
+    _ensure_llm_status_table()
+    conn = sqlite3.connect(LLM_STATUS_DB_PATH)
+    try:
+        cursor = conn.cursor()
+        cursor.execute(
+            '''
+            SELECT request_count
+            FROM llm_model_daily_usage
+            WHERE provider = ? AND model = ? AND usage_date = ?
+            ''',
+            (provider, model, _today_str())
+        )
+        row = cursor.fetchone()
+        current = int(row[0]) if row else 0
+        if current >= daily_limit:
+            return False
+
+        cursor.execute(
+            '''
+            INSERT INTO llm_model_daily_usage
+                (provider, model, usage_date, request_count, updated_at)
+            VALUES
+                (?, ?, ?, 1, datetime('now', 'localtime'))
+            ON CONFLICT(provider, model, usage_date)
+            DO UPDATE SET
+                request_count = request_count + 1,
+                updated_at = datetime('now', 'localtime')
+            ''',
+            (provider, model, _today_str())
+        )
+        conn.commit()
+        return True
     finally:
         conn.close()
 
@@ -121,7 +188,7 @@ class RateLimiter:
         """API限流检查，如需要会阻塞等待
 
         Args:
-            api_type: API类型标识（如 'gemini-gemini-2.5-pro'）
+            api_type: API类型标识（如 'gemini-gemini-3-flash-preview'）
             max_requests: 时间窗口内最大请求数
             window_seconds: 时间窗口（秒）
         """
@@ -175,18 +242,22 @@ class GeminiModelBalancer:
         Returns:
             模型名称
         """
-        # 如果指定了 gemini-2.5-pro，由于配额已用完，强制使用负载均衡
-        if preferred_model == 'gemini-2.5-pro':
-            print(f"[负载均衡] gemini-2.5-pro 配额已用完，改用负载均衡模型")
-            preferred_model = None
-
         # 如果指定了首选模型，优先尝试且遵守“当日禁用”
         if preferred_model:
+            if _is_forbidden_gemini_model(preferred_model):
+                print(f"[策略禁用] 模型 {preferred_model} 已禁用（2.5 系列不可用），切换到 {GEMINI_FALLBACK_MODEL}")
+                disable_model_for_today('gemini', preferred_model, 'policy_forbidden_model', 'Gemini 2.5 family is disabled by policy')
+                preferred_model = GEMINI_FALLBACK_MODEL
             if is_model_disabled_today('gemini', preferred_model):
                 print(f"[配额熔断] 模型 {preferred_model} 今日已禁用，自动切换其他模型")
                 preferred_model = None
             elif preferred_model not in self.models:
-                return preferred_model
+                print(f"[模型约束] 模型 {preferred_model} 不在允许列表，改用 {GEMINI_FALLBACK_MODEL}")
+                preferred_model = GEMINI_FALLBACK_MODEL
+                if is_model_disabled_today('gemini', preferred_model):
+                    preferred_model = None
+                else:
+                    return preferred_model
             else:
                 return preferred_model
 
@@ -225,6 +296,10 @@ def load_llm_config():
     """加载LLM配置"""
     with open('config/config.json', 'r', encoding='utf-8') as f:
         config = json.load(f)
+        gemini_model = config.get('GEMINI_MODEL', 'gemini-3-flash-preview')
+        if _is_forbidden_gemini_model(gemini_model):
+            print(f"[配置修正] 检测到禁用模型 {gemini_model}，自动改为 gemini-3-flash-preview")
+            gemini_model = 'gemini-3-flash-preview'
         return {
             'grok': {
                 'api_key': config.get('GROK_API_KEY'),
@@ -235,8 +310,8 @@ def load_llm_config():
             },
             'gemini': {
                 'api_key': config.get('GEMINI_API_KEY'),
-                'api_url': config.get('GEMINI_API_URL', 'https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent'),
-                'model': config.get('GEMINI_MODEL', 'gemini-2.5-flash-preview-05-20'),
+                'api_url': config.get('GEMINI_API_URL', 'https://generativelanguage.googleapis.com/v1beta/models/gemini-3-flash-preview:generateContent'),
+                'model': gemini_model,
                 'temperature': config.get('GEMINI_TEMPERATURE', 0.7),
                 'max_tokens': config.get('GEMINI_MAX_TOKENS', 800)
             },
@@ -455,6 +530,12 @@ def call_gemini_api(prompt, model=None, temperature=None, max_tokens=None, respo
     else:
         model = gemini_balancer.get_next_model(preferred_model=model)
 
+    if _is_forbidden_gemini_model(model):
+        print(f"[策略禁用] 模型 {model} 已禁用（2.5 系列不可用），改用 {GEMINI_FALLBACK_MODEL}")
+        disable_model_for_today('gemini', model, 'policy_forbidden_model', 'Gemini 2.5 family is disabled by policy')
+        gemini_balancer.report_failure(model)
+        model = gemini_balancer.get_next_model(preferred_model=GEMINI_FALLBACK_MODEL)
+
     if not model:
         print("Gemini 无可用模型（可能今日均已被配额熔断）")
         return ''
@@ -463,15 +544,14 @@ def call_gemini_api(prompt, model=None, temperature=None, max_tokens=None, respo
     api_url = f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent"
     print(f"[动态URL] 使用模型 {model} 的专用API端点")
 
-    # 根据模型类型设置不同的限流参数
-    # gemini-3-flash-preview: 20次/天 ≈ 0.8次/小时，严格设为1次/2分钟
-    # gemini-3.1-flash-lite-preview: 500次/天 ≈ 21次/小时 ≈ 0.35次/分钟，保守设为5次/分钟
-    if model == 'gemini-3-flash-preview':
-        max_requests = 1
-        window_seconds = 120  # 2分钟
-        print(f"Gemini 3 Flash Preview 模型限流: {max_requests}次/{window_seconds}秒 (配额极少)")
+    # 根据模型类型设置限流参数
+    # 需求：Gemini 3 Flash => 5次/分钟，20次/天；超限后切到 Gemini 3.1 Flash Lite
+    if _is_strict_capped_gemini_model(model):
+        max_requests = GEMINI_STRICT_LIMIT_PER_MINUTE
+        window_seconds = 60
+        print(f"{model} 模型限流: {max_requests}次/{window_seconds}秒，日上限 {GEMINI_STRICT_LIMIT_PER_DAY} 次")
     elif '3.1-flash-lite-preview' in model:
-        max_requests = 5
+        max_requests = 15
         print(f"Gemini 3.1 Flash Lite Preview 模型限流: {max_requests}次/分钟")
     else:
         max_requests = 8  # 其他Flash模型
@@ -481,12 +561,28 @@ def call_gemini_api(prompt, model=None, temperature=None, max_tokens=None, respo
     rate_limiter_key = f'gemini-{model}'
     rate_limiter.wait_if_needed(rate_limiter_key, max_requests=max_requests, window_seconds=window_seconds if 'window_seconds' in locals() else 60)
 
+    if _is_strict_capped_gemini_model(model):
+        if not _reserve_daily_request_slot('gemini', model, GEMINI_STRICT_LIMIT_PER_DAY):
+            print(f"{model} 今日已达 {GEMINI_STRICT_LIMIT_PER_DAY} 次上限，停止使用并切换到 {GEMINI_FALLBACK_MODEL}")
+            disable_model_for_today('gemini', model, 'daily_limit_reached_local', f'Local daily limit reached: {GEMINI_STRICT_LIMIT_PER_DAY}/day')
+            gemini_balancer.report_failure(model)
+            if model != GEMINI_FALLBACK_MODEL:
+                return call_gemini_api(
+                    prompt,
+                    model=GEMINI_FALLBACK_MODEL,
+                    temperature=temperature,
+                    max_tokens=max_tokens,
+                    response_format=response_format,
+                    max_retries=max_retries,
+                    image_data=image_data
+                )
+            return ''
+
     print(f"Gemini API调用: {prompt}")
     temperature = temperature if temperature is not None else config.get('temperature', 0.7)
     max_tokens = max_tokens or config.get('max_tokens', 800)
     print(f"Gemini API调用: {prompt[:100]}...")  # 只打印前100字
     print(f"Gemini 配置: api_url={api_url}, model={model}, temperature={temperature}, max_tokens={max_tokens}")
-    print(f"api_key(前后4位): {api_key[:4]}...{api_key[-4:] if api_key else ''}")
     print(f"prompt长度: {len(prompt)}")
     
     for attempt in range(max_retries):
@@ -536,6 +632,17 @@ def call_gemini_api(prompt, model=None, temperature=None, max_tokens=None, respo
                 print(f"模型 {model} 检测到配额耗尽，标记为今日禁用")
                 disable_model_for_today('gemini', model, 'quota_exhausted', error_msg)
                 gemini_balancer.report_failure(model)
+                if model != GEMINI_FALLBACK_MODEL:
+                    print(f"自动切换到备用模型 {GEMINI_FALLBACK_MODEL}")
+                    return call_gemini_api(
+                        prompt,
+                        model=GEMINI_FALLBACK_MODEL,
+                        temperature=temperature,
+                        max_tokens=max_tokens,
+                        response_format=response_format,
+                        max_retries=max_retries,
+                        image_data=image_data
+                    )
                 break
 
             # 处理503、429等服务错误
@@ -633,6 +740,17 @@ def call_gemini_api(prompt, model=None, temperature=None, max_tokens=None, respo
                 print(f"模型 {model} 检测到配额耗尽，标记为今日禁用")
                 disable_model_for_today('gemini', model, 'quota_exhausted', error_msg)
                 gemini_balancer.report_failure(model)
+                if model != GEMINI_FALLBACK_MODEL:
+                    print(f"自动切换到备用模型 {GEMINI_FALLBACK_MODEL}")
+                    return call_gemini_api(
+                        prompt,
+                        model=GEMINI_FALLBACK_MODEL,
+                        temperature=temperature,
+                        max_tokens=max_tokens,
+                        response_format=response_format,
+                        max_retries=max_retries,
+                        image_data=image_data
+                    )
                 break
 
             # 处理503、429等服务错误

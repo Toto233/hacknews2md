@@ -1,427 +1,221 @@
-# HackNews 中文摘要生成器
+# HackNews 中文摘要发布器
 
-这是一个自动抓取 Hacker News 热门新闻并生成中文摘要的工具。该工具会自动获取新闻内容和相关讨论，使用多个 AI 大模型进行翻译和摘要生成，最终输出易于阅读的中文摘要报告。
+从 Hacker News 抓取热门新闻和讨论，由 Codex 生成中文标题、摘要、排序与标签，并发布到微信公众号草稿箱。可选将同一份内容同步到独立 Astro 博客仓库。
 
-## 🌟 主要特性
+## 仓库职责
 
-- **多 LLM 供应商支持**: 集成 Grok、Gemini、Moonshot 三个 AI 供应商
-- **智能负载均衡**: Gemini 模型间自动轮换，分摊配额限制
-- **自动容错降级**: API 失败时自动切换到备用 LLM
-- **智能限流保护**: 每个 API 独立限流，避免触发限制
-- **完整内容抓取**: 支持 YouTube、Twitter/X、PDF 等多种内容源
-- **图片处理**: 自动下载、转换和优化图片
-- **微信公众号集成**: 一键上传到微信公众号草稿箱
+本仓库是抓取和发布系统的唯一源码仓库，包括 Codex skill：
 
-## 主要功能模块
-
-### 1. 新闻抓取模块 (fetch_news.py)
-- 自动抓取 Hacker News 首页热门新闻
-- 获取新闻标题、链接和讨论页面链接
-- 将新闻数据保存到 SQLite 数据库中
-- 自动过滤重复新闻和特定类型的新闻（如 Ask HN）
-
-### 2. 内容摘要模块 (summarize_news3.py)
-- 抓取新闻原文内容和相关讨论
-- **多 LLM 支持**：支持 Grok、Gemini、Moonshot 三种 AI 模型
-- **智能模型选择**：
-  - Gemini 负载均衡：在 `gemini-2.5-flash` 和 `gemini-2.5-flash-lite` 间轮换
-  - 自动降级策略：主 LLM 失败时自动切换到备用 LLM
-  - 配额保护：自动检测并处理 API 配额超限
-- 支持新闻标题翻译、正文摘要和讨论内容摘要
-- 智能处理各种网页格式和错误情况
-- **多层次内容抓取策略**：
-  - 优先使用 Crawl4AI 异步爬虫进行高效抓取
-  - 自动回退方案：当 Crawl4AI 失败时，自动使用 requests + BeautifulSoup 重试
-  - 二进制内容过滤：自动检测和过滤非文本内容，确保数据库存储纯文本
-  - Content-Type 检测：智能识别HTML/文本内容，跳过PDF、图片等非文本资源
-- **特殊内容源支持**：
-  - YouTube: 自动提取视频字幕
-  - Twitter/X: 支持多种 API 获取推文内容
-  - PDF: 自动提取文本并生成截图
-- **图片处理功能**：
-  - 支持多种图片格式：JPEG、PNG、GIF、WebP、AVIF、SVG
-  - 自动格式转换：WebP、AVIF、SVG 格式自动转换为 PNG 格式存储
-  - 智能图片过滤：自动过滤尺寸小于 100x100 的图片
-  - 本地存储：所有图片下载到本地并按日期分类保存
-
-### 3. 新闻审计模块 (audit_news.py)
-- 检查数据库中未正确获取正文的新闻（正文为空、过短、中文摘要缺失）
-- **两种使用方式**：
-  - **终端交互模式**：逐条处理，支持粘贴正文、自动/手动生成摘要和标题
-  - **CLI 子命令模式**：输出 JSON，供脚本或外部工具调用
-- 支持 `--llm grok` / `--llm gemini` 指定 LLM 供应商
-- 集成在 `auto_process.py` 流程中，摘要生成后、Markdown 生成前自动执行
-
-#### CLI 子命令
-
-```bash
-# 终端交互模式（每次处理一条）
-python src/core/audit_news.py
-python src/core/audit_news.py --llm grok
-
-# 列出所有问题新闻（JSON）
-python src/core/audit_news.py list
-
-# 查看单条新闻详情（JSON）
-python src/core/audit_news.py show <id>
-
-# 从文件写入英文正文
-python src/core/audit_news.py set-content <id> <file>
-
-# 自动生成中文摘要/标题
-python src/core/audit_news.py gen-summary <id> --llm grok
-python src/core/audit_news.py gen-title <id> --llm grok
-
-# 手动设置中文摘要/标题
-python src/core/audit_news.py set-summary <id> <text>
-python src/core/audit_news.py set-title <id> <text>
-
-# 删除新闻
-python src/core/audit_news.py delete <id>
+```text
+hacknews/
+├─ skills/publish-hacknews-codex/  # Codex 发布 skill
+├─ src/                            # 抓取、数据库和内容处理
+├─ scripts/                        # 微信发布与题图生成
+├─ prompts/                        # AI 题图提示词
+├─ config/                         # 配置模板
+├─ tests/                          # 部署与安装测试
+└─ install.ps1                     # Codex skill 安装器
 ```
 
-### 4. Markdown 生成模块 (generate_markdown.py)
-- 将处理后的新闻数据生成美观的 Markdown 文档
-- 包含新闻标题、原文链接、内容摘要和讨论摘要
-- 自动添加时间戳和格式化处理
-- **新增：集成微信草稿箱上传功能**
-  - 支持自动将生成的HTML文件上传到微信公众号草稿箱
-  - 智能路径转换，支持WSL环境下的路径处理
-  - 可配置作者、摘要等文章元信息
-
-### 5. Markdown 转微信公众号 HTML 模块 (markdown_to_html_converter.py)
-- 将带 YAML Front Matter 的 Markdown 转为微信公众号友好 HTML
-- 支持标题、图片、链接行、分隔线、行内代码；内置响应式样式
-
-### 6. 浏览器管理模块 (browser_manager.py)
-- 在浏览器中预览 HTML，支持自动/手动关闭，便于复制到公众号
-
-## 🤖 AI 模型配置
-
-本项目支持三个主流 LLM 供应商，具备完整的容错和负载均衡能力：
-
-### 支持的 LLM 供应商
-
-| 供应商 | 模型 | 限流 | 特性 |
-|--------|------|------|------|
-| **Grok** (X.AI) | grok-3-mini | 50次/分钟 | 快速响应，支持长文本 |
-| **Gemini** (Google) | gemini-2.5-flash<br>gemini-2.5-flash-lite | 8次/分钟<br>(每个模型) | 支持图片输入<br>负载均衡 |
-| **Moonshot** (月之暗面) | moonshot-v1-8k<br>moonshot-v1-32k<br>moonshot-v1-128k | 3次/分钟 | 超长上下文 |
-
-### LLM 核心功能
-
-#### 1. **负载均衡** (Gemini)
-```python
-# Gemini 在两个模型间自动轮换
-gemini-2.5-flash → gemini-2.5-flash-lite → gemini-2.5-flash ...
-```
-- 每个模型独立配额: 20次/天
-- 总配额翻倍: 40次/天
-- 自动轮换，无需手动干预
-
-#### 2. **自动降级策略**
-当主 LLM 失败时，自动按优先级切换：
-```
-Grok 失败 → Gemini → Moonshot
-Gemini 失败 → Grok → Moonshot
-Moonshot 失败 → Gemini → Grok
-```
-
-#### 3. **智能限流保护**
-- 每个 API 独立限流计数
-- 自动等待和重试机制
-- 配额超限自动切换模型
-
-#### 4. **配额智能检测**
-- 自动识别配额超限 (`quota exceeded + limit: 0`)
-- 提取 API 返回的重试延迟 (`retryDelay`)
-- 区分限流 (429) 和配额耗尽
-
-### 配置示例
-
-在 `config/config.json` 中配置：
-
-```json
-{
-  "GROK_API_KEY": "your-grok-api-key",
-  "GROK_MODEL": "grok-3-mini",
-
-  "GEMINI_API_KEY": "your-gemini-api-key",
-  "GEMINI_MODEL": "gemini-2.5-flash",
-
-  "MOONSHOT_API_KEY": "your-moonshot-api-key",
-  "MOONSHOT_MODEL": "moonshot-v1-8k",
-
-  "DEFAULT_LLM": "gemini"
-}
-```
-
-### 使用方法
-
-```python
-from src.llm.llm_utils import call_llm
-
-# 使用默认 LLM
-result = call_llm(prompt="翻译这段文字...")
-
-# 指定使用 Moonshot
-result = call_llm(
-    prompt="总结这篇文章...",
-    llm_type='moonshot',
-    system_content="你是技术专家"
-)
-
-# Gemini 支持图片
-result = call_llm(
-    prompt="描述这张图片",
-    llm_type='gemini',
-    image_data=base64_image
-)
-```
-
-详细文档请参考 [docs/MOONSHOT_INTEGRATION.md](docs/MOONSHOT_INTEGRATION.md)
+`hacknews_recap` 是独立且可选的 Astro 部署仓库。未配置它时，本地 Markdown、HTML、题图和微信公众号发布仍可正常工作。
 
 ## 环境要求
-- Python 3.6+
-- 必要的 Python 包：requests, beautifulsoup4, sqlite3, crawl4ai（用于网页抓取）
-- Pillow 及 pillow-avif-plugin（用于图片处理和格式转换）
-- **至少一个 LLM API 密钥**（需要在 config.json 中配置）：
-  - Grok API 密钥（推荐）
-  - Gemini API 密钥（支持图片）
-  - Moonshot API 密钥（超长上下文）
-- **微信公众号配置**：如需使用草稿箱上传功能，需在 config.json 中配置微信公众号的 appid 和 appsec
-- （HTML 转换模块使用标准库，无需额外第三方依赖）
 
-## 使用方法
-1. 克隆项目并安装依赖：
-```bash
+- Windows PowerShell
+- Python 3.11 或更高版本
+- SQLite CLI
+- Codex
+- 微信公众号 AppID/AppSecret（仅公众号发布需要）
+- `gpt-image-2-skill`（可选；缺失时封面回退到头条原图）
+
+## 安装
+
+```powershell
+git clone <repository-url> hacknews
+cd hacknews
+
+python -m venv .venv
+.\.venv\Scripts\Activate.ps1
 pip install -r requirements.txt
+
+Copy-Item .\config\config.json.example .\config\config.json
+Copy-Item .\config\deployment.example.json .\config\deployment.local.json
+
+powershell -ExecutionPolicy Bypass -File .\install.ps1
 ```
 
-2. 配置 API 和微信公众号：
-- 复制 config/config.json.example 为 config/config.json
-- **配置至少一个 LLM API 密钥**：
-  ```json
-  {
-    "GROK_API_KEY": "your-grok-api-key",
-    "GEMINI_API_KEY": "your-gemini-api-key",
-    "MOONSHOT_API_KEY": "your-moonshot-api-key",
-    "DEFAULT_LLM": "gemini"
-  }
-  ```
-- **（可选）配置微信公众号信息**：
-  ```json
-  {
-    "wechat": {
-        "appid": "your_wechat_appid",
-        "appsec": "your_wechat_appsec"
-    }
-  }
-  ```
+`install.ps1` 将仓库里的 skill 以 Junction 安装到：
 
-3. 运行程序：
-```bash
-# 抓取最新新闻
-python src/core/fetch_news.py
-
-# 生成新闻摘要
-python src/core/summarize_news3.py
-
-# 审计问题新闻（检查正文缺失，交互式修复）
-python src/core/audit_news.py
-
-# 生成 Markdown 报告
-python src/core/generate_markdown.py
+```text
+%CODEX_HOME%\skills\publish-hacknews-codex
 ```
 
-- 运行 `python src/core/generate_markdown.py` 将生成并打开两份文件：`hacknews_summary_YYYYMMDD_HHMM.md` 与 `hacknews_summary_YYYYMMDD_HHMM.html`；HTML 会在浏览器中打开，便于复制到微信公众号编辑器，按回车后关闭浏览器。
-- **新增：微信草稿箱上传**：完成HTML预览后，系统会询问是否自动上传到微信公众号草稿箱（输入 y 或 yes 确认上传）
-- 生成逻辑要点：
-  - 选取最近约 12 小时内且已生成内容与讨论摘要的新闻
-  - 使用大模型对标题吸引力打分排序（失败则按时间）
-  - 抽取标签并生成 YAML 头部（`title/author/description/pubDatetime/tags`）
-  - 每条新闻支持最多 3 张图片、原文与讨论链接、摘要内容
+未设置 `CODEX_HOME` 时使用 `~/.codex`。如果目标已有旧 skill，安装器会先创建时间戳备份，不会删除旧版本。如果目录正被 Codex 占用，请关闭或重启 Codex 后重新运行安装器。
 
-### 可选：单独转换/预览
+## 配置
 
-- 以函数方式转换 Markdown 为 HTML：
+### 主配置
 
-```python
-from src.integrations.markdown_to_html_converter import convert_markdown_to_html
+编辑不纳入 Git 的 `config/config.json`：
 
-with open('your.md', 'r', encoding='utf-8') as f:
-    md = f.read()
-
-html = convert_markdown_to_html(md)
-
-with open('out.html', 'w', encoding='utf-8') as f:
-    f.write(html)
-```
-
-- 命令行转换现有 Markdown：
-
-```bash
-python src/integrations/markdown_to_html_converter.py input.md -o output.html --no-open
-# 自动打开并在 10 秒后关闭
-python src/integrations/markdown_to_html_converter.py input.md -o output.html --auto-close 10
-```
-
-- 浏览器预览：
-
-```python
-from src.utils.browser_manager import display_html_in_browser
-
-display_html_in_browser(html, auto_close=True, close_delay=10)
-```
-
-## Markdown → 公众号 HTML 转换规则（精要）
-
-- 标题：`## 1. 标题` → 公众号风格 `h2`（序号与配色）
-- 图片：`![alt](src)` → 居中、圆角阴影、带说明
-- 链接行：包含中文冒号“：”且含 `http` 的整行 → 高亮链接段落
-- 分隔线：`---` → 渐变分隔线
-- 行内代码：`` `code` `` → 灰底红字内联代码
-- YAML 头部：`title/author/description/pubDatetime/tags` 将用于 `<title>` 与元信息
-
-## 微信草稿箱上传功能
-
-### 功能特性
-- **自动上传**：将生成的HTML文件直接上传到微信公众号草稿箱
-- **智能路径处理**：自动检测WSL环境并进行路径转换
-- **图片处理**：自动处理HTML中的本地图片路径
-- **内容清理**：自动清理HTML内容以适配微信公众号格式
-
-### 使用方法
-1. 在 config/config.json 中配置微信公众号信息：
 ```json
 {
   "wechat": {
-    "appid": "your_wechat_appid",
-    "appsec": "your_wechat_appsec"
+    "appid": "your-appid",
+    "appsec": "your-app-secret"
   }
 }
 ```
 
-2. 运行 generate_markdown.py，在HTML预览完成后选择上传：
-```bash
-python src/core/generate_markdown.py
-# 按回车关闭浏览器后，输入 y 或 yes 确认上传
+也可以使用环境变量：
+
+```text
+WECHAT_APPID
+WECHAT_APPSEC
 ```
 
-### 支持环境
-- **Windows**: 原生Windows环境
-- **WSL**: Windows Subsystem for Linux，自动处理路径转换
-- **Linux**: 原生Linux环境
+仓库还保留 Grok、Gemini 和 Moonshot 的旧接口配置，但 Codex 发布流程不会调用这些模型生成标题和摘要。
 
-### 注意事项
-- 确保微信公众号具有素材管理权限
-- 上传的HTML会自动使用默认缩略图
-- 文章标题会自动截断至64字符以符合微信限制
+### 部署配置
 
-## 注意事项
-- 请确保 config.json 中至少配置了一个 LLM API 密钥
-- 推荐配置多个 LLM 以提高可用性和配额
-- 建议定时运行脚本以获取最新内容
-- 注意控制 API 调用频率，避免超出限制
-- 注意，由于某些网站会屏蔽抓取，导致生成的摘要为空
-- 微信草稿箱上传功能需要有效的微信公众号配置
-- **LLM 配额管理**：
-  - Gemini 自动在两个模型间轮换，有效翻倍配额
-  - 配额超限时会自动切换到备用 LLM
-  - 建议配置多个 API 密钥以提高可用性
+`config/deployment.local.json` 用于保存本机路径，并已加入 `.gitignore`：
 
-## 📚 相关文档
-
-- [docs/MOONSHOT_INTEGRATION.md](docs/MOONSHOT_INTEGRATION.md) - Moonshot AI 集成详细文档
-- [WORKFLOW.md](WORKFLOW.md) - 日常使用工作流程指南
-- [MIGRATION_GUIDE.md](MIGRATION_GUIDE.md) - 项目重组迁移指南
-
-## 🏗️ 项目架构
-
-```
-hacknews/
-├── src/                          # 源代码
-│   ├── core/                     # 核心功能模块
-│   │   ├── fetch_news.py         # 新闻抓取
-│   │   ├── summarize_news3.py    # 摘要生成
-│   │   ├── audit_news.py         # 新闻审计（正文/摘要检查与修复）
-│   │   ├── generate_markdown.py  # Markdown 生成
-│   │   └── archive_news.py       # 归档功能
-│   ├── llm/                      # LLM 相关模块
-│   │   ├── llm_utils.py          # LLM 统一接口 + 负载均衡
-│   │   ├── llm_business.py       # 业务层抽象
-│   │   ├── llm_evaluator.py      # 新闻评分
-│   │   ├── llm_tag_extractor.py  # 标签提取
-│   │   └── prompts.py            # 提示词库
-│   ├── integrations/             # 第三方集成
-│   │   ├── wechat_access_token.py        # 微信API
-│   │   └── markdown_to_html_converter.py # Markdown转HTML
-│   └── utils/                    # 工具类
-│       ├── db_utils.py           # 数据库工具
-│       ├── config.py             # 配置加载器
-│       ├── proxy_config.py       # 代理配置
-│       └── browser_manager.py    # 浏览器管理
-├── scripts/                      # 可执行脚本
-│   └── audit_news.py             # 审计脚本入口
-├── config/                       # 配置文件
-│   ├── config.json               # 主配置
-│   └── config.json.example       # 配置模板
-├── data/                         # 数据文件
-│   └── hacknews.db               # SQLite 数据库
-├── output/                       # 输出文件
-│   ├── markdown/                 # 生成的 Markdown/HTML
-│   └── images/                   # 下载的图片
-└── docs/                         # 文档
+```json
+{
+  "astro": {
+    "enabled": false,
+    "repo_path": "../hacknews_recap",
+    "blog_subdir": "src/data/blog"
+  },
+  "image_generator": {
+    "wrapper_path": ""
+  }
+}
 ```
 
-## 🔍 故障排除
+路径和开关可通过环境变量覆盖：
 
-### LLM API 相关
+- `HACKNEWS_ROOT`
+- `HACKNEWS_DB_PATH`
+- `HACKNEWS_ASTRO_ENABLED`
+- `HACKNEWS_ASTRO_REPO`
+- `HACKNEWS_IMAGE_WRAPPER`
+- `HACKNEWS_DEPLOYMENT_CONFIG`
 
-**问题**: API 调用失败
-```
-解决方案：
-1. 检查 API Key 是否正确
-2. 查看是否触发限流（会自动重试）
-3. 确认配额是否充足
-4. 系统会自动切换到备用 LLM
-```
+题图 wrapper 未显式配置时，按顺序检查：
 
-**问题**: Gemini 配额耗尽
-```
-解决方案：
-1. 系统会自动在 flash 和 flash-lite 间轮换
-2. 配额耗尽时自动切换到 Grok 或 Moonshot
-3. 检查 gemini-2.5-pro 是否被拦截（系统已自动处理）
+```text
+~/.claude/skills/gpt-image-2-skill/scripts/gpt_image_2_skill.cjs
+~/.codex/skills/gpt-image-2-skill/scripts/gpt_image_2_skill.cjs
 ```
 
-**问题**: 图片摘要失败
-```
-解决方案：
-1. 确保使用 Gemini（只有 Gemini 支持图片）
-2. 检查 image_data 是否正确 base64 编码
-3. 查看是否是配额问题
-```
+## 日常发布
 
-### 管理违禁关键字
+在 Codex 中执行：
 
-```bash
-# 添加关键字
-python manage_keywords.py add 敏感词1
-
-# 列出所有关键字
-python manage_keywords.py list
-
-# 删除关键字
-python manage_keywords.py remove 敏感词1
+```text
+Publish HackNews Codex 开始今天的
 ```
 
+Skill 会完成：
 
-## 贡献指南
-欢迎提交 Issue 和 Pull Request 来帮助改进项目。在提交代码前，请确保：
-- 代码符合 PEP 8 规范
-- 添加必要的注释和文档
-- 测试代码功能正常
+1. 按本地自然日将旧新闻移入数据库 `news_history`。
+2. 获取当天 Hacker News 新闻。
+3. 抓取正文、讨论、图片和截图。
+4. 对空正文、短正文、付费墙和防抓取内容做检查。
+5. 由 Codex 生成中文标题、正文摘要、讨论摘要、排序和标签。
+6. 生成 Markdown、HTML，以及可选 Astro Markdown。
+7. 生成并检查 900×383 微信题图。
+8. 发布微信公众号草稿。
+9. 可选提交并推送 Astro 文章。
+10. 打开当天图片目录。
 
-## 许可证
-MIT License
+正文为空或明显过短时，流程会停下来等待人工补充；其他正常发布步骤不会重复要求确认。
+
+## 主要命令
+
+### 抓取新闻
+
+```powershell
+python .\src\core\fetch_news.py
+python .\skills\publish-hacknews-codex\scripts\collect_news_context.py --concurrency 3
+```
+
+### 检查正文和讨论
+
+```powershell
+sqlite3 -header -column ".\data\hacknews.db" "select id, length(coalesce(article_content,'')) as article_len, length(coalesce(discussion_content,'')) as discussion_len, title, news_url from news where date(created_at)=date('now','localtime') order by id;"
+```
+
+### 补抓空讨论
+
+```powershell
+python .\skills\publish-hacknews-codex\scripts\refetch_empty_discussions.py --ids 1234 --attempts 2 --delay 8
+```
+
+### 应用 Codex 计划并渲染
+
+```powershell
+python .\skills\publish-hacknews-codex\scripts\apply_news_edits.py ".\output\codex\hacknews_plan_YYYYMMDD_HHMMSS.json"
+python .\skills\publish-hacknews-codex\scripts\render_manual_markdown.py ".\output\codex\hacknews_plan_YYYYMMDD_HHMMSS.json"
+```
+
+### 生成题图
+
+```powershell
+python .\scripts\generate_wechat_cover_ai.py `
+  ".\output\markdown\hacknews_summary_YYYYMMDD_HHMM.md" `
+  --target-word "主体加事件" `
+  -o ".\output\images\YYYYMMDD\hacknews_cover_ai_YYYYMMDD.png"
+```
+
+题图文字应控制在 10–15 字，保留新闻主体和事件，不能用过度泛化的概念替代原标题。
+
+### 发布公众号草稿
+
+```powershell
+python .\scripts\publish_wechat.py `
+  ".\output\markdown\hacknews_summary_YYYYMMDD_HHMM.md" `
+  --cover-image ".\output\images\YYYYMMDD\hacknews_cover_ai_YYYYMMDD.png"
+```
+
+更多说明见 [微信公众号发布指南](docs/WECHAT_PUBLISH.md)。
+
+## 输出与本地数据
+
+以下内容不纳入 Git：
+
+```text
+config/config.json
+config/deployment.local.json
+data/
+output/
+tmp/
+```
+
+主要输出：
+
+```text
+data/hacknews.db
+output/codex/hacknews_context_*.json
+output/codex/hacknews_plan_*.json
+output/markdown/hacknews_summary_*.md
+output/markdown/hacknews_summary_*.html
+output/images/YYYYMMDD/
+```
+
+## 测试
+
+```powershell
+python -m unittest tests.test_deployment -v
+powershell -NoProfile -ExecutionPolicy Bypass -File .\tests\test_install_skill.ps1
+python -m py_compile .\src\utils\deployment.py .\scripts\generate_wechat_cover_ai.py
+```
+
+## 项目指令
+
+根目录的 `AGENT.md` 是 Codex 自动读取的项目级操作约束，必须留在根目录，不能移动到 `docs`。
+
+## License
+
+MIT

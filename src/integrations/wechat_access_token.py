@@ -538,7 +538,7 @@ class WeChatAccessToken:
             print(f"Unexpected error: {e}")
             return None
     
-    def add_draft_smart(self, articles: list, default_thumb_media_id: str = None) -> Optional[str]:
+    def add_draft_smart(self, articles: list, default_thumb_media_id: str = None, thumb_image_path: str = None) -> Optional[str]:
         """
         Intelligently add articles to WeChat draft box with automatic image handling
         
@@ -559,6 +559,9 @@ class WeChatAccessToken:
                 - need_open_comment: 0 or 1 (optional, default 0)
                 - only_fans_can_comment: 0 or 1 (optional, default 0)
             default_thumb_media_id: Default thumb media ID if no images found
+            thumb_image_path: Preferred local cover image path. When provided,
+                this image is uploaded as the permanent thumb and overrides
+                automatic "first image of first article" selection.
             
         Returns:
             Media ID string if successful, None if failed
@@ -571,6 +574,19 @@ class WeChatAccessToken:
         processed_articles = []
         first_thumb_media_id = None
         first_article_has_image = False  # Track if first article has any images
+        forced_thumb_media_id = None
+
+        if thumb_image_path:
+            if os.path.exists(thumb_image_path):
+                print(f"Using preferred thumb image: {thumb_image_path}")
+                thumb_result = self.upload_permanent_material(thumb_image_path, "thumb")
+                if thumb_result:
+                    forced_thumb_media_id = thumb_result['media_id']
+                    print(f"  [OK] Preferred thumb media ID: {forced_thumb_media_id}")
+                else:
+                    print(f"  [WARN] Preferred thumb upload failed, falling back to automatic image selection")
+            else:
+                print(f"  [WARN] Preferred thumb image not found: {thumb_image_path}")
 
         for i, article in enumerate(articles):
             # Check required fields
@@ -614,6 +630,11 @@ class WeChatAccessToken:
                 for local_path in local_images:
                     # Check if file exists
                     if os.path.exists(local_path):
+                        file_size = os.path.getsize(local_path)
+                        if file_size > 1024 * 1024:
+                            print(f"  [SKIP] Oversize image (>1MB), leave for manual upload: {local_path}")
+                            continue
+
                         print(f"  Uploading: {local_path}")
                         uploaded_url = self.upload_image_for_article(local_path)
 
@@ -623,7 +644,7 @@ class WeChatAccessToken:
                             print(f"    [OK] Replaced with: {uploaded_url}")
 
                             # ONLY use first image of first article as thumb, not from other articles
-                            if i == 0 and first_thumb_media_id is None:
+                            if i == 0 and first_thumb_media_id is None and not forced_thumb_media_id:
                                 # Upload as permanent material for thumb
                                 print(f"  Using as thumb image: {local_path}")
                                 thumb_result = self.upload_permanent_material(local_path, "thumb")
@@ -631,7 +652,7 @@ class WeChatAccessToken:
                                     first_thumb_media_id = thumb_result['media_id']
                                     print(f"    [OK] Thumb media ID: {first_thumb_media_id}")
                         else:
-                            print(f"    [ERROR] Failed to upload: {local_path}")
+                            print(f"    [WARN] Skipped or failed to upload: {local_path}")
                     else:
                         print(f"  [WARN] Image file not found: {local_path}")
             else:
@@ -653,9 +674,12 @@ class WeChatAccessToken:
             
             # Set thumb_media_id for news articles
             if processed_article['article_type'] == 'news':
+                if forced_thumb_media_id:
+                    processed_article['thumb_media_id'] = forced_thumb_media_id
+                    print(f"  Article {i+1} using preferred generated thumb: {forced_thumb_media_id}")
                 # CRITICAL: Only use first_thumb_media_id if first article has images
                 # If first article has NO images, always use default thumb
-                if first_article_has_image and first_thumb_media_id:
+                elif first_article_has_image and first_thumb_media_id:
                     # First article has images, use its first image as thumb
                     processed_article['thumb_media_id'] = first_thumb_media_id
                     print(f"  Article {i+1} using first article's image as thumb: {first_thumb_media_id}")
@@ -812,7 +836,7 @@ class WeChatAccessToken:
         Upload image for article content (not permanent material, with caching and retry)
 
         Args:
-            file_path: Path to the image file (jpg/png, max 1MB)
+            file_path: Path to the image file (supported formats, max 1MB for auto upload)
 
         Returns:
             Image URL if successful, None if failed
@@ -834,11 +858,11 @@ class WeChatAccessToken:
             print("Error: Only jpg/png/webp formats are supported for article images")
             return None
 
-        # Check file size (1MB limit for jpg/png, 2MB for webp)
+        # Skip oversize images and leave them for manual upload during final review.
         file_size = os.path.getsize(file_path)
-        size_limit = 2 * 1024 * 1024 if file_ext == '.webp' else 1024 * 1024
+        size_limit = 1024 * 1024
         if file_size > size_limit:
-            print(f"Error: File size {file_size} bytes exceeds {size_limit//1024//1024}MB limit")
+            print(f"[SKIP] File size {file_size} bytes exceeds 1MB auto-upload limit, leave for manual upload: {file_path}")
             return None
 
         # Get access token

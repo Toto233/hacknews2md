@@ -4,11 +4,37 @@ import os
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..')))
 
 import sqlite3
-from datetime import datetime
+
+DB_PATH = 'data/hacknews.db'
+
+NEWS_ARCHIVE_COLUMNS = [
+    'id',
+    'title',
+    'title_chs',
+    'news_url',
+    'discuss_url',
+    'content_summary',
+    'discuss_summary',
+    'article_content',
+    'discussion_content',
+    'largest_image',
+    'image_2',
+    'image_3',
+    'screenshot',
+    'created_at',
+]
+
+
+def _ensure_column(cursor, table_name, column_name, column_type='TEXT'):
+    cursor.execute(f'PRAGMA table_info({table_name})')
+    columns = [column[1] for column in cursor.fetchall()]
+    if column_name not in columns:
+        cursor.execute(f'ALTER TABLE {table_name} ADD COLUMN {column_name} {column_type}')
+
 
 def create_history_table():
     """创建新闻历史表"""
-    conn = sqlite3.connect('data/hacknews.db')
+    conn = sqlite3.connect(DB_PATH)
     cursor = conn.cursor()
 
     # 创建历史表，结构与主表相同
@@ -21,25 +47,43 @@ def create_history_table():
         discuss_url TEXT,
         content_summary TEXT,
         discuss_summary TEXT,
+        article_content TEXT,
+        discussion_content TEXT,
+        largest_image TEXT,
+        image_2 TEXT,
+        image_3 TEXT,
+        screenshot TEXT,
         created_at TIMESTAMP,
         archived_at TIMESTAMP
     )
     ''')
+    for column in NEWS_ARCHIVE_COLUMNS:
+        if column == 'id':
+            continue
+        _ensure_column(cursor, 'news_history', column)
 
     conn.commit()
     conn.close()
     print("历史表创建成功")
 
 def archive_old_news():
-    """将一天前的新闻数据移动到历史表"""
-    conn = sqlite3.connect('data/hacknews.db')
+    """将非当天的新闻数据移动到历史表。
+
+    归档以本地自然日为边界，不再使用“减 N 小时”的滑动窗口。
+    每天执行抓取前，凡是 created_at 的日期早于今天的新闻都应归档。
+    """
+    create_history_table()
+
+    conn = sqlite3.connect(DB_PATH)
     cursor = conn.cursor()
-    
-    # 查找半天前的新闻
-    cursor.execute('''
-    SELECT id, title, title_chs, news_url, discuss_url, content_summary, discuss_summary, created_at
+
+    columns_sql = ', '.join(NEWS_ARCHIVE_COLUMNS)
+
+    # 查找本地日期早于今天的新闻。不要按小时偏移，否则晚间/凌晨执行会漏归档或误删。
+    cursor.execute(f'''
+    SELECT {columns_sql}
     FROM news
-    WHERE created_at < datetime('now', '-0.3 day', 'localtime')
+    WHERE date(created_at) < date('now', 'localtime')
     ''')
     
     old_news = cursor.fetchall()
@@ -50,17 +94,18 @@ def archive_old_news():
         return
     
     # 将旧新闻插入到历史表（如果ID已存在则跳过）
+    placeholders = ', '.join(['?'] * len(NEWS_ARCHIVE_COLUMNS))
     for news in old_news:
-        cursor.execute('''
+        cursor.execute(f'''
         INSERT OR IGNORE INTO news_history
-        (id, title, title_chs, news_url, discuss_url, content_summary, discuss_summary, created_at, archived_at)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, datetime('now', 'localtime'))
-        ''', (*news, ))
+        ({columns_sql}, archived_at)
+        VALUES ({placeholders}, datetime('now', 'localtime'))
+        ''', news)
     
     # 从主表中删除已归档的新闻
     cursor.execute('''
     DELETE FROM news
-    WHERE created_at < datetime('now', '-0.5 day', 'localtime')
+    WHERE date(created_at) < date('now', 'localtime')
     ''')
     
     conn.commit()
@@ -69,7 +114,6 @@ def archive_old_news():
     print(f"成功归档 {len(old_news)} 条旧新闻")
 
 def main():
-    create_history_table()
     archive_old_news()
 
 if __name__ == "__main__":

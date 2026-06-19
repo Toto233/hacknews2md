@@ -1,0 +1,4 @@
+interface:
+  display_name: "Publish HackNews Codex"
+  short_description: "用 Codex 负责翻译、摘要、排序和头条选择，再复用现有脚本发布 HackNews。"
+  default_prompt: "Use $publish-hacknews-codex to publish today’s HackNews by letting Codex generate Chinese summaries, titles, ranking, and tags before publishing."

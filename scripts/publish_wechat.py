@@ -19,6 +19,7 @@ sys.path.insert(0, project_root)
 from src.integrations.markdown_to_html_converter import convert_markdown_to_html
 from src.utils.config import Config
 from src.integrations.wechat_access_token import WeChatAccessToken
+from scripts.generate_wechat_cover_ai import generate_cover_ai
 
 
 def is_wsl():
@@ -180,7 +181,13 @@ def extract_html_content(html_content: str) -> Dict:
     }
 
 
-def publish_to_wechat(md_file_path: str, author: str = None, digest: str = None) -> Optional[str]:
+def publish_to_wechat(
+    md_file_path: str,
+    author: str = None,
+    digest: str = None,
+    cover_image: str = None,
+    auto_cover: bool = True,
+) -> Optional[str]:
     """
     发布 Markdown 文件到微信公众号草稿箱
 
@@ -218,6 +225,21 @@ def publish_to_wechat(md_file_path: str, author: str = None, digest: str = None)
     print(f"作者: {final_author}")
     print(f"摘要: {final_digest[:100]}..." if final_digest else "摘要: 无")
 
+    generated_cover = None
+    if not cover_image and auto_cover:
+        try:
+            generated_cover = generate_cover_ai(md_file_path)
+            cover_image = generated_cover
+            print(f"AI 自动生成微信题图: {cover_image}")
+        except Exception as e:
+            print(f"[WARN] AI 题图生成失败，将回退到第一篇新闻图片: {e}")
+
+    if cover_image:
+        cover_image = smart_path_convert(cover_image)
+        if not os.path.exists(cover_image):
+            print(f"[WARN] 指定题图不存在，将回退到第一篇新闻图片: {cover_image}")
+            cover_image = None
+
     # 转换为 HTML
     print("正在转换为 HTML...")
     html_content = convert_markdown_to_html(markdown_content)
@@ -242,7 +264,10 @@ def publish_to_wechat(md_file_path: str, author: str = None, digest: str = None)
     # 确定使用哪个缩略图
     DEFAULT_THUMB_MEDIA_ID = "53QZJEu2zs4etGM_3jLi5wl7KNs2RM1RnV_iiGWQmWnYf7qEq2kvHRIIeBCBnAEb"
 
-    if len(extracted['first_news_images']) > 0:
+    if cover_image:
+        print(f"使用生成/指定题图作为封面: {cover_image}")
+        thumb_media_id_to_use = None
+    elif len(extracted['first_news_images']) > 0:
         print(f"使用第一篇文章的图片作为封面: {extracted['first_news_images'][0]}")
         thumb_media_id_to_use = None  # 让 add_draft_smart 自动上传
     else:
@@ -263,7 +288,7 @@ def publish_to_wechat(md_file_path: str, author: str = None, digest: str = None)
 
     # 上传到草稿箱
     print("\n正在上传到微信公众号草稿箱...")
-    media_id = wechat.add_draft_smart([article], thumb_media_id_to_use)
+    media_id = wechat.add_draft_smart([article], thumb_media_id_to_use, thumb_image_path=cover_image)
 
     if media_id:
         print(f"\n✓ 成功上传到草稿箱!")
@@ -295,6 +320,8 @@ def main():
     parser.add_argument('md_file', help='要发布的 Markdown 文件路径')
     parser.add_argument('--author', help='文章作者（覆盖 YAML 中的值）')
     parser.add_argument('--digest', help='文章摘要（覆盖 YAML 中的值）')
+    parser.add_argument('--cover-image', help='指定微信题图路径；默认会自动生成题图')
+    parser.add_argument('--no-auto-cover', action='store_true', help='禁用自动题图，回退到第一篇新闻图片')
     parser.add_argument('--preview', '-p', action='store_true', help='预览模式，只显示信息不上传')
 
     args = parser.parse_args()
@@ -310,7 +337,13 @@ def main():
         return
 
     # 发布到微信
-    media_id = publish_to_wechat(args.md_file, args.author, args.digest)
+    media_id = publish_to_wechat(
+        args.md_file,
+        args.author,
+        args.digest,
+        cover_image=args.cover_image,
+        auto_cover=not args.no_auto_cover,
+    )
 
     if media_id:
         sys.exit(0)

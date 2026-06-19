@@ -234,12 +234,9 @@ class NewsCrawler:
             return "", []
 
         try:
-            # 使用 Scrapling Fetcher 进行抓取
-            from scrapling.fetchers import Fetcher
-            
-            # 创建 fetcher 实例并启用隐身模式
-            fetcher = Fetcher(auto_match=True)
-            page = fetcher.get(url, stealthy_headers=True)
+            # 使用统一的 Fetcher 调用风格，避免实例/类调用混用
+            Fetcher.configure(adaptive=True)
+            page = Fetcher.get(url, stealthy_headers=True)
 
             logger.info(f"[SCRAPLING] 成功 | URL: {url[:60]}...")
 
@@ -1537,10 +1534,10 @@ def fetch_with_scrapling_fetcher(url: str, stealthy: bool = False) -> Tuple[str,
         raise ImportError("Scrapling 未安装。运行: pip install scrapling")
     
     try:
-        # 使用 Fetcher 抓取网页
+        # 使用统一的 Fetcher 调用风格，避免实例/类调用混用
         if stealthy:
-            fetcher = Fetcher(auto_match=True)
-            page = fetcher.get(url, stealthy_headers=True)
+            Fetcher.configure(adaptive=True)
+            page = Fetcher.get(url, stealthy_headers=True)
         else:
             page = Fetcher.get(url)
         

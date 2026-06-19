@@ -1,0 +1,10 @@
+{
+  "astro": {
+    "enabled": false,
+    "repo_path": "../hacknews_recap",
+    "blog_subdir": "src/data/blog"
+  },
+  "image_generator": {
+    "wrapper_path": "C:/Users/XXXXXXX/.claude/skills/gpt-image-2-skill/scripts/gpt_image_2_skill.cjs"
+  }
+}

@@ -69,10 +69,30 @@ def init_database():
         discuss_url TEXT,
         content_summary TEXT,
         discuss_summary TEXT,
+        article_content TEXT,
+        discussion_content TEXT,
+        largest_image TEXT,
+        image_2 TEXT,
+        image_3 TEXT,
+        screenshot TEXT,
         created_at TIMESTAMP,
         archived_at TIMESTAMP
     )
     ''')
+    cursor.execute("PRAGMA table_info(news_history)")
+    history_columns = [column[1] for column in cursor.fetchall()]
+    if 'article_content' not in history_columns:
+        cursor.execute('ALTER TABLE news_history ADD COLUMN article_content TEXT')
+    if 'discussion_content' not in history_columns:
+        cursor.execute('ALTER TABLE news_history ADD COLUMN discussion_content TEXT')
+    if 'largest_image' not in history_columns:
+        cursor.execute('ALTER TABLE news_history ADD COLUMN largest_image TEXT')
+    if 'image_2' not in history_columns:
+        cursor.execute('ALTER TABLE news_history ADD COLUMN image_2 TEXT')
+    if 'image_3' not in history_columns:
+        cursor.execute('ALTER TABLE news_history ADD COLUMN image_3 TEXT')
+    if 'screenshot' not in history_columns:
+        cursor.execute('ALTER TABLE news_history ADD COLUMN screenshot TEXT')
 
     # 创建微信 access_tokens 表
     cursor.execute('''

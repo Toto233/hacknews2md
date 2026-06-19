@@ -52,15 +52,32 @@ def extract_domain(url: str) -> str:
     """从URL中提取域名"""
     try:
         parsed_url = urllib.parse.urlparse(url)
-        domain = parsed_url.netloc
-        return domain
+        return normalize_domain(parsed_url.netloc)
     except Exception as e:
         logger.warning(f"解析URL域名失败: {url}, 错误: {e}")
         return ""
 
+
+def normalize_domain(domain: str) -> str:
+    """规范化域名，避免 www 与裸域过滤规则不一致。"""
+    domain = (domain or "").strip().lower().rstrip(".")
+    if ":" in domain:
+        domain = domain.split(":", 1)[0]
+    if domain.startswith("www."):
+        domain = domain[4:]
+    return domain
+
+
 def is_domain_filtered(domain: str, cursor: sqlite3.Cursor) -> bool:
     """检查域名是否在过滤列表中"""
-    cursor.execute('SELECT id FROM filtered_domains WHERE domain = ?', (domain,))
+    normalized_domain = normalize_domain(domain)
+    cursor.execute('''
+        SELECT id
+        FROM filtered_domains
+        WHERE lower(trim(domain)) = ?
+           OR lower(trim(domain)) = ?
+           OR lower(trim(domain)) = ?
+    ''', (normalized_domain, f"www.{normalized_domain}", f"{normalized_domain}/"))
     return cursor.fetchone() is not None
 
 
@@ -188,6 +205,7 @@ def save_to_database(news_items: List[Dict[str, str]]) -> int:
 def add_filtered_domain(domain: str, reason: str = "") -> bool:
     """添加一个需要过滤的域名"""
     try:
+        domain = normalize_domain(domain)
         with get_db_connection() as conn:
             cursor = conn.cursor()
             cursor.execute('''
