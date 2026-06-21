@@ -31,7 +31,7 @@ def _load_stage(stage: Stage):
     return getattr(mod, class_name)()
 
 
-def _print(msg, style=None):
+def _print(msg="", style=None):
     """Simple console print with optional color."""
     if style == "green":
         print(f"\033[32m{msg}\033[0m")
@@ -52,10 +52,11 @@ def _print(msg, style=None):
 @click.pass_context
 def main(ctx, project_root):
     """hn2md: Unified HackNews-to-Markdown publishing CLI."""
-    setup_logging()
     root = Path(project_root) if project_root else None
+    runtime_ctx = RuntimeContext.create(root)
+    setup_logging(log_dir=runtime_ctx.output_dir / "logs")
     ctx.ensure_object(dict)
-    ctx.obj["ctx"] = RuntimeContext.create(root)
+    ctx.obj["ctx"] = runtime_ctx
 
 
 @main.command()
@@ -70,6 +71,7 @@ def doctor(ctx_obj, json_output):
     rt = ctx_obj.obj["ctx"]
 
     if json_output:
+        setup_logging(log_dir=rt.output_dir / "logs", console=False)
         result = run_doctor_json(rt)
         print(json_mod.dumps(result, ensure_ascii=False, indent=2))
         sys.exit(0 if result["all_ok"] else 1)

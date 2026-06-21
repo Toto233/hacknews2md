@@ -11,7 +11,8 @@ Provides:
 import json
 import logging
 import sys
-from datetime import datetime
+from datetime import UTC, datetime
+from pathlib import Path
 from typing import Any
 
 logger = logging.getLogger(__name__)
@@ -22,7 +23,7 @@ class JSONFormatter(logging.Formatter):
 
     def format(self, record: logging.LogRecord) -> str:
         log_entry = {
-            "timestamp": datetime.utcnow().isoformat() + "Z",
+            "timestamp": datetime.now(UTC).isoformat().replace("+00:00", "Z"),
             "level": record.levelname,
             "logger": record.name,
             "message": record.getMessage(),
@@ -37,13 +38,23 @@ class JSONFormatter(logging.Formatter):
         return json.dumps(log_entry, ensure_ascii=False)
 
 
-def setup_logging(json_mode: bool = False, level: int = logging.INFO) -> None:
+def setup_logging(
+    json_mode: bool = False,
+    level: int = logging.INFO,
+    log_dir: str | Path | None = None,
+    console: bool = True,
+) -> Path | None:
     """Configure logging for the application.
 
     Args:
         json_mode: If True, output structured JSON logs (for production).
                    If False, output human-readable console logs (for development).
         level: Logging level (default: INFO).
+        log_dir: Optional directory for the daily UTF-8 log file.
+        console: If True, also write human-readable logs to stderr.
+
+    Returns:
+        The daily log path when file logging is enabled, otherwise ``None``.
     """
     root = logging.getLogger()
     root.setLevel(level)
@@ -51,21 +62,33 @@ def setup_logging(json_mode: bool = False, level: int = logging.INFO) -> None:
     # Remove existing handlers
     for handler in root.handlers[:]:
         root.removeHandler(handler)
-
-    handler = logging.StreamHandler(sys.stdout)
-    handler.setLevel(level)
+        handler.close()
 
     if json_mode:
-        handler.setFormatter(JSONFormatter())
+        formatter: logging.Formatter = JSONFormatter()
     else:
-        handler.setFormatter(
-            logging.Formatter(
-                "%(asctime)s | %(levelname)-8s | %(message)s",
-                datefmt="%Y-%m-%d %H:%M:%S",
-            )
+        formatter = logging.Formatter(
+            "%(asctime)s | %(levelname)-8s | %(message)s",
+            datefmt="%Y-%m-%d %H:%M:%S",
         )
 
-    root.addHandler(handler)
+    log_path = None
+    if log_dir is not None:
+        resolved_log_dir = Path(log_dir)
+        resolved_log_dir.mkdir(parents=True, exist_ok=True)
+        log_path = resolved_log_dir / f"hn2md-{datetime.now():%Y%m%d}.log"
+        file_handler = logging.FileHandler(log_path, encoding="utf-8")
+        file_handler.setLevel(level)
+        file_handler.setFormatter(formatter)
+        root.addHandler(file_handler)
+
+    if console:
+        console_handler = logging.StreamHandler(sys.stderr)
+        console_handler.setLevel(level)
+        console_handler.setFormatter(formatter)
+        root.addHandler(console_handler)
+
+    return log_path
 
 
 def safe_print(*args, **kwargs):

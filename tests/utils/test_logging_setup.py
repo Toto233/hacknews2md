@@ -3,6 +3,8 @@
 
 import json
 import logging
+from datetime import datetime
+
 import pytest
 
 from src.utils.logging_setup import (
@@ -189,3 +191,39 @@ class TestSetupLogging:
         setup_logging(level=logging.DEBUG)
         root = logging.getLogger()
         assert root.level == logging.DEBUG
+
+    def test_writes_daily_utf8_log_file(self, tmp_path):
+        """File logging should persist UTF-8 messages in a dated file."""
+        log_path = setup_logging(log_dir=tmp_path, console=False)
+        logging.getLogger("test.file").info("中文日志")
+        for handler in logging.getLogger().handlers:
+            handler.flush()
+
+        assert log_path == tmp_path / f"hn2md-{datetime.now():%Y%m%d}.log"
+        assert log_path is not None
+        assert "中文日志" in log_path.read_text(encoding="utf-8")
+
+    def test_console_logs_use_stderr(self, tmp_path, capsys):
+        """Console logs should not contaminate stdout."""
+        setup_logging(log_dir=tmp_path)
+        logging.getLogger("test.console").warning("console warning")
+
+        captured = capsys.readouterr()
+        assert captured.out == ""
+        assert "console warning" in captured.err
+
+    def test_file_only_mode_has_no_console_output(self, tmp_path, capsys):
+        """Machine-readable commands should be able to disable console logs."""
+        setup_logging(log_dir=tmp_path, console=False)
+        logging.getLogger("test.file_only").warning("file only")
+
+        captured = capsys.readouterr()
+        assert captured.out == ""
+        assert captured.err == ""
+
+    def test_repeated_setup_does_not_duplicate_handlers(self, tmp_path):
+        """Reconfiguration should replace handlers rather than accumulating them."""
+        setup_logging(log_dir=tmp_path)
+        setup_logging(log_dir=tmp_path)
+
+        assert len(logging.getLogger().handlers) == 2

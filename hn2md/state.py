@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+import time
 from dataclasses import asdict, dataclass, field
 from datetime import datetime
 from pathlib import Path
@@ -13,6 +14,18 @@ from typing import Any
 from hn2md.constants import RETRY_BUDGETS, Stage
 
 logger = logging.getLogger(__name__)
+
+
+def _replace_with_retry(src: Path, dst: Path, attempts: int = 3, delay: float = 0.05) -> None:
+    """Atomically replace a file, tolerating brief Windows file locks."""
+    for attempt in range(attempts):
+        try:
+            os.replace(str(src), str(dst))
+            return
+        except PermissionError:
+            if attempt == attempts - 1:
+                raise
+            time.sleep(delay)
 
 
 VALID_TRANSITIONS: set[tuple[Stage, Stage]] = {
@@ -97,7 +110,7 @@ class PublishJob:
                     logger.debug(f"Failed to create backup: {bak_path}")
 
             # Atomic replace
-            os.replace(str(tmp_path), str(path))
+            _replace_with_retry(tmp_path, path)
         except OSError as e:
             logger.error(f"State write failed: {e} | path={path}")
             # Attempt recovery from backup

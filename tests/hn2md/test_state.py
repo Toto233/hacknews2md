@@ -79,6 +79,27 @@ class TestPublishJob:
         sample_job.to_json(path)
         assert bak_path.exists()
 
+    def test_atomic_write_retries_transient_windows_lock(self, sample_job, job_dir, monkeypatch):
+        """A transient Windows file lock should not fail the state write."""
+        job_dir.mkdir(parents=True)
+        path = job_dir / "test_job.json"
+        real_replace = os.replace
+        attempts = 0
+
+        def flaky_replace(src, dst):
+            nonlocal attempts
+            attempts += 1
+            if attempts == 1:
+                raise PermissionError(5, "Access is denied")
+            return real_replace(src, dst)
+
+        monkeypatch.setattr("hn2md.state.os.replace", flaky_replace)
+
+        sample_job.to_json(path)
+
+        assert attempts == 2
+        assert path.exists()
+
     def test_from_json_corrupted_primary_recovers_from_backup(self, sample_job, job_dir):
         """from_json should recover from .bak if primary is corrupted."""
         job_dir.mkdir(parents=True)

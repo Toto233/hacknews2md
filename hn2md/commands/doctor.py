@@ -3,6 +3,7 @@
 import os
 import shutil
 import sys
+from pathlib import Path
 from typing import NamedTuple
 
 from src.db.connection import get_db
@@ -16,6 +17,9 @@ class CheckResult(NamedTuple):
 
 def run_doctor(ctx) -> list[CheckResult]:
     checks = []
+    db_path = Path(ctx.db_path)
+    config_path = Path(ctx.config_path)
+    output_dir = Path(ctx.output_dir)
 
     # 1. Python version
     v = sys.version_info
@@ -24,11 +28,11 @@ def run_doctor(ctx) -> list[CheckResult]:
 
     # 2. SQLite database accessible
     try:
-        with get_db(str(ctx.db_path)) as conn:
+        with get_db(str(db_path)) as conn:
             cur = conn.cursor()
             cur.execute("SELECT count(*) FROM news")
             count = cur.fetchone()[0]
-        checks.append(CheckResult("SQLite database", True, f"{ctx.db_path} ({count} rows)"))
+        checks.append(CheckResult("SQLite database", True, f"{db_path} ({count} rows)"))
     except Exception as e:
         checks.append(CheckResult("SQLite database", False, str(e)))
 
@@ -42,9 +46,8 @@ def run_doctor(ctx) -> list[CheckResult]:
         checks.append(CheckResult("SQLite integrity", False, str(e)))
 
     # 4. Config file exists
-    cfg = ctx.config_path
-    if cfg.exists():
-        checks.append(CheckResult("config/config.json", True, str(cfg)))
+    if config_path.exists():
+        checks.append(CheckResult("config/config.json", True, str(config_path)))
     else:
         checks.append(CheckResult("config/config.json", False, "missing"))
 
@@ -89,7 +92,7 @@ def run_doctor(ctx) -> list[CheckResult]:
 
     # 8. Disk space
     try:
-        data_dir = os.path.dirname(str(ctx.db_path))
+        data_dir = os.path.dirname(str(db_path))
         if os.path.exists(data_dir):
             usage = shutil.disk_usage(data_dir)
             free_gb = usage.free / (1024**3)
@@ -102,7 +105,6 @@ def run_doctor(ctx) -> list[CheckResult]:
 
     # 9. Output directory writable
     try:
-        output_dir = ctx.output_dir
         output_dir.mkdir(parents=True, exist_ok=True)
         test_file = output_dir / ".write_test"
         test_file.write_text("test", encoding="utf-8")
