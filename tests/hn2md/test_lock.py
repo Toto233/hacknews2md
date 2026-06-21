@@ -3,7 +3,9 @@
 import os
 import time
 
-from hn2md.lock import LockError, daily_lock
+import pytest
+
+from hn2md.lock import LockError, _pid_alive, daily_lock
 
 
 def test_lock_creates_file(tmp_path):
@@ -64,6 +66,12 @@ def test_lock_dead_pid_recovery(tmp_path):
     lock_path.write_text(f"0|{time.time():.0f}", encoding="utf-8")
     with daily_lock(lock_path):
         assert True  # acquired successfully
+
+
+@pytest.mark.parametrize("pid", [0, -1])
+def test_pid_alive_rejects_nonpositive_pid(pid):
+    """Nonpositive values are process selectors on Unix, not valid lock PIDs."""
+    assert _pid_alive(pid) is False
 
 
 def test_lock_cleans_up_on_exception(tmp_path):

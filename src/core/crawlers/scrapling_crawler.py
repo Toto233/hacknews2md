@@ -44,7 +44,6 @@ class ScraplingCrawler:
             return "", []
 
         try:
-            Fetcher.configure(adaptive=True)
             page = Fetcher.get(url, stealthy_headers=True)
         except Exception as exc:
             logger.error("[SCRAPLING] Fetch failed for %s: %s", url[:60], exc)

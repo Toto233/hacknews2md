@@ -45,6 +45,8 @@ def daily_lock(lock_path: Path) -> Generator[None, None, None]:
 
 
 def _pid_alive(pid: int) -> bool:
+    if pid <= 0:
+        return False
     if sys.platform == "win32":
         import ctypes
 
