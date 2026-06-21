@@ -9,12 +9,33 @@ from datetime import datetime
 
 from _bootstrap import DB_PATH, REPO_ROOT
 
-from src.core.summarize_news5 import (  # noqa: E402
-    MIN_ARTICLE_CONTENT_CHARS,
-    get_article_content_async,
+from src.core.crawlers import ScraplingCrawler  # noqa: E402
+from src.core.handlers import (  # noqa: E402
     get_discussion_content_async,
+    save_article_image,
     save_page_screenshot,
 )
+from src.utils.config import Config  # noqa: E402
+
+
+CONFIG = Config(str(REPO_ROOT / "config" / "config.json"))
+MIN_ARTICLE_CONTENT_CHARS = int(CONFIG.get("MIN_ARTICLE_CONTENT_CHARS", 100))
+
+
+async def get_article_content_async(url: str, title: str) -> tuple[str, list[str], list[str]]:
+    """Collect a general web article with the current crawler abstraction."""
+    crawler = ScraplingCrawler()
+    try:
+        content, image_urls = await crawler.crawl_article(url)
+    finally:
+        await crawler.close()
+
+    image_paths = [
+        path
+        for index, image_url in enumerate(image_urls[:3], 1)
+        if (path := save_article_image(image_url, url, f"{title}_{index}"))
+    ]
+    return content, image_paths, image_paths
 
 
 async def collect_one(row: sqlite3.Row) -> dict:

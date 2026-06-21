@@ -1,6 +1,11 @@
 import json
-from .prompts import NEWS_ATTRACTION_PROMPT
+import logging
+
 from .llm_utils import call_llm
+from .prompts import NEWS_ATTRACTION_PROMPT
+
+logger = logging.getLogger(__name__)
+
 
 def evaluate_news_attraction(news_items, llm_type=None, model=None):
     """使用大模型评价新闻标题的吸引力"""
@@ -14,24 +19,31 @@ def evaluate_news_attraction(news_items, llm_type=None, model=None):
     # 组装prompt
     prompt = NEWS_ATTRACTION_PROMPT.format(titles_text=titles_text)
     # 调用统一LLM接口
-    result_text = call_llm(prompt, llm_type=llm_type, response_format={"type": "json_object"}, model=model, temperature=None, max_tokens=8192)
+    result_text = call_llm(
+        prompt,
+        llm_type=llm_type,
+        response_format={"type": "json_object"},
+        model=model,
+        temperature=None,
+        max_tokens=8192,
+    )
     # 清理可能的markdown代码块标记
     result_text = result_text.strip()
-    if result_text.startswith('```json'):
+    if result_text.startswith("```json"):
         result_text = result_text[7:]  # 移除 ```json
-    if result_text.startswith('```'):
+    if result_text.startswith("```"):
         result_text = result_text[3:]  # 移除 ```
-    if result_text.endswith('```'):
+    if result_text.endswith("```"):
         result_text = result_text[:-3]  # 移除结尾的 ```
     result_text = result_text.strip()
     # 解析结果
     try:
         result = json.loads(result_text)
-        ratings = result.get('ratings', [])
-        headline_reason = result.get('headline_reason', '')
-        rating_tuples = [(item['id'], item['score']) for item in ratings]
+        ratings = result.get("ratings", [])
+        headline_reason = result.get("headline_reason", "")
+        rating_tuples = [(item["id"], item["score"]) for item in ratings]
         return rating_tuples, headline_reason
     except Exception as e:
-        print(f"无法解析LLM返回的JSON: {e}")
-        print(f"原始返回内容: {result_text[:100]}...")
+        logger.error(f"无法解析LLM返回的JSON: {e}")
+        logger.debug(f"原始返回内容: {result_text[:100]}...")
         return [], ""

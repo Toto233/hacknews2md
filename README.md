@@ -204,12 +204,97 @@ output/markdown/hacknews_summary_*.html
 output/images/YYYYMMDD/
 ```
 
+## hn2md CLI
+
+项目提供统一的 `hn2md` 命令行工具，支持全流程一键发布和断点续跑。
+
+### 安装 CLI
+
+```powershell
+pip install -e .
+```
+
+### 环境检查
+
+```powershell
+hn2md doctor          # 彩色终端输出
+hn2md doctor --json   # CI/自动化 JSON 输出（exit code 表示通过/失败）
+```
+
+检查 Python 版本、SQLite 数据库完整性、配置文件、LLM API Key、网络连通性。
+
+### 数据库备份
+
+```powershell
+hn2md backup                        # 备份到默认路径，带完整性检查
+hn2md backup --dest D:\backups\     # 备份到自定义路径
+hn2md backup --max-backups 14       # 保留最近 14 份
+hn2md backup --no-check             # 跳过完整性检查
+```
+
+`release` 命令默认在管道开始前自动备份（`--backup`），可用 `--no-backup` 关闭。
+
+### 一键发布
+
+```powershell
+# 完整流程（自动备份 + 发布）
+hn2md release
+
+# 预览模式：运行全流程但不实际发布到微信
+hn2md release --dry-run
+
+# 跳过封面生成和微信发布
+hn2md release --skip-cover --skip-publish
+
+# 从指定阶段恢复
+hn2md release --from-stage PLANNING
+
+# 指定日期
+hn2md release --date 20260620
+
+# 跳过自动备份（已有近期备份时）
+hn2md release --no-backup
+
+# 强制覆盖过期锁
+hn2md release --force
+```
+
+### 单步执行
+
+```powershell
+hn2md fetch                # 抓取 HN 新闻
+hn2md collect              # 抓取正文和讨论
+hn2md plan                 # LLM 生成摘要
+hn2md apply                # 写入数据库
+hn2md render               # 生成 Markdown/HTML
+hn2md cover                # 生成封面
+hn2md publish              # 发布微信草稿
+hn2md status               # 查看当前任务状态
+hn2md audit                # 质量检查
+```
+
+### 状态机特性
+
+- **幂等阶段**：已完成阶段自动跳过，支持 `--from-stage` 从任意阶段恢复
+- **运行账本**：每个阶段记录 `StageReceipt`（时间、成功/失败、重试次数、产物路径）
+- **每日锁**：防止并发运行，1 小时过期自动释放
+- **重试预算**：fetch=3, collect=2, plan=2, 其他=1
+
 ## 测试
 
 ```powershell
-python -m unittest tests.test_deployment -v
+# 运行所有测试
+pytest tests/ -v
+
+# 运行带覆盖率报告
+pytest tests/ -v --cov=src --cov-report=term-missing
+
+# 运行特定模块
+pytest tests/core/ -v
+pytest tests/llm/ -v
+
+# PowerShell 安装器测试
 powershell -NoProfile -ExecutionPolicy Bypass -File .\tests\test_install_skill.ps1
-python -m py_compile .\src\utils\deployment.py .\scripts\generate_wechat_cover_ai.py
 ```
 
 ## 项目指令

@@ -1,0 +1,12 @@
+line-length = 120
+target-version = "py311"
+
+[lint]
+select = ["F", "E", "W", "I", "UP", "B", "SIM"]
+ignore = ["E501", "F841", "B008", "SIM105", "SIM102", "B905", "UP042", "B007"]
+
+[lint.isort]
+known-first-party = ["src", "hn2md", "scripts"]
+
+[format]
+quote-style = "double"

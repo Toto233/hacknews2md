@@ -4,10 +4,9 @@ from __future__ import annotations
 
 import json
 import os
+from collections.abc import Mapping
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Mapping, Optional
-
 
 DEFAULT_PROJECT_ROOT = Path(__file__).resolve().parents[2]
 DEFAULT_ASTRO_BLOG_SUBDIR = Path("src/data/blog")
@@ -18,9 +17,9 @@ class DeploymentSettings:
     project_root: Path
     db_path: Path
     astro_enabled: bool
-    astro_repo: Optional[Path]
-    astro_blog_dir: Optional[Path]
-    image_wrapper: Optional[Path]
+    astro_repo: Path | None
+    astro_blog_dir: Path | None
+    image_wrapper: Path | None
     config_path: Path
 
 
@@ -32,7 +31,7 @@ def _as_bool(value: object, default: bool = False) -> bool:
     return str(value).strip().lower() in {"1", "true", "yes", "on"}
 
 
-def _resolve_path(value: object, base: Path) -> Optional[Path]:
+def _resolve_path(value: object, base: Path) -> Path | None:
     if value is None or not str(value).strip():
         return None
     path = Path(os.path.expandvars(os.path.expanduser(str(value).strip())))
@@ -42,8 +41,8 @@ def _resolve_path(value: object, base: Path) -> Optional[Path]:
 
 
 def load_deployment_settings(
-    project_root: Optional[Path | str] = None,
-    environ: Optional[Mapping[str, str]] = None,
+    project_root: Path | str | None = None,
+    environ: Mapping[str, str] | None = None,
 ) -> DeploymentSettings:
     env = os.environ if environ is None else environ
     root_value = env.get("HACKNEWS_ROOT") or project_root or DEFAULT_PROJECT_ROOT
@@ -85,7 +84,7 @@ def load_deployment_settings(
     )
 
 
-def resolve_image_wrapper(settings: Optional[DeploymentSettings] = None) -> Path:
+def resolve_image_wrapper(settings: DeploymentSettings | None = None) -> Path:
     current = settings or load_deployment_settings()
     candidates = [
         current.image_wrapper,

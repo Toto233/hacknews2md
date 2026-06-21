@@ -1,48 +1,68 @@
-# 配置文件
-config/config.json
-config/deployment.local.json
-CLAUDE.md
-.claude/
+# ─── Secrets / Config ────────────────────────────────────────────
+/config/*
+!/config/*.example
+!/config/*.example.*
+.env
 
-# 输出目录
-output/
-/js/*
-
-# Python缓存文件
+# ─── Python Artifacts ───────────────────────────────────────────
 __pycache__/
 *.py[cod]
 *$py.class
+*.egg-info/
+dist/
+build/
+.eggs/
+*.egg
 
-# 临时工作目录
-tmp/
+# ─── Python Dev / Test Artifacts ─────────────────────────────────
+.pytest_cache/
+.coverage
+htmlcov/
+.mypy_cache/
 
-# twscrape 账号数据库（含敏感 cookie）
-accounts.db
-
-# 数据库文件 - 整个data目录都应该被忽略
-data/
-
-# 环境文件
-.env
-.venv
-env/
-venv/
-ENV/
-
-# IDE配置文件
-.idea/
+# ─── IDE / Editor ───────────────────────────────────────────────
 .vscode/
+.idea/
 *.swp
 *.swo
 *.code-workspace
 
-# Memory bank - keep sensitive project context local
-memory-bank/
+# ─── OS Files ────────────────────────────────────────────────────
+.DS_Store
+Thumbs.db
 
-# Qwen Code Context
+# ─── Virtual Environments ───────────────────────────────────────
+.venv/
+venv/
+env/
+ENV/
+
+# ─── Runtime Data / Databases ───────────────────────────────────
+/output/
+/data/**/*.db
+/data/**/*.db-journal
+/data/**/*.db-wal
+/data/**/*.db-shm
+*.db
+*.db-journal
+*.db-wal
+*.db-shm
+
+# ─── Dev Docs / Agent Context ───────────────────────────────────
+AGENT.md
+CLAUDE.md
 QWEN.md
+docs/
 
-# Node.js
-node_modules/
-npm-debug.log*
-package-lock.json
+# ─── Codex / Skills ─────────────────────────────────────────────
+skills/
+.claude/
+.codegraph/
+.mimocode/
+.claude-memory/
+memory-bank/
+archive/
+
+# ─── Project-Specific ───────────────────────────────────────────
+tmp/
+.ruff_cache/

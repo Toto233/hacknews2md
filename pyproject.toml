@@ -1,0 +1,60 @@
+[build-system]
+requires = ["setuptools>=75.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "hn2md"
+version = "0.1.0"
+description = "Unified HackNews-to-Markdown publishing CLI"
+readme = "README.md"
+requires-python = ">=3.11"
+license = "MIT"
+dependencies = [
+    "requests",
+    "certifi",
+    "PySocks",
+    "beautifulsoup4>=4.12.0",
+    "colorama",
+    "Pillow",
+    "pillow-avif-plugin",
+    "chardet",
+    "brotli",
+    "youtube-transcript-api",
+    "twscrape",
+    "lxml",
+    "google-genai",
+    "httpx",
+    "curl-cffi",
+    "markdown>=3.4.0",
+    "tinycss2>=1.2.1",
+    "selenium",
+    "crawl4ai",
+    "scrapling",
+    "playwright",
+    "PyPDF2",
+    "pyperclip",
+    "click>=8.1",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=7.0",
+    "pytest-cov>=4.0",
+    "ruff",
+]
+
+[project.scripts]
+hn2md = "hn2md.cli:main"
+
+[tool.setuptools.packages.find]
+include = ["hn2md*", "src*"]
+
+[tool.setuptools.package-data]
+"*" = ["*.css"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+python_files = ["test_*.py"]
+python_classes = ["Test*"]
+python_functions = ["test_*"]
+addopts = "-v --tb=short"

@@ -19,6 +19,9 @@
 
     "DEFAULT_LLM": "gemini",
     "MIN_ARTICLE_CONTENT_CHARS": 30,
+    "security": {
+        "allow_tun_fake_ip": false
+    },
     "wechat": {
         "appid": "your-appid-here",
         "appsec": "your-appsec-here"
@@ -26,5 +29,13 @@
     "twitter": {
         "auth_token": "从浏览器Cookie获取",
         "ct0": "从浏览器Cookie获取"
+    },
+    "proxy": {
+        "enabled": false,
+        "type": "http",
+        "host": "",
+        "port": 0,
+        "username": "",
+        "password": ""
     }
 }

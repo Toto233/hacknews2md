@@ -1,9 +1,20 @@
+import logging
+
 from .llm_utils import call_llm
-from .prompts import *
-import base64
+from .prompts import (
+    ARTICLE_SUMMARY_PROMPT,
+    ARTICLE_SUMMARY_SYSTEM,
+    DISCUSSION_SUMMARY_PROMPT,
+    DISCUSSION_SUMMARY_SYSTEM,
+    TITLE_TRANSLATE_PROMPT,
+    TITLE_TRANSLATE_SYSTEM,
+)
+
+logger = logging.getLogger(__name__)
+
 
 # 生成文本摘要（文章/讨论）
-def generate_summary(text, prompt_type='article', llm_type=None, model=None):
+def generate_summary(text, prompt_type="article", llm_type=None, model=None):
     """
     生成摘要，支持不同的LLM模型
     Args:
@@ -19,9 +30,9 @@ def generate_summary(text, prompt_type='article', llm_type=None, model=None):
     # 控制输入文本大小，超过700词只取前700词（降低以避免超长内容）
     words = text.split()
     if len(words) > 700:
-        text = ' '.join(words[:700])
-        print(f"[截取] 文章内容从 {len(words)} 词截取到 700 词")
-    if prompt_type == 'article':
+        text = " ".join(words[:700])
+        logger.info(f"[截取] 文章内容从 {len(words)} 词截取到 700 词")
+    if prompt_type == "article":
         prompt = ARTICLE_SUMMARY_PROMPT.format(text=text)
         system_content = ARTICLE_SUMMARY_SYSTEM
     else:
@@ -33,33 +44,34 @@ def generate_summary(text, prompt_type='article', llm_type=None, model=None):
             return ""
 
         # 字数限制：文章摘要300-400字，讨论摘要保持原逻辑
-        if prompt_type == 'article':
+        if prompt_type == "article":
             # 如果超过400字，按句子截断
             if len(summary) > 400:
-                sentences = summary.split('。')
-                result = ''
+                sentences = summary.split("。")
+                result = ""
                 for sent in sentences:
                     if len(result + sent) <= 400:
-                        result += sent + '。'
+                        result += sent + "。"
                     else:
                         break
-                summary = result if result.endswith('。') else result + '。'
-                print(f"[截断] 文章摘要从 {len(summary)} 字截取到 {len(summary)} 字")
+                summary = result if result.endswith("。") else result + "。"
+                logger.info(f"[截断] 文章摘要截取到 {len(summary)} 字")
             else:
                 # 句号分割，去掉最后一句
-                sentences = summary.split('。')
+                sentences = summary.split("。")
                 if len(sentences) > 1:
-                    summary = '。'.join(sentences[:-1]) + '。'
+                    summary = "。".join(sentences[:-1]) + "。"
         else:
             # 讨论摘要保持原逻辑
-            sentences = summary.split('。')
+            sentences = summary.split("。")
             if len(sentences) > 1:
-                summary = '。'.join(sentences[:-1]) + '。'
+                summary = "。".join(sentences[:-1]) + "。"
 
         return summary
     except Exception as e:
-        print(f"生成摘要时出错: {e}")
+        logger.error(f"生成摘要时出错: {e}")
         return ""
+
 
 # 生成图片摘要
 def generate_summary_from_image(base64_image_data, prompt, llm_type):
@@ -71,20 +83,21 @@ def generate_summary_from_image(base64_image_data, prompt, llm_type):
         llm_type: LLM类型（Grok 4.1+和Gemini均支持图片识别）
     """
     if not base64_image_data:
-        print("错误: base64_image_data 为空 (Error: base64_image_data is empty)")
+        logger.error("base64_image_data 为空 (Error: base64_image_data is empty)")
         return ""
 
     # Moonshot不支持图片，自动切换到配置的默认LLM或Gemini
-    if llm_type and llm_type.lower() == 'moonshot':
-        print("警告: Moonshot不支持图片输入，自动切换到Gemini")
-        llm_type = 'gemini'
+    if llm_type and llm_type.lower() == "moonshot":
+        logger.warning("Moonshot不支持图片输入，自动切换到Gemini")
+        llm_type = "gemini"
 
     # 如果未指定类型，默认使用配置的LLM
     if not llm_type:
         from .llm_utils import load_llm_config
+
         config = load_llm_config()
-        llm_type = config['default']
-        print(f"未指定LLM类型，使用配置默认: {llm_type}")
+        llm_type = config["default"]
+        logger.info(f"未指定LLM类型，使用配置默认: {llm_type}")
 
     # 调用LLM进行图片摘要 - 传递图片数据
     try:
@@ -93,8 +106,9 @@ def generate_summary_from_image(base64_image_data, prompt, llm_type):
             return ""
         return summary
     except Exception as e:
-        print(f"图片摘要生成失败: {e}")
+        logger.error(f"图片摘要生成失败: {e}")
         return ""
+
 
 # 标题翻译
 def translate_title(title, content_summary, llm_type=None, model=None):
@@ -118,5 +132,5 @@ def translate_title(title, content_summary, llm_type=None, model=None):
             return ""
         return translated_title
     except Exception as e:
-        print(f"翻译标题时出错: {e}")
-        return "" 
+        logger.error(f"翻译标题时出错: {e}")
+        return ""

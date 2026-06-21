@@ -4,18 +4,19 @@
 用于识别需要开发专门抓取器的高频失败网站。
 """
 
-import sqlite3
 import os
-from urllib.parse import urlparse
+import sqlite3
 from datetime import datetime
+from urllib.parse import urlparse
 
+from src.db.connection import get_db
 
-DB_PATH = os.path.join(os.path.dirname(__file__), '..', '..', 'data', 'hacknews.db')
+DB_PATH = os.path.join(os.path.dirname(__file__), "..", "..", "data", "hacknews.db")
 
 
 def _ensure_table(conn: sqlite3.Connection) -> None:
     """确保 scraper_failures 表存在"""
-    conn.execute('''
+    conn.execute("""
     CREATE TABLE IF NOT EXISTS scraper_failures (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         domain TEXT NOT NULL,
@@ -26,19 +27,19 @@ def _ensure_table(conn: sqlite3.Connection) -> None:
         last_seen TIMESTAMP,
         note TEXT
     )
-    ''')
+    """)
 
 
 def extract_domain(url: str) -> str:
     """从 URL 提取域名，去掉 www. 前缀"""
     try:
         parsed = urlparse(url)
-        domain = parsed.netloc or parsed.hostname or 'unknown'
-        if domain.startswith('www.'):
+        domain = parsed.netloc or parsed.hostname or "unknown"
+        if domain.startswith("www."):
             domain = domain[4:]
         return domain
     except Exception:
-        return 'unknown'
+        return "unknown"
 
 
 def record_scraper_failure(domain: str, url: str, db_path: str = None) -> int:
@@ -53,38 +54,27 @@ def record_scraper_failure(domain: str, url: str, db_path: str = None) -> int:
     Returns:
         int: 该域名的累计失败次数
     """
-    if db_path is None:
-        db_path = DB_PATH
-
-    conn = sqlite3.connect(db_path)
-    try:
+    with get_db(db_path) as conn:
         _ensure_table(conn)
 
         now = datetime.now().isoformat()
 
         # 查询是否已有记录
-        row = conn.execute(
-            'SELECT id, fail_count FROM scraper_failures WHERE domain = ?',
-            (domain,)
-        ).fetchone()
+        row = conn.execute("SELECT id, fail_count FROM scraper_failures WHERE domain = ?", (domain,)).fetchone()
 
         if row:
             # 已存在，更新
             record_id, current_count = row
             new_count = current_count + 1
             conn.execute(
-                'UPDATE scraper_failures SET fail_count = ?, last_seen = ? WHERE id = ?',
-                (new_count, now, record_id)
+                "UPDATE scraper_failures SET fail_count = ?, last_seen = ? WHERE id = ?", (new_count, now, record_id)
             )
         else:
             # 不存在，插入
             new_count = 1
             conn.execute(
-                'INSERT INTO scraper_failures (domain, sample_url, reason, fail_count, first_seen, last_seen) VALUES (?, ?, ?, ?, ?, ?)',
-                (domain, url, 'anti_scraping', 1, now, now)
+                "INSERT INTO scraper_failures (domain, sample_url, reason, fail_count, first_seen, last_seen) VALUES (?, ?, ?, ?, ?, ?)",
+                (domain, url, "anti_scraping", 1, now, now),
             )
 
-        conn.commit()
         return new_count
-    finally:
-        conn.close()

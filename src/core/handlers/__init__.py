@@ -1,0 +1,50 @@
+"""
+Handler modules extracted from summarize_news5.py.
+
+Each handler focuses on a single content type:
+  - twitter_handler  : X/Twitter URLs
+  - youtube_handler  : YouTube URLs
+  - pdf_handler      : PDF URLs
+  - image_handler    : Image downloading and conversion
+  - screenshot_handler : Page screenshot capture and LLM summarisation
+  - discussion_handler : HN discussion page parsing
+"""
+
+from .discussion_handler import _fetch_discussion_via_selenium, get_discussion_content_async
+from .image_handler import get_extension_from_content_type, save_article_image
+from .pdf_handler import get_pdf_content
+from .screenshot_handler import get_summary_from_screenshot, save_page_screenshot
+from .twitter_handler import (
+    _extract_tweet_id,
+    _fetch_x_via_selenium,
+    _fetch_x_via_twscrape,
+    _fetch_x_via_vxtwitter,
+    _init_twscrape,
+    _is_x_url,
+    _screenshot_x_tweet,
+)
+from .youtube_handler import get_youtube_content
+
+__all__ = [
+    # Twitter
+    "_is_x_url",
+    "_extract_tweet_id",
+    "_fetch_x_via_vxtwitter",
+    "_fetch_x_via_selenium",
+    "_init_twscrape",
+    "_fetch_x_via_twscrape",
+    "_screenshot_x_tweet",
+    # YouTube
+    "get_youtube_content",
+    # PDF
+    "get_pdf_content",
+    # Image
+    "save_article_image",
+    "get_extension_from_content_type",
+    # Screenshot
+    "save_page_screenshot",
+    "get_summary_from_screenshot",
+    # Discussion
+    "get_discussion_content_async",
+    "_fetch_discussion_via_selenium",
+]
