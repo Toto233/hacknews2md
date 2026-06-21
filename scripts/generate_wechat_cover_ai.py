@@ -160,6 +160,25 @@ def center_crop_235(raw_path: Path, out_path: Path) -> None:
     cropped.save(out_path, "PNG", optimize=True)
 
 
+def run_image_generator(command: list[str], cwd: Path, raw_path: Path) -> None:
+    result = subprocess.run(
+        command,
+        cwd=str(cwd),
+        text=True,
+        encoding="utf-8",
+        errors="replace",
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+        timeout=240,
+    )
+    if result.returncode != 0:
+        tail = "\n".join(result.stdout.splitlines()[-30:])
+        raise RuntimeError(f"image generation failed:\n{tail}")
+    if not raw_path.exists() or raw_path.stat().st_size == 0:
+        tail = "\n".join(result.stdout.splitlines()[-30:])
+        raise RuntimeError(f"no image written to {raw_path}\n{tail}")
+
+
 def generate_cover_ai(markdown_path: str, output: Optional[str] = None, target_word: Optional[str] = None) -> str:
     md_path = Path(markdown_path)
     if not PROMPT_TEMPLATE.exists():
@@ -203,22 +222,7 @@ def generate_cover_ai(markdown_path: str, output: Optional[str] = None, target_w
         os.environ.get("WECHAT_PUBLISH_IMAGE_QUALITY", QUALITY),
     ]
 
-    result = subprocess.run(
-        command,
-        cwd=str(skill_dir),
-        text=True,
-        encoding="utf-8",
-        errors="replace",
-        stdout=subprocess.PIPE,
-        stderr=subprocess.STDOUT,
-        timeout=240,
-    )
-    if result.returncode != 0:
-        tail = "\n".join(result.stdout.splitlines()[-30:])
-        raise RuntimeError(f"image generation failed:\n{tail}")
-    if not raw_path.exists() or raw_path.stat().st_size == 0:
-        tail = "\n".join(result.stdout.splitlines()[-30:])
-        raise RuntimeError(f"no image written to {raw_path}\n{tail}")
+    run_image_generator(command, skill_dir, raw_path)
 
     center_crop_235(raw_path, out_path)
     used_path = out_path.with_name(out_path.stem + "_prompt_used.json")
