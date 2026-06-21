@@ -161,6 +161,7 @@ def center_crop_235(raw_path: Path, out_path: Path) -> None:
 
 
 def run_image_generator(command: list[str], cwd: Path, raw_path: Path) -> None:
+    raw_path.unlink(missing_ok=True)
     result = subprocess.run(
         command,
         cwd=str(cwd),
