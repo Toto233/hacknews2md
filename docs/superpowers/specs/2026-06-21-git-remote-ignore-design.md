@@ -32,3 +32,19 @@ Using `set-url` avoids the failure that `remote add` would produce because
 Verify both fetch and push URLs, use `git check-ignore` against representative
 private/example/output/database paths, and confirm no forbidden path is tracked
 or staged.
+
+## Commit and Remote Integration
+
+- Stage all current project changes that remain eligible after the ignore rules
+  are applied.
+- Before committing, inspect the staged path list and reject any non-example
+  config file, generated output, SQLite database, or SQLite sidecar.
+- Commit the allowed project changes without staging ignored local artifacts.
+- Rebase the resulting local branch onto `origin/main`. Preserve the current
+  project redesign when resolving conflicts, while incorporating remote-only
+  changes.
+- Run the relevant test suite after the rebase.
+- Push `main` normally through the SSH remote. Never use force push or rewrite
+  the remote branch.
+- If rebase conflicts cannot be resolved safely, abort the rebase and report
+  the blocker rather than discarding either side's changes.
