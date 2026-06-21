@@ -40,11 +40,8 @@ or staged.
 - Before committing, inspect the staged path list and reject any non-example
   config file, generated output, SQLite database, or SQLite sidecar.
 - Commit the allowed project changes without staging ignored local artifacts.
-- Rebase the resulting local branch onto `origin/main`. Preserve the current
-  project redesign when resolving conflicts, while incorporating remote-only
-  changes.
-- Run the relevant test suite after the rebase.
-- Push `main` normally through the SSH remote. Never use force push or rewrite
-  the remote branch.
-- If rebase conflicts cannot be resolved safely, abort the rebase and report
-  the blocker rather than discarding either side's changes.
+- Treat the SSH repository as empty because a fresh `git ls-remote` returns no
+  refs. Prune stale local remote-tracking refs before publishing.
+- Run the relevant test suite before publishing.
+- Push `main` normally through the SSH remote with upstream tracking, creating
+  the remote branch. Never use force push.
