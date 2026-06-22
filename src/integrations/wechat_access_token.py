@@ -8,16 +8,6 @@ This module is a backward-compatible facade.  The actual implementation
 lives in ``src.integrations.wechat`` (token / media / draft submodules).
 """
 
-import sys
-
-# Windows 下设置 UTF-8 编码输出，防止编码错误
-if sys.platform == "win32":
-    import io
-
-    sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding="utf-8", errors="replace")
-    sys.stderr = io.TextIOWrapper(sys.stderr.buffer, encoding="utf-8", errors="replace")
-
-
 from src.integrations.wechat.draft import DraftManager
 from src.integrations.wechat.media import MediaManager
 from src.integrations.wechat.token import TokenManager

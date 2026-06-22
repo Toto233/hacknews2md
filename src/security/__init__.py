@@ -2,6 +2,7 @@
 
 from src.security.content_sanitizer import (
     contains_hallucination_markers,
+    quote_yaml_scalar,
     redact_secrets,
     sanitize_for_html,
     sanitize_for_yaml,
@@ -17,5 +18,6 @@ __all__ = [
     "sanitize_for_html",
     "redact_secrets",
     "contains_hallucination_markers",
+    "quote_yaml_scalar",
     "validate_summary_length",
 ]

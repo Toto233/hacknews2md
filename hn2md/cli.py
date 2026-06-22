@@ -120,7 +120,7 @@ def collect(ctx_obj, concurrency):
     try:
         with daily_lock(lock_path):
             stage = _load_stage(Stage.COLLECTING)
-            receipt = stage.run(rt, machine)
+            receipt = stage.run(rt, machine, concurrency=concurrency)
             _print(f"Collect complete: {receipt.output_summary}", "green")
     except LockError as e:
         _print(f"Lock error: {e}", "red")
@@ -129,8 +129,15 @@ def collect(ctx_obj, concurrency):
 
 @main.command()
 @click.option("--llm", default=None, help="LLM provider (grok/gemini/moonshot)")
+@click.option(
+    "--manual-plan",
+    "manual_plan_file",
+    type=click.Path(exists=True, dir_okay=False),
+    default=None,
+    help="Import a Codex-generated plan without calling an external LLM",
+)
 @click.pass_context
-def plan(ctx_obj, llm):
+def plan(ctx_obj, llm, manual_plan_file):
     """Generate summaries via LLM, output plan JSON."""
     rt = ctx_obj.obj["ctx"]
     date_str = datetime.now().strftime("%Y%m%d")
@@ -139,7 +146,12 @@ def plan(ctx_obj, llm):
     try:
         with daily_lock(lock_path):
             stage = _load_stage(Stage.PLANNING)
-            receipt = stage.run(rt, machine)
+            receipt = stage.run(
+                rt,
+                machine,
+                llm=llm,
+                manual_plan_file=manual_plan_file,
+            )
             _print(f"Plan complete: {receipt.output_summary}", "green")
     except LockError as e:
         _print(f"Lock error: {e}", "red")
@@ -158,7 +170,7 @@ def apply(ctx_obj, plan_file):
     try:
         with daily_lock(lock_path):
             stage = _load_stage(Stage.APPLYING)
-            receipt = stage.run(rt, machine)
+            receipt = stage.run(rt, machine, plan_file=plan_file)
             _print(f"Apply complete: {receipt.output_summary}", "green")
     except LockError as e:
         _print(f"Lock error: {e}", "red")
@@ -186,8 +198,9 @@ def render(ctx_obj):
 @main.command()
 @click.argument("markdown_file", required=False)
 @click.option("--mode", type=click.Choice(["ai", "pillow"]), default="ai")
+@click.option("--target-word", default=None, help="Short cover headline override")
 @click.pass_context
-def cover(ctx_obj, markdown_file, mode):
+def cover(ctx_obj, markdown_file, mode, target_word):
     """Generate cover image."""
     rt = ctx_obj.obj["ctx"]
     date_str = datetime.now().strftime("%Y%m%d")
@@ -196,7 +209,13 @@ def cover(ctx_obj, markdown_file, mode):
     try:
         with daily_lock(lock_path):
             stage = _load_stage(Stage.COVERING)
-            receipt = stage.run(rt, machine)
+            receipt = stage.run(
+                rt,
+                machine,
+                markdown_file=markdown_file,
+                mode=mode,
+                target_word=target_word,
+            )
             _print(f"Cover complete: {receipt.output_summary}", "green")
     except LockError as e:
         _print(f"Lock error: {e}", "red")
@@ -216,7 +235,12 @@ def publish(ctx_obj, markdown_file, cover_image):
     try:
         with daily_lock(lock_path):
             stage = _load_stage(Stage.PUBLISHING)
-            receipt = stage.run(rt, machine)
+            receipt = stage.run(
+                rt,
+                machine,
+                markdown_file=markdown_file,
+                cover_image=cover_image,
+            )
             _print(f"Publish complete: {receipt.output_summary}", "green")
     except LockError as e:
         _print(f"Lock error: {e}", "red")

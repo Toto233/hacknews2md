@@ -75,6 +75,19 @@ def sanitize_for_yaml(value: str | None) -> str:
     return value
 
 
+def quote_yaml_scalar(value: object) -> str:
+    """Return a sanitized double-quoted YAML scalar."""
+    sanitized = sanitize_for_yaml(None if value is None else str(value))
+    escaped = sanitized.replace("\\", "\\\\").replace('"', '\\"')
+    escaped = (
+        escaped.replace("\r\n", "\\n")
+        .replace("\r", "\\n")
+        .replace("\n", "\\n")
+        .replace("\t", "\\t")
+    )
+    return f'"{escaped}"'
+
+
 def sanitize_for_html(value: str | None) -> str:
     """Sanitize a string for safe inclusion in HTML output.
 

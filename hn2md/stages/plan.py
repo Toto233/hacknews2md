@@ -2,28 +2,128 @@
 
 import json
 import logging
+import os
 import sqlite3
 from datetime import datetime
+from pathlib import Path
+from typing import Any
 
 from hn2md.constants import Stage
+from hn2md.context import RuntimeContext
+from hn2md.state import JobStateMachine
 from hn2md.stages.base import BaseStage
 from src.db.connection import get_db
+from src.security.content_sanitizer import (
+    contains_hallucination_markers,
+    validate_summary_length,
+)
 
 logger = logging.getLogger(__name__)
+
+
+def _validate_manual_plan(plan: object) -> dict[str, Any]:
+    """Validate and normalize a Codex-authored publishing plan."""
+    if not isinstance(plan, dict):
+        raise ValueError("manual plan must be a JSON object")
+
+    items = plan.get("items")
+    ordered_ids = plan.get("ordered_ids")
+    tags = plan.get("tags")
+    if not isinstance(items, list) or not items:
+        raise ValueError("items must be a non-empty list")
+    if not isinstance(ordered_ids, list):
+        raise ValueError("ordered_ids must be a list")
+    if not isinstance(tags, list) or len(tags) != 4:
+        raise ValueError("manual plan must contain exactly four tags")
+
+    normalized_tags = [str(tag).strip() for tag in tags]
+    if any(not tag for tag in normalized_tags) or len(set(normalized_tags)) != 4:
+        raise ValueError("manual plan must contain four unique non-empty tags")
+
+    normalized_items: list[dict[str, Any]] = []
+    item_ids: list[int] = []
+    for index, raw_item in enumerate(items):
+        if not isinstance(raw_item, dict):
+            raise ValueError(f"items[{index}] must be an object")
+        news_id = raw_item.get("id")
+        if not isinstance(news_id, int) or isinstance(news_id, bool):
+            raise ValueError(f"items[{index}].id must be an integer")
+        if news_id in item_ids:
+            raise ValueError(f"duplicate item id: {news_id}")
+
+        normalized = {"id": news_id}
+        for field in ("title_chs", "content_summary", "discuss_summary"):
+            value = raw_item.get(field)
+            if not isinstance(value, str) or not value.strip():
+                raise ValueError(f"items[{index}].{field} must be non-empty")
+            value = value.strip()
+            if contains_hallucination_markers(value):
+                raise ValueError(f"hallucination marker in items[{index}].{field}")
+            normalized[field] = value
+
+        length_errors = validate_summary_length(
+            normalized["content_summary"],
+            min_length=20,
+            field_name=f"items[{index}].content_summary",
+        )
+        if length_errors:
+            raise ValueError("content_summary: " + "; ".join(length_errors))
+
+        item_ids.append(news_id)
+        normalized_items.append(normalized)
+
+    if len(ordered_ids) != len(item_ids) or set(ordered_ids) != set(item_ids):
+        raise ValueError("ordered_ids must contain every item id exactly once")
+
+    return {
+        "tags": normalized_tags,
+        "ordered_ids": ordered_ids,
+        "items": normalized_items,
+    }
+
+
+def _import_manual_plan(source: Path, destination_dir: Path) -> tuple[Path, dict[str, Any]]:
+    """Validate a manual plan and copy it atomically into the run artifacts."""
+    try:
+        plan = json.loads(source.read_text(encoding="utf-8-sig"))
+    except (OSError, json.JSONDecodeError) as exc:
+        raise ValueError(f"invalid manual plan: {exc}") from exc
+
+    normalized = _validate_manual_plan(plan)
+    destination_dir.mkdir(parents=True, exist_ok=True)
+    stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    destination = destination_dir / f"hacknews_plan_{stamp}.json"
+    temp_path = destination.with_suffix(".tmp")
+    temp_path.write_text(json.dumps(normalized, ensure_ascii=False, indent=2), encoding="utf-8")
+    os.replace(temp_path, destination)
+    return destination, normalized
 
 
 class PlanStage(BaseStage):
     stage_name = Stage.PLANNING
 
-    def execute(self, ctx, machine):
+    def execute(
+        self,
+        ctx: RuntimeContext,
+        machine: JobStateMachine,
+        llm: str | None = None,
+        manual_plan_file: str | None = None,
+    ) -> dict[str, Any]:
+        if manual_plan_file:
+            plan_path, plan = _import_manual_plan(Path(manual_plan_file), ctx.codex_dir)
+            return {
+                "plan_file": str(plan_path),
+                "story_count": len(plan["items"]),
+                "tags": plan["tags"],
+                "validation_warnings": 0,
+                "hallucination_detected": False,
+                "short_content": False,
+                "manual": True,
+            }
+
         from src.llm.llm_business import generate_summary, translate_title
         from src.llm.llm_evaluator import evaluate_news_attraction
         from src.llm.llm_tag_extractor import extract_tags_with_llm
-        from src.security.content_sanitizer import (
-            contains_hallucination_markers,
-            validate_summary_length,
-        )
-
         with get_db(str(ctx.db_path)) as conn:
             conn.row_factory = sqlite3.Row
             cur = conn.cursor()

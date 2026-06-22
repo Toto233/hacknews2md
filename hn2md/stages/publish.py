@@ -2,8 +2,11 @@
 
 import logging
 from pathlib import Path
+from typing import Any
 
 from hn2md.constants import Stage
+from hn2md.context import RuntimeContext
+from hn2md.state import JobStateMachine
 from hn2md.stages.base import BaseStage
 
 logger = logging.getLogger(__name__)
@@ -12,11 +15,22 @@ logger = logging.getLogger(__name__)
 class PublishStage(BaseStage):
     stage_name = Stage.PUBLISHING
 
-    def execute(self, ctx, machine, dry_run: bool = False):
+    def execute(
+        self,
+        ctx: RuntimeContext,
+        machine: JobStateMachine,
+        dry_run: bool = False,
+        markdown_file: str | None = None,
+        cover_image: str | None = None,
+    ) -> dict[str, Any]:
         render_receipt = machine.job.stages.get(Stage.RENDERING.value)
         cover_receipt = machine.job.stages.get(Stage.COVERING.value)
-        md_file = render_receipt.get("output_summary", {}).get("markdown_file") if render_receipt else None
-        cover = cover_receipt.get("output_summary", {}).get("cover_image") if cover_receipt else None
+        md_file = markdown_file or (
+            render_receipt.get("output_summary", {}).get("markdown_file") if render_receipt else None
+        )
+        cover = cover_image or (
+            cover_receipt.get("output_summary", {}).get("cover_image") if cover_receipt else None
+        )
         if not md_file:
             raise RuntimeError("No markdown file")
 
@@ -58,9 +72,9 @@ class PublishStage(BaseStage):
                 "safety_check": "passed",
             }
 
-        from scripts.publish_wechat import main as publish_main
+        from scripts.publish_wechat import publish_to_wechat
 
-        media_id = publish_main(md_file, cover_image=cover)
+        media_id = publish_to_wechat(md_file, cover_image=cover)
         return {
             "wechat_media_id": str(media_id) if media_id else None,
             "markdown_file": md_file,

@@ -1,69 +1,145 @@
-"""Collect stage: scrape article content, discussions, screenshots."""
+"""Collect stage: scrape article content, discussions, screenshots, and images."""
+
+from __future__ import annotations
 
 import asyncio
+import json
 import sqlite3
+from datetime import datetime
+from typing import Any
 
 from hn2md.constants import Stage
+from hn2md.context import RuntimeContext
+from hn2md.state import JobStateMachine
 from hn2md.stages.base import BaseStage
 from src.db.connection import get_db
+
+MIN_ARTICLE_CONTENT_CHARS = 100
+
+
+async def _collect_item(row: sqlite3.Row, semaphore: asyncio.Semaphore) -> dict[str, Any]:
+    """Collect missing context for one news row."""
+    from src.core.crawlers.scrapling_crawler import ScraplingCrawler
+    from src.core.handlers.discussion_handler import get_discussion_content_async
+    from src.core.handlers.image_handler import save_article_image
+    from src.core.handlers.screenshot_handler import save_page_screenshot
+
+    async with semaphore:
+        article_content = (row["article_content"] or "").strip()
+        discussion_content = (row["discussion_content"] or "").strip()
+        image_paths = [path for path in (row["largest_image"], row["image_2"], row["image_3"]) if path]
+        screenshot = row["screenshot"]
+        collected = False
+
+        news_url = row["news_url"] or ""
+        if news_url and len(article_content) < MIN_ARTICLE_CONTENT_CHARS:
+            crawler = ScraplingCrawler()
+            try:
+                content, image_urls = await crawler.crawl_article(news_url)
+            finally:
+                await crawler.close()
+            if content and len(content.strip()) >= MIN_ARTICLE_CONTENT_CHARS:
+                article_content = content.strip()
+                collected = True
+            if image_urls:
+                saved_images = []
+                for index, image_url in enumerate(image_urls[:3], 1):
+                    saved = await asyncio.to_thread(
+                        save_article_image,
+                        image_url,
+                        news_url,
+                        f"{row['title']}_{index}",
+                    )
+                    if saved:
+                        saved_images.append(saved)
+                if saved_images:
+                    image_paths = saved_images
+
+        discuss_url = row["discuss_url"] or ""
+        if discuss_url and not discussion_content:
+            discussion = await get_discussion_content_async(discuss_url)
+            if discussion:
+                discussion_content = discussion.strip()
+
+        if news_url and not screenshot:
+            screenshot = await asyncio.to_thread(save_page_screenshot, news_url, row["title"] or "")
+
+        return {
+            "id": row["id"],
+            "title": row["title"] or "",
+            "news_url": news_url,
+            "discuss_url": discuss_url,
+            "article_content": article_content,
+            "discussion_content": discussion_content,
+            "screenshot": screenshot,
+            "largest_image": image_paths[0] if len(image_paths) > 0 else None,
+            "image_2": image_paths[1] if len(image_paths) > 1 else None,
+            "image_3": image_paths[2] if len(image_paths) > 2 else None,
+            "collected": collected,
+        }
+
+
+async def _collect_rows(rows: list[sqlite3.Row], concurrency: int) -> list[dict[str, Any]]:
+    semaphore = asyncio.Semaphore(concurrency)
+    return await asyncio.gather(*(_collect_item(row, semaphore) for row in rows))
 
 
 class CollectStage(BaseStage):
     stage_name = Stage.COLLECTING
 
-    def execute(self, ctx, machine):
-        from src.core.handlers.discussion_handler import get_discussion_content_async
-
+    def execute(
+        self,
+        ctx: RuntimeContext,
+        machine: JobStateMachine,
+        concurrency: int = 3,
+    ) -> dict[str, Any]:
+        concurrency = max(1, concurrency)
         with get_db(str(ctx.db_path)) as conn:
             conn.row_factory = sqlite3.Row
-            cur = conn.cursor()
-            cur.execute(
+            rows = conn.execute(
                 "SELECT id, title, news_url, discuss_url, article_content, "
                 "discussion_content, screenshot, largest_image, image_2, image_3 "
                 "FROM news WHERE date(created_at)=date('now','localtime') ORDER BY id"
-            )
-            rows = cur.fetchall()
-            collected = 0
+            ).fetchall()
 
-            for row in rows:
-                needs_content = not row["article_content"]
-                needs_discussion = not row["discussion_content"]
+        items = asyncio.run(_collect_rows(rows, concurrency))
 
-                if needs_content or needs_discussion:
-                    # Use the new crawler abstraction
-                    from src.core.crawlers.scrapling_crawler import ScraplingCrawler
+        with get_db(str(ctx.db_path)) as conn:
+            for item in items:
+                conn.execute(
+                    "UPDATE news SET article_content=?, discussion_content=?, screenshot=?, "
+                    "largest_image=?, image_2=?, image_3=? WHERE id=?",
+                    (
+                        item["article_content"] or None,
+                        item["discussion_content"] or None,
+                        item["screenshot"],
+                        item["largest_image"],
+                        item["image_2"],
+                        item["image_3"],
+                        item["id"],
+                    ),
+                )
 
-                    crawler = ScraplingCrawler()
-                    try:
-                        if needs_content and row["news_url"]:
-                            loop = asyncio.get_event_loop()
-                            content, images = loop.run_until_complete(crawler.crawl_article(row["news_url"]))
-                            if content:
-                                cur.execute(
-                                    "UPDATE news SET article_content=? WHERE id=?",
-                                    (content, row["id"]),
-                                )
-                                # Save images
-                                for i, img_url in enumerate(images[:3]):
-                                    if i == 0:
-                                        cur.execute(
-                                            "UPDATE news SET largest_image=? WHERE id=?",
-                                            (img_url, row["id"]),
-                                        )
-                                collected += 1
-                    finally:
-                        loop.run_until_complete(crawler.close())
+        ctx.codex_dir.mkdir(parents=True, exist_ok=True)
+        stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        context_path = ctx.codex_dir / f"hacknews_context_{stamp}.json"
+        payload_items = [{key: value for key, value in item.items() if key != "collected"} for item in items]
+        context_path.write_text(
+            json.dumps(
+                {
+                    "generated_at": datetime.now().isoformat(timespec="seconds"),
+                    "count": len(payload_items),
+                    "items": payload_items,
+                },
+                ensure_ascii=False,
+                indent=2,
+            ),
+            encoding="utf-8",
+        )
 
-                    if needs_discussion and row["discuss_url"]:
-                        try:
-                            loop = asyncio.get_event_loop()
-                            discussion = loop.run_until_complete(get_discussion_content_async(row["discuss_url"]))
-                            if discussion:
-                                cur.execute(
-                                    "UPDATE news SET discussion_content=? WHERE id=?",
-                                    (discussion, row["id"]),
-                                )
-                        except Exception:
-                            pass
-
-        return {"collected": collected, "total": len(rows)}
+        return {
+            "collected": sum(1 for item in items if item["collected"]),
+            "total": len(items),
+            "concurrency": concurrency,
+            "context_file": str(context_path),
+        }

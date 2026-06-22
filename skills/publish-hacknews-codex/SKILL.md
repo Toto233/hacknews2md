@@ -1,76 +1,40 @@
 ---
 name: publish-hacknews-codex
-description: 使用 Codex 完成 HackNews 中文标题、正文摘要、讨论摘要、头条选择、排序和标签生成，并调用仓库脚本发布微信公众号及可选 Astro 博客。
+description: 使用 Codex 生成 HackNews 中文标题、摘要、排序和标签，并灵活组合 hn2md 子命令完成发布。
 ---
 
-# Publish HackNews Codex
+# Publish HackNews with Codex and hn2md
 
-## Runtime Contract
+所有命令在仓库根目录执行。`hn2md` 是唯一项目入口；Codex 是 manual plan 的内容模型。执行 `hn2md plan --manual-plan` 时不得调用 Gemini/Grok/Moonshot。
 
-本 skill 的源码属于 `hacknews` 仓库，所有命令默认在仓库根目录执行。不要依赖固定盘符、用户名或安装目录。
-
-路径解析优先级：
-
-1. `HACKNEWS_*` 环境变量
-2. `config/deployment.local.json`
-3. 仓库相对默认值
-
-`hacknews_recap` 是可选部署目标。未启用 Astro 时，抓取、摘要、题图和微信公众号发布仍应完整工作。
-
-## Step 1: Fetch and Collect
+## 1. Fetch and collect
 
 ```powershell
-python .\src\core\fetch_news.py
-python .\skills\publish-hacknews-codex\scripts\collect_news_context.py --concurrency 3
+hn2md fetch
+hn2md collect --concurrency 3
 ```
 
-`fetch_news.py` 必须按本地自然日归档旧新闻，不使用“当前时间减 N 小时”判断昨天数据。
-
-抓取后必须检查数据库：
+读取命令返回的 `context_file`，并检查当天数据库正文和讨论长度：
 
 ```powershell
-sqlite3 -header -column ".\data\hacknews.db" "select id, length(coalesce(article_content,'')) as article_len, length(coalesce(discussion_content,'')) as discussion_len, title, news_url from news where date(created_at)=date('now','localtime') order by id;"
+sqlite3 -header -column ".\data\hacknews.db" "select id, length(coalesce(article_content,'')) article_len, length(coalesce(discussion_content,'')) discussion_len, title, news_url from news where date(created_at)=date('now','localtime') order by id;"
 ```
 
-规则：
+- 正文为空、登录页或明显截断时列出 ID、标题和 URL。
+- 单条正文最多补抓两次；只有讨论为空时仅补抓讨论。
+- 稳定 401/403、订阅墙和付费墙要报告，不自动删除。
+- 抓取失败域名先检查 `filtered_domains`，否则用 `record_scraper_failure()` 记录后继续。
 
-- 正文为空、明显过短、登录页或壳页面时停止发布，列出 ID、标题和 URL 等用户补充。
-- 单条正文最多抓取两次，不反复运行完整抓取。
-- 只有讨论为空时，运行 `scripts/refetch_empty_discussions.py`，不要重抓正文。
-- 用户确认交互式页面本来就短时，可结合英文标题、页面性质和 HN 讨论补充说明后继续。
-- 遇到稳定 401/403、订阅墙或已知付费墙要主动告知，不自动删除。
-- 高度警惕 `www.thetimes.com`、`www.ft.com`、`www.economist.com`。
-- 正文不完整（只有标题、只有片段、明显被截断）时，先检查该域名是否在 `filtered_domains` 表中（付费墙类），如在则跳过不记录；否则调用以下 Python 脚本记录该域名：
+## 2. Generate the Codex plan
 
-```powershell
-python -c "from src.utils.scraper_failures import record_scraper_failure, extract_domain; domain = extract_domain('<news_url>'); count = record_scraper_failure(domain, '<news_url>'); print(f'{domain} 已经第 {count} 次抓取失败' + ('，建议适配该网站' if count >= 2 else ''))"
-```
+Codex 阅读 `context_file` 中英文标题、正文和 HN 讨论，为每条新闻生成：
 
-将 `<news_url>` 替换为实际 URL。记录后继续发布流程，不阻塞。
+- `title_chs`
+- 约 300–400 字 `content_summary`
+- 约 200–250 字 `discuss_summary`
+- 全局四个 tags 和 `ordered_ids`
 
-补抓空讨论：
-
-```powershell
-python .\skills\publish-hacknews-codex\scripts\refetch_empty_discussions.py --ids 1234 1235 --attempts 2 --delay 8
-```
-
-## Step 2: Generate Codex Plan
-
-优先读取数据库中的最新内容，同时参考英文标题、正文和讨论。导出快照：
-
-```powershell
-$today = Get-Date -Format yyyyMMdd
-$out = ".\output\codex\hacknews_db_${today}_full.json"
-sqlite3 -json ".\data\hacknews.db" "select id,title,news_url,discuss_url,article_content,discussion_content,largest_image,image_2,image_3,screenshot from news where date(created_at)=date('now','localtime') order by id;" | Set-Content -Path $out -Encoding UTF8
-```
-
-每条新闻生成：
-
-- `title_chs`：有传播力但不偏离英文标题和正文
-- `content_summary`：约 300-400 字
-- `discuss_summary`：约 200-250 字；讨论很弱时可以缩短但不能空
-
-同时生成头条排序和 4 个标签。Plan 保存为 `output/codex/hacknews_plan_YYYYMMDD_HHMMSS.json`：
+保存为 `output/codex/hacknews_plan_YYYYMMDD_HHMMSS.json`：
 
 ```json
 {
@@ -87,65 +51,56 @@ sqlite3 -json ".\data\hacknews.db" "select id,title,news_url,discuss_url,article
 }
 ```
 
-## Step 3: Apply and Render
+## 3. Import, apply, and render
 
 ```powershell
-python .\skills\publish-hacknews-codex\scripts\apply_news_edits.py "<plan文件>"
-python .\skills\publish-hacknews-codex\scripts\render_manual_markdown.py "<plan文件>"
+hn2md plan --manual-plan ".\output\codex\hacknews_plan_YYYYMMDD_HHMMSS.json"
+hn2md apply
+hn2md render
 ```
 
-固定输出：
+Plan 校验失败时修正 JSON，不切换到外部 LLM。渲染必须保留 Codex 的 `ordered_ids` 和四个 tags。记录命令返回的 `markdown_file`、`html_file` 和可选 `astro_file`。
 
-- `output/markdown/hacknews_summary_YYYYMMDD_HHMM.md`
-- `output/markdown/hacknews_summary_YYYYMMDD_HHMM.html`
+## 4. Cover
 
-若部署配置启用 Astro，额外输出到配置的 `astro.repo_path/astro.blog_subdir`；否则返回 `astro_file: null`。
-
-Frontmatter 的 `title`、`digest`、`source_url` 和 tags 必须使用安全 YAML 转义，避免单引号、双引号、冒号或换行导致编译失败。
-
-## Step 4: Generate and Inspect Cover
-
-先依据头条英文标题和正文提炼 10-15 字以内的“主体 + 事件”短标题，不能泛化或改变原意。
+根据头条提炼 10–15 字“主体 + 事件”短标题：
 
 ```powershell
-$today = Get-Date -Format yyyyMMdd
-$cover = ".\output\images\$today\hacknews_cover_ai_$today.png"
-python .\scripts\generate_wechat_cover_ai.py "<markdown文件>" --target-word "<短标题>" -o $cover
+hn2md cover "<markdown_file>" --mode ai --target-word "<短标题>"
 ```
 
-图像 wrapper 按以下顺序解析：
-
-1. `HACKNEWS_IMAGE_WRAPPER`
-2. `config/deployment.local.json` 的 `image_generator.wrapper_path`
-3. `~/.claude/skills/gpt-image-2-skill/scripts/gpt_image_2_skill.cjs`
-4. `~/.codex/skills/gpt-image-2-skill/scripts/gpt_image_2_skill.cjs`
-
-生成后必须检查文字、含义、2.45:1 横版构图和细线密度。若生成失败或质量不可用，不传 `--cover-image`，让公众号脚本回退到第一篇新闻图片。
-
-## Step 5: Publish WeChat
+检查文字、含义和 2.45:1 横版构图。AI 题图不可用时可改用：
 
 ```powershell
-python .\scripts\publish_wechat.py "<markdown文件>" --cover-image "<题图路径>"
+hn2md cover "<markdown_file>" --mode pillow
 ```
 
-汇报公众号草稿 Media ID 和超大图片跳过清单。
+两种题图均失败时，发布命令不传 `--cover-image`，由发布器回退到第一篇新闻图片。
 
-## Step 6: Optional Astro Publish
+## 5. Publish WeChat
 
-仅当渲染结果中的 `astro_file` 非空时执行。先从 `config/deployment.local.json` 或 `HACKNEWS_ASTRO_REPO` 获取仓库路径，然后：
+```powershell
+hn2md publish "<markdown_file>" --cover-image "<cover_image>"
+```
+
+汇报草稿 Media ID 和超大图片跳过清单。预演时使用 `hn2md release --dry-run --from-stage PUBLISHING`。
+
+## 6. Optional Astro publish
+
+仅当 `astro_file` 非空时，从部署配置获取 Astro 仓库，并只提交本次生成文件：
 
 ```powershell
 git -C "<astro仓库>" status --short
-git -C "<astro仓库>" add -- "<本次生成文件的相对路径>"
+git -C "<astro仓库>" add -- "<本次文件相对路径>"
 git -C "<astro仓库>" commit -m "YYYYMMDD: 更新 HackNews 博客"
 git -C "<astro仓库>" push
 ```
 
-只提交本次生成文件，不处理其他脏文件。不要运行 `npm run build`。
+不要运行 Astro build，不处理仓库中的其他脏文件。
 
-## Step 7: Open Image Directory
+## 7. Open images
 
-成功发布后必须打开当天图片目录：
+发布成功后打开当天图片目录：
 
 ```powershell
 $imgDir = Join-Path (Get-Location) ("output\images\" + (Get-Date -Format yyyyMMdd))
@@ -154,6 +109,6 @@ Start-Process explorer.exe -ArgumentList $imgDir
 
 ## Safety
 
-- 日常抓取、渲染、公众号草稿、可选 Astro 提交推送和打开目录无需重复确认。
-- 删除文件、改写 Git 历史、force push、回滚用户改动或批量移动历史文件前必须确认。
-- 工作树可能已有用户改动，不得纳入无关提交或覆盖。
+- 可灵活单独重跑 `hn2md collect`、`audit`、`cover` 或 `publish`。
+- 删除文件、改写 Git 历史、force push、回滚用户改动前必须确认。
+- 不提交配置、数据库、output 或无关工作树改动。
