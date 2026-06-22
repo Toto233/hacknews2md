@@ -2,474 +2,180 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Make `publish-hacknews-codex` compose `hn2md` subcommands while keeping Codex as the sole model for manual title, summary, ranking, and tag generation.
+**Goal:** Make `publish-hacknews-codex` compose existing `hn2md` subcommands while keeping Codex as the model for titles, summaries, ranking, and tags.
 
-**Architecture:** Add a validated manual-plan path to the existing PLANNING stage and carry its artifact through APPLYING and RENDERING receipts. Move deterministic collection and rendering behavior behind reusable hn2md modules, then make CLI stages call reusable cover and WeChat APIs with explicit arguments.
+**Architecture:** Reuse the existing collector, manual renderer, cover generator, and WeChat publisher. Existing argparse scripts gain callable functions with explicit paths; existing hn2md stages call those functions and pass artifacts through receipts. No new functional Python module is introduced.
 
-**Tech Stack:** Python 3.10+, Click, SQLite, asyncio, structlog/logging, pytest, unittest.mock
+**Tech Stack:** Python, Click, SQLite, asyncio, pytest, unittest.mock
 
 ---
 
 ## File map
 
-- Create `hn2md/manual_plan.py`: load, validate, normalize, and copy Codex plans.
-- Create `hn2md/rendering.py`: render Markdown, HTML, and optional Astro output from an ordered plan.
-- Create `hn2md/collection.py`: async context collection and snapshot generation using runtime paths.
-- Modify `hn2md/cli.py`: pass declared options into stages and add manual-plan/target-word options.
-- Modify `hn2md/stages/{collect,plan,apply,render,cover,publish}.py`: use the reusable APIs and receipt chain.
-- Modify `skills/publish-hacknews-codex/SKILL.md`: replace direct project-script entry points with hn2md commands.
-- Create focused tests under `tests/hn2md/` for manual plans, rendering, collection, CLI forwarding, cover, and publish.
+- Modify `hn2md/cli.py`: forward existing options and add `--manual-plan`/`--target-word`.
+- Modify `hn2md/stages/plan.py`: validate and import a Codex plan without loading an LLM.
+- Modify `hn2md/stages/{collect,apply,render,cover,publish}.py`: call existing capabilities with explicit arguments.
+- Modify `skills/publish-hacknews-codex/scripts/collect_news_context.py`: expose existing collection as a callable function.
+- Modify `skills/publish-hacknews-codex/scripts/render_manual_markdown.py`: expose existing rendering as a callable function.
+- Modify `skills/publish-hacknews-codex/SKILL.md`: use hn2md commands as the project entry point.
+- Add only focused test files under `tests/hn2md/`.
 
-### Task 1: Forward CLI arguments into stages
+### Task 1: Forward CLI arguments
 
 **Files:**
 - Modify: `hn2md/cli.py`
 - Test: `tests/hn2md/test_cli_stage_options.py`
 
-- [ ] **Step 1: Write failing CLI forwarding tests**
-
-Use `CliRunner`, patch `JobStateMachine.load_or_create`, `daily_lock`, and `_load_stage`, then assert calls such as:
+- [ ] Write failing `CliRunner` tests asserting these calls:
 
 ```python
-result = runner.invoke(main, ["--project-root", str(root), "collect", "--concurrency", "5"])
-assert result.exit_code == 0
-stage.run.assert_called_once_with(runtime_ctx, machine, concurrency=5)
+stage.run(rt, machine, concurrency=5)
+stage.run(rt, machine, llm=None, manual_plan_file=str(plan))
+stage.run(rt, machine, plan_file=str(plan))
+stage.run(rt, machine, markdown_file=str(md), mode="ai", target_word="主体事件")
+stage.run(rt, machine, markdown_file=str(md), cover_image=str(cover))
 ```
 
-Cover `plan --manual-plan`, `apply PLAN`, `cover MARKDOWN --mode ai --target-word WORD`, and `publish MARKDOWN --cover-image COVER` in the same test module.
+- [ ] Run `pytest tests/hn2md/test_cli_stage_options.py -v --tb=short`; expect failures because options are currently dropped.
+- [ ] Add `plan --manual-plan` and `cover --target-word`, pass all declared options to `stage.run()`, and add return annotations to touched public functions.
+- [ ] Re-run the focused test; expect PASS.
+- [ ] Commit with `git commit -m "fix: forward hn2md stage options"`.
 
-- [ ] **Step 2: Run the focused tests and verify failure**
-
-Run: `pytest tests/hn2md/test_cli_stage_options.py -v --tb=short`
-
-Expected: FAIL because CLI currently drops every stage-specific argument.
-
-- [ ] **Step 3: Pass options through and add new Click options**
-
-Implement these calls:
-
-```python
-stage.run(rt, machine, concurrency=concurrency)
-stage.run(rt, machine, llm=llm, manual_plan_file=manual_plan_file)
-stage.run(rt, machine, plan_file=plan_file)
-stage.run(rt, machine, markdown_file=markdown_file, mode=mode, target_word=target_word)
-stage.run(rt, machine, markdown_file=markdown_file, cover_image=cover_image)
-```
-
-Add `@click.option("--manual-plan", "manual_plan_file", type=click.Path(exists=True))` to `plan` and `@click.option("--target-word", default=None)` to `cover`. Add return type annotations to touched public functions.
-
-- [ ] **Step 4: Run focused tests**
-
-Run: `pytest tests/hn2md/test_cli_stage_options.py -v --tb=short`
-
-Expected: all tests PASS.
-
-- [ ] **Step 5: Commit**
-
-```bash
-git add hn2md/cli.py tests/hn2md/test_cli_stage_options.py
-git commit -m "fix: forward hn2md stage options"
-```
-
-### Task 2: Add validated manual Codex plan import
+### Task 2: Import Codex plans through the existing PlanStage
 
 **Files:**
-- Create: `hn2md/manual_plan.py`
 - Modify: `hn2md/stages/plan.py`
-- Test: `tests/hn2md/test_manual_plan.py`
 - Test: `tests/hn2md/test_plan_stage.py`
 
-- [ ] **Step 1: Write plan validation tests**
-
-Test a valid plan and reject missing/duplicate/mismatched data:
-
-```python
-valid = {
-    "tags": ["AI", "开发", "开源", "安全"],
-    "ordered_ids": [2, 1],
-    "items": [
-        {"id": 1, "title_chs": "标题一", "content_summary": "足够长的正文摘要" * 3, "discuss_summary": "讨论摘要"},
-        {"id": 2, "title_chs": "标题二", "content_summary": "足够长的正文摘要" * 3, "discuss_summary": "讨论摘要"},
-    ],
-}
-assert validate_manual_plan(valid)["ordered_ids"] == [2, 1]
-```
-
-Assert `ManualPlanError` for duplicate IDs, an `ordered_ids` set mismatch, non-four-tag input, empty required text, and hallucination markers.
-
-- [ ] **Step 2: Run validation tests and verify failure**
-
-Run: `pytest tests/hn2md/test_manual_plan.py -v --tb=short`
-
-Expected: FAIL because `hn2md.manual_plan` does not exist.
-
-- [ ] **Step 3: Implement the manual-plan module**
-
-Define the public API:
+- [ ] Write failing tests for a valid four-tag plan and invalid duplicate IDs, mismatched `ordered_ids`, empty publish fields, and hallucination markers.
+- [ ] In the valid test, patch all `src.llm` entry points to raise if called and assert:
 
 ```python
-class ManualPlanError(ValueError):
-    """Raised when a Codex plan cannot enter the publish pipeline."""
-
-def validate_manual_plan(plan: object) -> dict[str, Any]: ...
-
-def import_manual_plan(source: Path, destination_dir: Path) -> Path: ...
-```
-
-Validate exact ID correspondence, four non-empty unique tags, and non-empty publish fields. Reuse `contains_hallucination_markers` and `validate_summary_length`; write a normalized UTF-8 JSON copy atomically beneath `destination_dir`.
-
-- [ ] **Step 4: Write PlanStage no-LLM tests**
-
-Patch `src.llm.llm_business.generate_summary`, `translate_title`, evaluator, and tag extractor to raise if called. Execute:
-
-```python
-result = PlanStage().execute(ctx, machine, manual_plan_file=str(source))
-assert Path(result["plan_file"]).parent == ctx.codex_dir
+result = PlanStage().execute(ctx, machine, manual_plan_file=str(plan_path))
 assert result["manual"] is True
+assert result["story_count"] == 2
+assert Path(result["plan_file"]).parent == ctx.codex_dir
 ```
 
-- [ ] **Step 5: Implement manual mode before LLM imports**
+- [ ] Run `pytest tests/hn2md/test_plan_stage.py -v --tb=short`; expect failure because manual mode is absent.
+- [ ] Add private `_validate_manual_plan()` and `_import_manual_plan()` helpers directly to `plan.py`. Validate unique IDs, exact ordered-ID correspondence, four unique tags, required text, summary length, and hallucination markers.
+- [ ] Change `execute()` to accept `llm: str | None` and `manual_plan_file: str | None`. Return from manual mode before importing any LLM module; preserve current automatic mode.
+- [ ] Re-run the focused test; expect PASS and zero external LLM calls.
+- [ ] Commit with `git commit -m "feat: import Codex plans through hn2md"`.
 
-Change the signature to:
-
-```python
-def execute(
-    self,
-    ctx: RuntimeContext,
-    machine: JobStateMachine,
-    llm: str | None = None,
-    manual_plan_file: str | None = None,
-) -> dict[str, Any]:
-```
-
-When `manual_plan_file` is present, call `import_manual_plan()` and return its receipt data before importing any `src.llm` module. Preserve automatic mode and route `llm` through the existing provider selection mechanism if supported; otherwise reject unsupported explicit overrides clearly.
-
-- [ ] **Step 6: Run manual and automatic plan tests**
-
-Run: `pytest tests/hn2md/test_manual_plan.py tests/hn2md/test_plan_stage.py -v --tb=short`
-
-Expected: all tests PASS and no mocked LLM is called in manual mode.
-
-- [ ] **Step 7: Commit**
-
-```bash
-git add hn2md/manual_plan.py hn2md/stages/plan.py tests/hn2md/test_manual_plan.py tests/hn2md/test_plan_stage.py
-git commit -m "feat: import Codex plans through hn2md"
-```
-
-### Task 3: Move Codex context collection behind CollectStage
+### Task 3: Reuse the existing Codex collector
 
 **Files:**
-- Create: `hn2md/collection.py`
+- Modify: `skills/publish-hacknews-codex/scripts/collect_news_context.py`
 - Modify: `hn2md/stages/collect.py`
 - Test: `tests/hn2md/test_collection.py`
 
-- [ ] **Step 1: Write mocked collection tests**
-
-Create a temporary SQLite `news` table and mock crawler, discussion, screenshot, and image functions. Assert that:
-
-```python
-result = asyncio.run(collect_context(ctx, concurrency=2))
-assert result["count"] == 1
-assert result["concurrency"] == 2
-assert Path(result["context_file"]).exists()
-```
-
-Also verify the DB stores article/discussion text, screenshot, and three image paths, with no real network calls.
-
-- [ ] **Step 2: Run collection tests and verify failure**
-
-Run: `pytest tests/hn2md/test_collection.py -v --tb=short`
-
-Expected: FAIL because `collect_context` does not exist.
-
-- [ ] **Step 3: Implement reusable async collection**
-
-Expose:
+- [ ] Write a failing test with a temporary DB and mocked crawler, discussion, image, and screenshot helpers. Assert article/discussion/images are stored and a context JSON is produced.
+- [ ] Run `pytest tests/hn2md/test_collection.py -v --tb=short`; expect failure because collection is only exposed through argparse `main()`.
+- [ ] Extract the existing body into:
 
 ```python
-async def collect_context(ctx: RuntimeContext, concurrency: int = 3) -> dict[str, Any]: ...
+async def collect_context(
+    ctx: RuntimeContext,
+    concurrency: int = 3,
+    hours: int = 18,
+) -> dict[str, Any]:
+    ...
 ```
 
-Use `get_db(str(ctx.db_path))`, `asyncio.Semaphore(max(1, concurrency))`, the crawler abstraction, discussion handler, screenshot saver, and article image saver. Query the current local date, commit each completed result through one coordinated connection, and write `hacknews_context_<timestamp>.json` to `ctx.codex_dir`.
+Use `ctx.db_path` and `ctx.codex_dir`, the unified DB factory, the current helper functions, and one coordinated writer connection. Keep `main()` as a wrapper that parses arguments and calls `collect_context()`.
+- [ ] Replace duplicate logic in `CollectStage.execute()` with `asyncio.run(collect_context(ctx, concurrency))`.
+- [ ] Run `pytest tests/hn2md/test_collection.py tests/hn2md/test_stages.py -v --tb=short`; expect PASS.
+- [ ] Commit with `git commit -m "refactor: reuse Codex collector from hn2md"`.
 
-- [ ] **Step 4: Make CollectStage call the service**
-
-Use a synchronous stage adapter:
-
-```python
-def execute(self, ctx, machine, concurrency: int = 3) -> dict[str, Any]:
-    return asyncio.run(collect_context(ctx, concurrency=max(1, concurrency)))
-```
-
-Do not retain direct crawler/database logic in the stage.
-
-- [ ] **Step 5: Run tests**
-
-Run: `pytest tests/hn2md/test_collection.py tests/hn2md/test_stages.py -v --tb=short`
-
-Expected: all tests PASS.
-
-- [ ] **Step 6: Commit**
-
-```bash
-git add hn2md/collection.py hn2md/stages/collect.py tests/hn2md/test_collection.py
-git commit -m "feat: collect Codex context through hn2md"
-```
-
-### Task 4: Carry the plan through ApplyStage
+### Task 4: Pass the plan through ApplyStage
 
 **Files:**
 - Modify: `hn2md/stages/apply.py`
 - Test: `tests/hn2md/test_apply_stage.py`
 
-- [ ] **Step 1: Write explicit and receipt plan tests**
+- [ ] Write failing tests for explicit `plan_file` and PLANNING-receipt fallback.
+- [ ] Run `pytest tests/hn2md/test_apply_stage.py -v --tb=short`; expect the explicit-path test to fail.
+- [ ] Accept `plan_file: str | None`, fall back to the PLANNING receipt, verify the required `items` shape, preserve parameterized SQL, and return the resolved plan path.
+- [ ] Re-run the focused test; expect PASS.
+- [ ] Commit with `git commit -m "fix: pass plan artifacts through apply stage"`.
 
-Build a temporary DB and assert both lookup modes update only parameterized IDs:
-
-```python
-result = ApplyStage().execute(ctx, machine, plan_file=str(plan_path))
-assert result == {"updated": 2, "plan_file": str(plan_path.resolve())}
-```
-
-Also test missing files and malformed plans fail before writes.
-
-- [ ] **Step 2: Run tests and verify failure**
-
-Run: `pytest tests/hn2md/test_apply_stage.py -v --tb=short`
-
-Expected: explicit plan test FAIL because the stage does not accept `plan_file`.
-
-- [ ] **Step 3: Implement plan resolution and validation**
-
-Change the signature to accept `plan_file: str | None = None`, otherwise read PLANNING receipt. Load using the manual-plan validation function, update with `?` placeholders, and return the resolved path for the RENDERING receipt chain.
-
-- [ ] **Step 4: Run tests**
-
-Run: `pytest tests/hn2md/test_apply_stage.py -v --tb=short`
-
-Expected: all tests PASS.
-
-- [ ] **Step 5: Commit**
-
-```bash
-git add hn2md/stages/apply.py tests/hn2md/test_apply_stage.py
-git commit -m "feat: apply validated hn2md plans"
-```
-
-### Task 5: Render ordered Codex output through hn2md
+### Task 5: Reuse the existing manual renderer
 
 **Files:**
-- Create: `hn2md/rendering.py`
+- Modify: `skills/publish-hacknews-codex/scripts/render_manual_markdown.py`
 - Modify: `hn2md/stages/render.py`
 - Test: `tests/hn2md/test_rendering.py`
 
-- [ ] **Step 1: Write rendering tests**
-
-Seed rows in reverse DB order, supply `ordered_ids=[2, 1]`, and assert the generated Markdown places item 2 first, contains exactly the four plan tags, safely quotes quotes/colon/newlines in frontmatter, creates HTML, and returns `astro_file=None` when Astro is disabled.
-
-- [ ] **Step 2: Run tests and verify failure**
-
-Run: `pytest tests/hn2md/test_rendering.py -v --tb=short`
-
-Expected: FAIL because the rendering service does not exist and the stage ignores the plan.
-
-- [ ] **Step 3: Implement the rendering service**
-
-Expose:
+- [ ] Write a failing test with DB order `[1, 2]` and plan order `[2, 1]`. Assert item 2 renders first, four tags are preserved, YAML strings are escaped, and Markdown/HTML paths are returned.
+- [ ] Run `pytest tests/hn2md/test_rendering.py -v --tb=short`; expect failure because rendering is only exposed through argparse `main()`.
+- [ ] Refactor the existing script body into:
 
 ```python
-def yaml_quote(value: object) -> str: ...
-
-def render_plan(
+def render_manual_markdown(
     ctx: RuntimeContext,
     plan_file: Path,
     *,
     now: datetime | None = None,
-) -> dict[str, str | None]: ...
+) -> dict[str, str | None]:
+    ...
 ```
 
-Fetch each ID with parameterized SQL through `get_db`, preserve plan order, generate Markdown and HTML under `ctx.markdown_dir`, and resolve optional Astro output through the existing deployment settings. Return `markdown_file`, `html_file`, `astro_file`, and `plan_file`.
+Use `ctx.db_path`/`ctx.markdown_dir`, parameterized queries, current YAML escaping and HTML conversion, and existing optional Astro settings. Keep `main()` as a compatibility wrapper.
+- [ ] Make `RenderStage` obtain `plan_file` from APPLYING receipt and call `render_manual_markdown()`.
+- [ ] Re-run the focused test; expect PASS.
+- [ ] Commit with `git commit -m "refactor: reuse manual renderer from hn2md"`.
 
-- [ ] **Step 4: Update RenderStage receipt lookup**
-
-Resolve the plan from APPLYING, then PLANNING as a compatibility fallback:
-
-```python
-apply_receipt = machine.job.stages.get(Stage.APPLYING.value, {})
-plan_file = apply_receipt.get("output_summary", {}).get("plan_file")
-if not plan_file:
-    raise RuntimeError("No plan file from APPLYING stage")
-return render_plan(ctx, Path(plan_file))
-```
-
-- [ ] **Step 5: Run tests**
-
-Run: `pytest tests/hn2md/test_rendering.py -v --tb=short`
-
-Expected: all tests PASS.
-
-- [ ] **Step 6: Commit**
-
-```bash
-git add hn2md/rendering.py hn2md/stages/render.py tests/hn2md/test_rendering.py
-git commit -m "feat: render ordered Codex plans with hn2md"
-```
-
-### Task 6: Fix CoverStage and PublishStage reusable API calls
+### Task 6: Use existing cover and publish APIs correctly
 
 **Files:**
 - Modify: `hn2md/stages/cover.py`
 - Modify: `hn2md/stages/publish.py`
+- Test: `tests/hn2md/test_cover_stage.py`
+- Test: `tests/hn2md/test_publish_stage.py`
 - Modify: `tests/hn2md/test_publish_dry_run.py`
-- Create: `tests/hn2md/test_cover_stage.py`
-- Create: `tests/hn2md/test_publish_stage.py`
 
-- [ ] **Step 1: Write failing API-call tests**
-
-Patch `scripts.generate_wechat_cover_ai.generate_cover_ai`, `scripts.generate_wechat_cover.generate_cover`, and `scripts.publish_wechat.publish_to_wechat`. Assert exact explicit arguments and receipt fallbacks. Assert argparse `main` is never referenced.
-
-- [ ] **Step 2: Run focused tests and verify failure**
-
-Run: `pytest tests/hn2md/test_cover_stage.py tests/hn2md/test_publish_stage.py tests/hn2md/test_publish_dry_run.py -v --tb=short`
-
-Expected: non-dry-run tests FAIL with the current `main()` signature mismatch.
-
-- [ ] **Step 3: Implement CoverStage API selection**
-
-Use:
+- [ ] Write failing tests patching `generate_cover_ai`, `generate_cover`, and `publish_to_wechat`; assert argparse `main()` is not called.
+- [ ] Run the focused tests; expect current function-signature failures.
+- [ ] In CoverStage, resolve explicit Markdown or receipt fallback and call:
 
 ```python
-if mode == "ai":
-    from scripts.generate_wechat_cover_ai import generate_cover_ai
-    cover_path = generate_cover_ai(md_file, target_word=target_word)
-elif mode == "pillow":
-    from scripts.generate_wechat_cover import generate_cover
-    cover_path = generate_cover(md_file)
-else:
-    raise ValueError(f"Unsupported cover mode: {mode}")
+generate_cover_ai(md_file, target_word=target_word)  # ai
+generate_cover(md_file)                              # pillow
 ```
 
-Accept explicit `markdown_file`, otherwise use RENDERING receipt.
+- [ ] In PublishStage, resolve explicit paths or receipts, retain safety/dry-run gates, then call `publish_to_wechat(md_file, cover_image=cover)`.
+- [ ] Run `pytest tests/hn2md/test_cover_stage.py tests/hn2md/test_publish_stage.py tests/hn2md/test_publish_dry_run.py -v --tb=short`; expect PASS.
+- [ ] Commit with `git commit -m "fix: reuse cover and publish APIs"`.
 
-- [ ] **Step 4: Implement PublishStage reusable call**
-
-Accept `markdown_file` and `cover_image`, fall back to receipts, preserve safety and dry-run gates, then call:
-
-```python
-from scripts.publish_wechat import publish_to_wechat
-media_id = publish_to_wechat(md_file, cover_image=cover)
-```
-
-- [ ] **Step 5: Run focused tests**
-
-Run: `pytest tests/hn2md/test_cover_stage.py tests/hn2md/test_publish_stage.py tests/hn2md/test_publish_dry_run.py -v --tb=short`
-
-Expected: all tests PASS.
-
-- [ ] **Step 6: Commit**
-
-```bash
-git add hn2md/stages/cover.py hn2md/stages/publish.py tests/hn2md/test_cover_stage.py tests/hn2md/test_publish_stage.py tests/hn2md/test_publish_dry_run.py
-git commit -m "fix: call reusable cover and publish APIs"
-```
-
-### Task 7: Rewrite publish-hacknews-codex around hn2md
+### Task 7: Rewrite the skill around hn2md subcommands
 
 **Files:**
 - Modify: `skills/publish-hacknews-codex/SKILL.md`
 - Test: `tests/hn2md/test_codex_skill_contract.py`
 
-- [ ] **Step 1: Write the skill contract test**
+- [ ] Write a contract test requiring `hn2md fetch`, `collect`, `plan --manual-plan`, `apply`, `render`, `cover`, and `publish`, and rejecting direct project-script commands.
+- [ ] Run the test; expect failure against the current skill.
+- [ ] Rewrite the skill while retaining DB quality gates, Codex plan generation, failed-domain handling, optional Astro exact-file commit, and image-directory opening. State that manual-plan mode never calls Gemini/Grok/Moonshot.
+- [ ] Re-run the contract test; expect PASS.
+- [ ] Commit with `git commit -m "docs: compose Codex publishing with hn2md"`.
 
-Read SKILL.md and assert required commands exist while forbidden legacy project entry points do not:
-
-```python
-text = skill_path.read_text(encoding="utf-8")
-for command in ["hn2md fetch", "hn2md collect", "hn2md plan --manual-plan", "hn2md apply", "hn2md render", "hn2md cover", "hn2md publish"]:
-    assert command in text
-for legacy in ["src\\core\\fetch_news.py", "apply_news_edits.py", "render_manual_markdown.py", "generate_wechat_cover_ai.py", "publish_wechat.py"]:
-    assert legacy not in text
-```
-
-- [ ] **Step 2: Run contract test and verify failure**
-
-Run: `pytest tests/hn2md/test_codex_skill_contract.py -v --tb=short`
-
-Expected: FAIL because the skill still invokes standalone scripts.
-
-- [ ] **Step 3: Rewrite the skill workflow**
-
-Document fetch/collect, DB quality gate, Codex context reading and plan generation, `hn2md plan --manual-plan`, apply/render, target-word cover, WeChat publish, optional Astro exact-file commit, and image-directory opening. State explicitly that manual-plan mode must not call Gemini/Grok/Moonshot.
-
-- [ ] **Step 4: Run contract test**
-
-Run: `pytest tests/hn2md/test_codex_skill_contract.py -v --tb=short`
-
-Expected: PASS.
-
-- [ ] **Step 5: Commit**
-
-```bash
-git add skills/publish-hacknews-codex/SKILL.md tests/hn2md/test_codex_skill_contract.py
-git commit -m "docs: compose Codex publishing with hn2md"
-```
-
-### Task 8: End-to-end mocked workflow and full verification
+### Task 8: Integration verification
 
 **Files:**
-- Create: `tests/hn2md/test_codex_manual_workflow.py`
+- Test: `tests/hn2md/test_codex_manual_workflow.py`
 - Modify: `docs/RUNBOOK.md`
 
-- [ ] **Step 1: Write a mocked stage-chain test**
-
-Run COLLECTING through PUBLISHING with a temporary DB and manual plan while mocking all network, LLM, image generation, and WeChat calls. Assert state receipts carry `context_file -> plan_file -> markdown_file -> cover_image -> wechat_media_id`, and assert every external LLM mock has zero calls.
-
-- [ ] **Step 2: Run the workflow test and fix only integration defects**
-
-Run: `pytest tests/hn2md/test_codex_manual_workflow.py -v --tb=short`
-
-Expected: PASS after resolving any receipt-key or signature mismatch exposed by integration.
-
-- [ ] **Step 3: Update the runbook**
-
-Add the canonical Codex workflow:
-
-```powershell
-hn2md fetch
-hn2md collect --concurrency 3
-hn2md plan --manual-plan <plan.json>
-hn2md apply
-hn2md render
-hn2md cover <markdown.md> --target-word <short-title>
-hn2md publish <markdown.md> --cover-image <cover.png>
-```
-
-Explain that `hn2md release` without a manual plan uses configured external LLMs and is not the Codex skill path.
-
-- [ ] **Step 4: Run all tests**
-
-Run: `pytest tests/ -v --tb=short`
-
-Expected: all tests PASS; network, LLM, image, and WeChat calls remain mocked.
-
-- [ ] **Step 5: Run static repository checks**
-
-Run: `rg -n "summarize_news[345]|scripts\\publish_wechat.py|scripts\\generate_wechat_cover_ai.py" hn2md skills/publish-hacknews-codex`
-
-Expected: no archived summarizer references; SKILL.md contains no direct script entry points.
-
-- [ ] **Step 6: Commit**
-
-```bash
-git add tests/hn2md/test_codex_manual_workflow.py docs/RUNBOOK.md
-git commit -m "test: verify Codex manual hn2md workflow"
-```
+- [ ] Add a mocked stage-chain test verifying receipt flow `context_file -> plan_file -> markdown_file -> cover_image -> wechat_media_id` and zero external LLM calls.
+- [ ] Run `pytest tests/hn2md/test_codex_manual_workflow.py -v --tb=short`; fix only integration mismatches until PASS.
+- [ ] Document the canonical composable workflow in RUNBOOK.
+- [ ] Run `pytest tests/ -v --tb=short`; expect all tests PASS with no real HTTP, LLM, image, or WeChat calls.
+- [ ] Run `rg -n "summarize_news[345]" hn2md skills/publish-hacknews-codex`; expect no archived summarizer references.
+- [ ] Commit with `git commit -m "test: verify Codex manual hn2md workflow"`.
 
 ## Self-review
 
-- Spec coverage: every approved requirement maps to Tasks 1-8.
-- External-call safety: all collection, LLM, image, Astro, and WeChat interactions are mocked or remain outside automated tests.
-- State continuity: PLANNING imports the Codex plan before APPLYING, so no state transition bypass is required.
-- Type consistency: `manual_plan_file`, `plan_file`, `markdown_file`, `cover_image`, and `target_word` names remain consistent from CLI through stage APIs and receipts.
-- Scope control: no new LLM provider, service, or Astro pipeline stage is introduced.
+- All approved behavior is covered without adding functional Python modules.
+- Existing scripts retain their CLI wrappers, so compatibility is preserved.
+- Manual PLANNING preserves state transitions and prevents external LLM use.
+- Every external call is mocked in tests.
