@@ -8,6 +8,7 @@ from hn2md.constants import Stage
 from hn2md.context import RuntimeContext
 from hn2md.state import JobStateMachine
 from hn2md.stages.base import BaseStage
+from hn2md.stages.script_loader import load_project_function
 
 logger = logging.getLogger(__name__)
 
@@ -72,8 +73,7 @@ class PublishStage(BaseStage):
                 "safety_check": "passed",
             }
 
-        from scripts.publish_wechat import publish_to_wechat
-
+        publish_to_wechat = load_project_function(ctx, "scripts.publish_wechat", "publish_to_wechat")
         media_id = publish_to_wechat(md_file, cover_image=cover)
         return {
             "wechat_media_id": str(media_id) if media_id else None,

@@ -241,6 +241,7 @@ def publish(ctx_obj, markdown_file, cover_image):
                 markdown_file=markdown_file,
                 cover_image=cover_image,
             )
+            machine.transition(Stage.DONE)
             _print(f"Publish complete: {receipt.output_summary}", "green")
     except LockError as e:
         _print(f"Lock error: {e}", "red")

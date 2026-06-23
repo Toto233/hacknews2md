@@ -6,6 +6,7 @@ from hn2md.constants import Stage
 from hn2md.context import RuntimeContext
 from hn2md.state import JobStateMachine
 from hn2md.stages.base import BaseStage
+from hn2md.stages.script_loader import load_project_function
 
 
 class CoverStage(BaseStage):
@@ -27,12 +28,18 @@ class CoverStage(BaseStage):
             raise RuntimeError("No markdown file from RENDERING stage")
 
         if mode == "ai":
-            from scripts.generate_wechat_cover_ai import generate_cover_ai
-
+            generate_cover_ai = load_project_function(
+                ctx,
+                "scripts.generate_wechat_cover_ai",
+                "generate_cover_ai",
+            )
             cover_path = generate_cover_ai(md_file, target_word=target_word)
         elif mode == "pillow":
-            from scripts.generate_wechat_cover import generate_cover
-
+            generate_cover = load_project_function(
+                ctx,
+                "scripts.generate_wechat_cover",
+                "generate_cover",
+            )
             cover_path = generate_cover(md_file)
         else:
             raise ValueError(f"Unsupported cover mode: {mode}")

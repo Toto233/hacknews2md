@@ -209,6 +209,23 @@ class TestBaseStageRunGivesUp:
         assert stored["success"] is False
         assert "transient failure" in stored["error"]
 
+    def test_failed_stage_can_be_rerun_within_retry_budget(self, tmp_path):
+        """A failed stage should be runnable again instead of getting stuck in its own status."""
+        ctx = _make_ctx(tmp_path)
+        machine = _make_machine(tmp_path)
+
+        failing_stage, _ = _make_stage(Stage.FETCHING, succeed_after=-1, max_retries=0)
+        with patch("hn2md.stages.base.time.sleep"):
+            with pytest.raises(ConnectionError):
+                failing_stage.run(ctx, machine)
+
+        retry_stage, _ = _make_stage(Stage.FETCHING, succeed_after=0, max_retries=0)
+        receipt = retry_stage.run(ctx, machine)
+
+        assert receipt.success is True
+        assert machine.job.status == Stage.FETCHING.value
+        assert machine.job.stages["FETCHING"]["success"] is True
+
     def test_retry_budget_exhausted_raises(self, tmp_path):
         """run() should raise RuntimeError when retry budget is exhausted."""
         ctx = _make_ctx(tmp_path)

@@ -41,7 +41,8 @@ class BaseStage(ABC):
         if not machine.can_retry(self.stage_name):
             raise RuntimeError(f"Retry budget exhausted for {self.stage_name.value}")
 
-        machine.transition(self.stage_name)
+        if Stage(machine.job.status) != self.stage_name:
+            machine.transition(self.stage_name)
         started = datetime.now()
         receipt = StageReceipt(
             stage=self.stage_name.value,

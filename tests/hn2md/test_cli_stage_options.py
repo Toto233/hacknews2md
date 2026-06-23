@@ -6,6 +6,7 @@ from unittest.mock import MagicMock, patch
 from click.testing import CliRunner
 
 from hn2md.cli import main
+from hn2md.constants import Stage
 from hn2md.context import RuntimeContext
 
 
@@ -104,3 +105,12 @@ def test_publish_forwards_paths(tmp_path) -> None:
         markdown_file=str(markdown),
         cover_image=str(cover),
     )
+
+
+def test_publish_marks_job_done_after_success(tmp_path) -> None:
+    markdown = tmp_path / "article.md"
+
+    result, _stage, machine = _invoke(tmp_path, ["publish", str(markdown)])
+
+    assert result.exit_code == 0, result.output
+    machine.transition.assert_called_once_with(Stage.DONE)
