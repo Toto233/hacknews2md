@@ -45,9 +45,10 @@ dev = [
 
 [project.scripts]
 hn2md = "hn2md.cli:main"
+publisher = "publisher.cli:main"
 
 [tool.setuptools.packages.find]
-include = ["hn2md*", "src*"]
+include = ["hn2md*", "publisher*", "src*"]
 
 [tool.setuptools.package-data]
 "*" = ["*.css"]
