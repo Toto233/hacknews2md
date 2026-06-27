@@ -66,4 +66,5 @@ archive/
 
 # ─── Project-Specific ───────────────────────────────────────────
 tmp/
+.worktrees/
 .ruff_cache/
