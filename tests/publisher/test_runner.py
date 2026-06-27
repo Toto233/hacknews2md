@@ -32,3 +32,22 @@ def test_run_release_invokes_source_stages_in_order(tmp_path) -> None:
     assert result["dry_run"] is True
     assert result["completed_stages"] == ["FETCHING"]
     fake_stage.run.assert_called_once()
+
+
+def test_run_release_rejects_stage_missing_required_artifact(tmp_path) -> None:
+    fake_stage = FakeStage()
+    fake_stage.run.return_value.output_summary = {}
+    source = SourceDefinition(
+        name="hackernews",
+        period_kind="date",
+        stages={GenericStage.FETCHING: lambda: fake_stage},
+        required_artifacts={GenericStage.FETCHING: ("markdown_file",)},
+    )
+    ctx = PublisherContext.create(tmp_path, source="hackernews", period="20260627")
+
+    try:
+        run_release(ctx, source, stages=[GenericStage.FETCHING], dry_run=True)
+    except RuntimeError as exc:
+        assert "FETCHING missing required artifacts: markdown_file" in str(exc)
+    else:
+        raise AssertionError("expected RuntimeError")

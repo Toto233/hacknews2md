@@ -23,4 +23,17 @@ HACKERNEWS_SOURCE = SourceDefinition(
         GenericStage.COVERING: CoverStage,
         GenericStage.PUBLISHING: PublishStage,
     },
+    stage_order=(
+        GenericStage.FETCHING,
+        GenericStage.COLLECTING,
+        GenericStage.PLANNING,
+        GenericStage.APPLYING,
+        GenericStage.RENDERING,
+        GenericStage.COVERING,
+        GenericStage.PUBLISHING,
+    ),
+    required_artifacts={
+        GenericStage.RENDERING: ("markdown_file", "html_file"),
+        GenericStage.COVERING: ("cover_image",),
+    },
 )

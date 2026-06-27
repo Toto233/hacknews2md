@@ -5,10 +5,10 @@ from pathlib import Path
 import click
 
 from hn2md.state import JobStateMachine
-from publisher.constants import GenericStage
 from publisher.context import PublisherContext, parse_date_period
 from publisher.pipeline.runner import run_release
 from publisher.sources import get_source
+from publisher.sources.base import validate_source_definition
 
 
 @click.group()
@@ -45,18 +45,34 @@ def release(source_name: str, date_value: str | None, dry_run: bool) -> None:
     source = get_source(source_name)
     if not source.enabled:
         raise click.ClickException(f"source is not enabled yet: {source.name}")
+    contract_errors = validate_source_definition(source)
+    if contract_errors:
+        raise click.ClickException("; ".join(contract_errors))
     if source.period_kind != "date":
         raise click.ClickException(f"release for {source_name} month periods is not implemented yet")
     period = parse_date_period(date_value)
     ctx = PublisherContext.create(Path.cwd(), source=source.name, period=period)
-    stages = [
-        GenericStage.FETCHING,
-        GenericStage.COLLECTING,
-        GenericStage.PLANNING,
-        GenericStage.APPLYING,
-        GenericStage.RENDERING,
-        GenericStage.COVERING,
-        GenericStage.PUBLISHING,
-    ]
+    stages = source.stage_order
     result = run_release(ctx, source, stages=stages, dry_run=dry_run)
     click.echo(f"Release complete: {result}")
+
+
+@main.command("validate-source")
+@click.argument("source_name")
+def validate_source(source_name: str) -> None:
+    source = get_source(source_name)
+    errors = validate_source_definition(source)
+    if errors:
+        raise click.ClickException("; ".join(errors))
+    click.echo(f"Source contract OK: {source.name}")
+
+
+@main.command()
+@click.argument("source_name")
+def graph(source_name: str) -> None:
+    source = get_source(source_name)
+    click.echo(f"Source: {source.name}")
+    if not source.stage_order:
+        click.echo("(no stages configured)")
+        return
+    click.echo(" -> ".join(stage.value for stage in source.stage_order))

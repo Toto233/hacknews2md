@@ -44,3 +44,18 @@ def test_release_dry_run_calls_runner(tmp_path, monkeypatch) -> None:
     assert result.exit_code == 0, result.output
     assert "Release complete" in result.output
     run.assert_called_once()
+
+
+def test_validate_source_reports_hackernews_contract_ok() -> None:
+    result = CliRunner().invoke(main, ["validate-source", "hackernews"])
+
+    assert result.exit_code == 0, result.output
+    assert "Source contract OK: hackernews" in result.output
+
+
+def test_graph_prints_hackernews_stage_order() -> None:
+    result = CliRunner().invoke(main, ["graph", "hackernews"])
+
+    assert result.exit_code == 0, result.output
+    assert "Source: hackernews" in result.output
+    assert "FETCHING -> COLLECTING -> PLANNING -> APPLYING -> RENDERING -> COVERING -> PUBLISHING" in result.output

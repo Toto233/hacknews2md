@@ -36,7 +36,8 @@ def run_release(
         stage_factory = source.stages[stage_name]
         stage = stage_factory()
         kwargs = {"dry_run": True} if stage_name == GenericStage.PUBLISHING and dry_run else {}
-        stage.run(runtime_ctx, machine, **kwargs)
+        receipt = stage.run(runtime_ctx, machine, **kwargs)
+        _validate_stage_artifacts(stage_name, receipt, source.required_artifacts.get(stage_name, ()))
         completed.append(stage_name.value)
 
     return {
@@ -45,3 +46,18 @@ def run_release(
         "dry_run": dry_run,
         "completed_stages": completed,
     }
+
+
+def _validate_stage_artifacts(stage_name: GenericStage, receipt: object, required_artifacts: tuple[str, ...]) -> None:
+    if not required_artifacts:
+        return
+
+    output_summary = getattr(receipt, "output_summary", None)
+    if not isinstance(output_summary, dict):
+        missing = required_artifacts
+    else:
+        missing = tuple(name for name in required_artifacts if not output_summary.get(name))
+
+    if missing:
+        joined = ", ".join(missing)
+        raise RuntimeError(f"{stage_name.value} missing required artifacts: {joined}")
