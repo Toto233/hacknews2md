@@ -23,6 +23,32 @@ def test_publish_calls_reusable_api_with_explicit_paths(tmp_path) -> None:
         )
     load.assert_called_once_with(ctx, "scripts.publish_wechat", "publish_to_wechat")
     assert result["wechat_media_id"] == "media-1"
+    assert result["skipped_images"] == []
+
+
+def test_publish_reports_oversize_local_images(tmp_path) -> None:
+    image = tmp_path / "oversize.png"
+    image.write_bytes(b"x" * (1024 * 1024 + 1))
+    md = tmp_path / "article.md"
+    md.write_text(f"# safe\n\n![large]({image})\n", encoding="utf-8")
+    machine = type("M", (), {"job": type("J", (), {"stages": {}})()})()
+    ctx = object()
+
+    with (
+        patch("src.utils.db_utils.get_illegal_keywords", return_value=[]),
+        patch("hn2md.stages.publish.load_project_function", return_value=lambda *_, **__: "media-1"),
+    ):
+        result = PublishStage().execute(ctx, machine, markdown_file=str(md))
+
+    assert result["wechat_media_id"] == "media-1"
+    assert result["skipped_images"] == [
+        {
+            "path": str(image),
+            "reason": "oversize",
+            "limit_bytes": 1024 * 1024,
+            "size_bytes": 1024 * 1024 + 1,
+        }
+    ]
 
 
 def test_publish_loads_project_script_when_project_root_not_on_sys_path(tmp_path, monkeypatch) -> None:

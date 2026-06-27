@@ -1,6 +1,7 @@
 """hn2md unified CLI."""
 
 import sys
+import json as json_mod
 from datetime import datetime
 from pathlib import Path
 
@@ -45,6 +46,22 @@ def _print(msg="", style=None):
         print(f"\033[1m{msg}\033[0m")
     else:
         print(msg)
+
+
+def _job_story_count(job) -> int:
+    """Return the best available story count for status output."""
+    if job.stories:
+        return len(job.stories)
+    for stage_name in (Stage.FETCHING.value, Stage.PLANNING.value, Stage.APPLYING.value):
+        receipt = job.stages.get(stage_name)
+        if not isinstance(receipt, dict):
+            continue
+        summary = receipt.get("output_summary", {})
+        for key in ("saved", "story_count", "updated"):
+            value = summary.get(key)
+            if isinstance(value, int):
+                return value
+    return 0
 
 
 @click.group()
@@ -342,7 +359,7 @@ def status(ctx_obj):
     _print(f"  Status:   {job.status}")
     _print(f"  Created:  {job.created_at}")
     _print(f"  Updated:  {job.updated_at}")
-    _print(f"  Stories:  {len(job.stories)}")
+    _print(f"  Stories:  {_job_story_count(job)}")
 
     if job.stages:
         _print("\n  Stage Receipts:")
@@ -356,13 +373,19 @@ def status(ctx_obj):
 @main.command()
 @click.option("--interactive", is_flag=True)
 @click.option("--llm", default=None)
+@click.option("--json", "json_output", is_flag=True, help="Output audit result as JSON")
 @click.pass_context
-def audit(ctx_obj, interactive, llm):
+def audit(ctx_obj, interactive, llm, json_output):
     """Quality checks on database content."""
     from hn2md.stages.audit import run_audit
 
     rt = ctx_obj.obj["ctx"]
-    run_audit(rt, interactive=interactive, llm_type=llm)
+    if json_output:
+        setup_logging(log_dir=rt.output_dir / "logs", console=False)
+    result = run_audit(rt, interactive=interactive, llm_type=llm)
+    if json_output:
+        print(json_mod.dumps(result, ensure_ascii=False, indent=2))
+        sys.exit(0 if result.get("issues", 0) == 0 else 1)
 
 
 @main.command()

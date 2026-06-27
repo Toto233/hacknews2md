@@ -114,3 +114,17 @@ def test_publish_marks_job_done_after_success(tmp_path) -> None:
 
     assert result.exit_code == 0, result.output
     machine.transition.assert_called_once_with(Stage.DONE)
+
+
+def test_audit_json_outputs_machine_readable_result(tmp_path) -> None:
+    runtime = _runtime(tmp_path)
+
+    with (
+        patch("hn2md.cli.RuntimeContext.create", return_value=runtime),
+        patch("hn2md.stages.audit.run_audit", return_value={"issues": 0, "details": []}),
+    ):
+        result = CliRunner().invoke(main, ["audit", "--json"])
+
+    assert result.exit_code == 0, result.output
+    assert '"issues": 0' in result.output
+    assert '"details": []' in result.output

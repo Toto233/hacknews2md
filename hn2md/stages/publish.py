@@ -1,6 +1,7 @@
 """Publish stage: push to WeChat draft."""
 
 import logging
+import re
 from pathlib import Path
 from typing import Any
 
@@ -11,6 +12,41 @@ from hn2md.stages.base import BaseStage
 from hn2md.stages.script_loader import load_project_function
 
 logger = logging.getLogger(__name__)
+
+
+_LOCAL_IMAGE_PATTERNS = [
+    r"!\[.*?\]\(([^)]+\.(?:jpg|jpeg|png|gif|webp))\)",
+    r'<img[^>]+src=["\']([^"\']+\.(?:jpg|jpeg|png|gif|webp))["\'][^>]*>',
+    r'src=["\']([^"\']+\.(?:jpg|jpeg|png|gif|webp))["\']',
+]
+_WECHAT_IMAGE_LIMIT_BYTES = 1024 * 1024
+
+
+def _find_skipped_local_images(markdown_content: str) -> list[dict[str, Any]]:
+    """Preflight local images that WeChat upload will skip or cannot read."""
+    found: set[str] = set()
+    for pattern in _LOCAL_IMAGE_PATTERNS:
+        found.update(re.findall(pattern, markdown_content, re.IGNORECASE))
+
+    skipped: list[dict[str, Any]] = []
+    for image in sorted(found):
+        if image.startswith(("http://", "https://", "//", "data:")):
+            continue
+        image_path = Path(image)
+        if not image_path.exists():
+            skipped.append({"path": image, "reason": "missing"})
+            continue
+        size = image_path.stat().st_size
+        if size > _WECHAT_IMAGE_LIMIT_BYTES:
+            skipped.append(
+                {
+                    "path": str(image_path),
+                    "reason": "oversize",
+                    "limit_bytes": _WECHAT_IMAGE_LIMIT_BYTES,
+                    "size_bytes": size,
+                }
+            )
+    return skipped
 
 
 class PublishStage(BaseStage):
@@ -40,6 +76,7 @@ class PublishStage(BaseStage):
         md_path = Path(md_file)
         if md_path.exists():
             md_content = md_path.read_text(encoding="utf-8")
+            skipped_images = _find_skipped_local_images(md_content)
 
             from src.utils.db_utils import check_illegal_content, get_illegal_keywords
 
@@ -61,6 +98,7 @@ class PublishStage(BaseStage):
             if contains_hallucination_markers(md_content):
                 logger.warning("[PUBLISH] Hallucination markers detected in content")
         else:
+            skipped_images = []
             logger.warning(f"[PUBLISH] Markdown file not found: {md_file}")
 
         # --- Dry-run mode ---
@@ -71,6 +109,7 @@ class PublishStage(BaseStage):
                 "markdown_file": md_file,
                 "dry_run": True,
                 "safety_check": "passed",
+                "skipped_images": skipped_images,
             }
 
         publish_to_wechat = load_project_function(ctx, "scripts.publish_wechat", "publish_to_wechat")
@@ -78,4 +117,5 @@ class PublishStage(BaseStage):
         return {
             "wechat_media_id": str(media_id) if media_id else None,
             "markdown_file": md_file,
+            "skipped_images": skipped_images,
         }

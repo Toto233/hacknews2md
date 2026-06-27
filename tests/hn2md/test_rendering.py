@@ -80,6 +80,24 @@ def test_generate_markdown_preserves_plan_order_and_tags(tmp_path) -> None:
     assert result["astro_file"] is None
 
 
+def test_generate_markdown_astro_file_has_single_terminal_newline(tmp_path) -> None:
+    ctx = _ctx(tmp_path)
+    plan = _plan(tmp_path)
+    astro_dir = tmp_path / "astro" / "src" / "data" / "blog"
+
+    result = generate_markdown(
+        db_path=ctx.db_path,
+        output_dir=ctx.markdown_dir,
+        plan_file=plan,
+        astro_blog_dir=astro_dir,
+        now=datetime(2026, 6, 22, 12, 30),
+    )
+
+    astro_text = Path(result["astro_file"]).read_text(encoding="utf-8")
+    assert astro_text.endswith("\n")
+    assert not astro_text.endswith("\n\n")
+
+
 def test_render_stage_uses_applying_plan_receipt(tmp_path) -> None:
     ctx = _ctx(tmp_path)
     plan = _plan(tmp_path)

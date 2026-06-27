@@ -80,3 +80,30 @@ def test_collect_stage_collects_full_context_and_writes_snapshot(tmp_path) -> No
         ).fetchone()
     assert row == (("Readable article body " * 10).strip(), "HN discussion", "shot.png", "one.png", "two.png", None)
     crawler.close.assert_awaited_once()
+
+
+def test_collect_stage_reports_image_save_failures_in_receipt_summary(tmp_path) -> None:
+    ctx = _ctx(tmp_path)
+    crawler = MagicMock()
+    crawler.crawl_article = AsyncMock(return_value=("Readable article body " * 10, ["https://img/fail.svg"]))
+    crawler.close = AsyncMock()
+
+    with (
+        patch("src.core.crawlers.scrapling_crawler.ScraplingCrawler", return_value=crawler),
+        patch(
+            "src.core.handlers.discussion_handler.get_discussion_content_async",
+            new=AsyncMock(return_value="HN discussion"),
+        ),
+        patch("src.core.handlers.image_handler.save_article_image", return_value=None),
+        patch("src.core.handlers.screenshot_handler.save_page_screenshot", return_value="shot.png"),
+    ):
+        result = CollectStage().execute(ctx, object(), concurrency=2)
+
+    assert result["image_warnings"] == [
+        {
+            "id": 1,
+            "title": "Story",
+            "image_url": "https://img/fail.svg",
+            "reason": "save_failed",
+        }
+    ]

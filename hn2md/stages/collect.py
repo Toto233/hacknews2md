@@ -28,6 +28,7 @@ async def _collect_item(row: sqlite3.Row, semaphore: asyncio.Semaphore) -> dict[
         article_content = (row["article_content"] or "").strip()
         discussion_content = (row["discussion_content"] or "").strip()
         image_paths = [path for path in (row["largest_image"], row["image_2"], row["image_3"]) if path]
+        image_warnings: list[dict[str, Any]] = []
         screenshot = row["screenshot"]
         collected = False
 
@@ -44,14 +45,36 @@ async def _collect_item(row: sqlite3.Row, semaphore: asyncio.Semaphore) -> dict[
             if image_urls:
                 saved_images = []
                 for index, image_url in enumerate(image_urls[:3], 1):
-                    saved = await asyncio.to_thread(
-                        save_article_image,
-                        image_url,
-                        news_url,
-                        f"{row['title']}_{index}",
-                    )
+                    try:
+                        saved = await asyncio.to_thread(
+                            save_article_image,
+                            image_url,
+                            news_url,
+                            f"{row['title']}_{index}",
+                        )
+                    except Exception as exc:
+                        saved = None
+                        image_warnings.append(
+                            {
+                                "id": row["id"],
+                                "title": row["title"] or "",
+                                "image_url": image_url,
+                                "reason": "exception",
+                                "error": str(exc),
+                            }
+                        )
                     if saved:
                         saved_images.append(saved)
+                    else:
+                        if not image_warnings or image_warnings[-1].get("image_url") != image_url:
+                            image_warnings.append(
+                                {
+                                    "id": row["id"],
+                                    "title": row["title"] or "",
+                                    "image_url": image_url,
+                                    "reason": "save_failed",
+                                }
+                            )
                 if saved_images:
                     image_paths = saved_images
 
@@ -75,6 +98,7 @@ async def _collect_item(row: sqlite3.Row, semaphore: asyncio.Semaphore) -> dict[
             "largest_image": image_paths[0] if len(image_paths) > 0 else None,
             "image_2": image_paths[1] if len(image_paths) > 1 else None,
             "image_3": image_paths[2] if len(image_paths) > 2 else None,
+            "image_warnings": image_warnings,
             "collected": collected,
         }
 
@@ -124,6 +148,11 @@ class CollectStage(BaseStage):
         stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
         context_path = ctx.codex_dir / f"hacknews_context_{stamp}.json"
         payload_items = [{key: value for key, value in item.items() if key != "collected"} for item in items]
+        image_warnings = [
+            warning
+            for item in items
+            for warning in item.get("image_warnings", [])
+        ]
         context_path.write_text(
             json.dumps(
                 {
@@ -142,4 +171,5 @@ class CollectStage(BaseStage):
             "total": len(items),
             "concurrency": concurrency,
             "context_file": str(context_path),
+            "image_warnings": image_warnings,
         }

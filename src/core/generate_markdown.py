@@ -145,7 +145,7 @@ def generate_markdown(
             for line in markdown.splitlines()
             if not (line.startswith("![") and (":\\" in line or line.startswith("![/")))
         ]
-        astro_path.write_text("\n".join(astro_lines) + "\n", encoding="utf-8")
+        astro_path.write_text("\n".join(astro_lines).rstrip() + "\n", encoding="utf-8")
 
     return {
         "markdown_file": str(md_path),
