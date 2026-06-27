@@ -29,12 +29,14 @@ def run_release(
     dry_run: bool = False,
     targets: tuple[str, ...] | None = None,
     rerun: bool = False,
+    stage_kwargs: dict[GenericStage | str, dict[str, object]] | None = None,
 ) -> dict[str, object]:
     machine, _ = JobStateMachine.load_or_create(ctx.job_dir, ctx.period)
     runtime_ctx = _hn_runtime_context(ctx)
     completed: list[str] = []
     publish_targets = targets or source.default_publish_targets
     stage_sequence = tuple(stages)
+    stage_options = stage_kwargs or {}
 
     for stage_name in stage_sequence:
         hn_stage = _to_hn_stage(stage_name)
@@ -42,7 +44,11 @@ def run_release(
             continue
         stage_factory = source.stages[stage_name]
         stage = stage_factory()
-        kwargs: dict[str, object] = {}
+        kwargs: dict[str, object] = dict(
+            stage_options.get(stage_name)
+            or stage_options.get(stage_name.value)
+            or {}
+        )
         if stage_name == GenericStage.PUBLISHING and dry_run:
             kwargs["dry_run"] = True
         if stage_name == GenericStage.RENDERING and "astro" not in publish_targets:

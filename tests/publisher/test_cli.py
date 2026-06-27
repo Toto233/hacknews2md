@@ -85,3 +85,63 @@ def test_graph_prints_hackernews_stage_order() -> None:
     assert result.exit_code == 0, result.output
     assert "Source: hackernews" in result.output
     assert "FETCHING -> COLLECTING -> PLANNING -> APPLYING -> RENDERING -> COVERING -> PUBLISHING" in result.output
+
+
+def test_collect_command_runs_collect_stage_with_concurrency(tmp_path, monkeypatch) -> None:
+    monkeypatch.chdir(tmp_path)
+
+    with patch("publisher.cli.run_release", return_value={"completed_stages": ["COLLECTING"]}) as run:
+        result = CliRunner().invoke(main, ["collect", "hackernews", "--date", "2026-06-27", "--concurrency", "5"])
+
+    assert result.exit_code == 0, result.output
+    _, kwargs = run.call_args
+    assert [stage.value for stage in kwargs["stages"]] == ["COLLECTING"]
+    assert kwargs["stage_kwargs"]["COLLECTING"]["concurrency"] == 5
+
+
+def test_plan_command_imports_manual_plan(tmp_path, monkeypatch) -> None:
+    monkeypatch.chdir(tmp_path)
+    plan = tmp_path / "plan.json"
+    plan.write_text("{}", encoding="utf-8")
+
+    with patch("publisher.cli.run_release", return_value={"completed_stages": ["PLANNING"]}) as run:
+        result = CliRunner().invoke(
+            main,
+            ["plan", "hackernews", "--date", "2026-06-27", "--manual-plan", str(plan)],
+        )
+
+    assert result.exit_code == 0, result.output
+    _, kwargs = run.call_args
+    assert [stage.value for stage in kwargs["stages"]] == ["PLANNING"]
+    assert kwargs["stage_kwargs"]["PLANNING"]["manual_plan_file"] == str(plan)
+
+
+def test_publish_command_targets_wechat_and_passes_artifacts(tmp_path, monkeypatch) -> None:
+    monkeypatch.chdir(tmp_path)
+
+    with patch("publisher.cli.run_release", return_value={"completed_stages": ["PUBLISHING"]}) as run:
+        result = CliRunner().invoke(
+            main,
+            [
+                "publish",
+                "hackernews",
+                "--date",
+                "2026-06-27",
+                "article.md",
+                "--cover-image",
+                "cover.png",
+                "--target",
+                "wechat",
+                "--rerun",
+            ],
+        )
+
+    assert result.exit_code == 0, result.output
+    _, kwargs = run.call_args
+    assert [stage.value for stage in kwargs["stages"]] == ["PUBLISHING"]
+    assert kwargs["targets"] == ("wechat",)
+    assert kwargs["rerun"] is True
+    assert kwargs["stage_kwargs"]["PUBLISHING"] == {
+        "markdown_file": "article.md",
+        "cover_image": "cover.png",
+    }
