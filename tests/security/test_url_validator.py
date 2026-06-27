@@ -4,7 +4,7 @@
 import socket
 
 import pytest
-from src.security.url_validator import validate_url, validate_url_lenient, SecurityError
+from src.security.url_validator import SecurityError, _tun_fake_ip_enabled, validate_url, validate_url_lenient
 
 
 class TestValidateUrl:
@@ -140,6 +140,15 @@ class TestTunFakeIpCompatibility:
         monkeypatch.setattr("src.security.url_validator.socket.getaddrinfo", self._fake_ip_dns)
 
         url = validate_url("https://example.com/article", allow_tun_fake_ip=True)
+
+        assert url == "https://example.com/article"
+
+    def test_fake_ip_dns_allowed_by_default(self, monkeypatch):
+        monkeypatch.delenv("HACKNEWS_ALLOW_TUN_FAKE_IP", raising=False)
+        _tun_fake_ip_enabled.cache_clear()
+        monkeypatch.setattr("src.security.url_validator.socket.getaddrinfo", self._fake_ip_dns)
+
+        url = validate_url("https://example.com/article")
 
         assert url == "https://example.com/article"
 

@@ -61,10 +61,10 @@ def _tun_fake_ip_enabled() -> bool:
     try:
         from src.utils.config import Config
 
-        return bool(Config().get("security.allow_tun_fake_ip", False))
+        return bool(Config().get("security.allow_tun_fake_ip", True))
     except Exception as exc:
         logger.debug("Unable to load TUN Fake-IP setting: %s", exc)
-        return False
+        return True
 
 
 def _is_tun_fake_ip(ip: ipaddress.IPv4Address | ipaddress.IPv6Address) -> bool:

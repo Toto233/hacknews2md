@@ -41,7 +41,17 @@ def status(source_name: str, date_value: str | None) -> None:
 @click.argument("source_name")
 @click.option("--date", "date_value", default=None, help="YYYY-MM-DD or YYYYMMDD")
 @click.option("--dry-run", is_flag=True)
-def release(source_name: str, date_value: str | None, dry_run: bool) -> None:
+@click.option("--from-stage", default=None, help="Start from a declared stage, e.g. PUBLISHING")
+@click.option("--target", "targets", multiple=True, type=click.Choice(["wechat", "astro"]))
+@click.option("--rerun", is_flag=True, help="Run selected stages even if the ledger says they already succeeded")
+def release(
+    source_name: str,
+    date_value: str | None,
+    dry_run: bool,
+    from_stage: str | None,
+    targets: tuple[str, ...],
+    rerun: bool,
+) -> None:
     source = get_source(source_name)
     if not source.enabled:
         raise click.ClickException(f"source is not enabled yet: {source.name}")
@@ -53,7 +63,21 @@ def release(source_name: str, date_value: str | None, dry_run: bool) -> None:
     period = parse_date_period(date_value)
     ctx = PublisherContext.create(Path.cwd(), source=source.name, period=period)
     stages = source.stage_order
-    result = run_release(ctx, source, stages=stages, dry_run=dry_run)
+    if from_stage:
+        try:
+            start_index = stages.index(type(stages[0])(from_stage))
+        except (ValueError, IndexError):
+            raise click.ClickException(f"unknown stage for {source.name}: {from_stage}") from None
+        stages = stages[start_index:]
+    effective_targets = targets or source.default_publish_targets
+    result = run_release(
+        ctx,
+        source,
+        stages=stages,
+        dry_run=dry_run,
+        targets=effective_targets,
+        rerun=rerun,
+    )
     click.echo(f"Release complete: {result}")
 
 
