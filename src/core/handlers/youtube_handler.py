@@ -6,12 +6,28 @@ Fetches subtitles via youtube_transcript_api and downloads the thumbnail.
 """
 
 import logging
+import re
 from urllib.parse import parse_qs, urlparse
 
 from src.core.handlers.image_handler import save_article_image
 from src.security.url_validator import SecurityError, validate_url
 
 logger = logging.getLogger(__name__)
+
+YOUTUBE_TRANSCRIPT_LANGUAGES = ["zh-Hans", "zh-Hant", "zh", "zh-CN", "zh-TW", "en", "en-US", "en-GB"]
+
+
+def _normalize_transcript_text(items) -> str:
+    """Join transcript segments and normalize whitespace for downstream summaries."""
+    texts = []
+    for item in items:
+        text = getattr(item, "text", "")
+        if not text:
+            continue
+        normalized = re.sub(r"\s+", " ", text).strip()
+        if normalized:
+            texts.append(normalized)
+    return " ".join(texts)
 
 
 async def get_youtube_content(url: str, title: str) -> tuple[str, list[str], list[str]]:
@@ -56,11 +72,16 @@ async def get_youtube_content(url: str, title: str) -> tuple[str, list[str], lis
 
         api = YouTubeTranscriptApi()
         transcript_list = api.list(video_id)
-        # Prefer manual subtitles, fall back to auto-generated
-        transcript = transcript_list.find_transcript(["zh-Hans", "zh-Hant", "en"])
+        # Prefer manual subtitles, then fall back to auto-generated captions.
+        try:
+            transcript = transcript_list.find_transcript(YOUTUBE_TRANSCRIPT_LANGUAGES)
+            transcript_source = "manual"
+        except NoTranscriptFound:
+            transcript = transcript_list.find_generated_transcript(YOUTUBE_TRANSCRIPT_LANGUAGES)
+            transcript_source = "generated"
         transcript_data = transcript.fetch()
-        article_content = " ".join([item.text for item in transcript_data])
-        logger.info(f"[YOUTUBE] subtitle OK | len:{len(article_content)}")
+        article_content = _normalize_transcript_text(transcript_data)
+        logger.info(f"[YOUTUBE] subtitle OK | source:{transcript_source} | len:{len(article_content)}")
     except ImportError as e:
         logger.warning(f"[YOUTUBE] transcript library not installed: {e}")
         article_content = f"无法获取视频 {title} 的字幕（缺少依赖库）。"

@@ -50,6 +50,11 @@ def _ctx(tmp_path: Path) -> RuntimeContext:
     )
 
 
+def _set_news_url(ctx: RuntimeContext, url: str) -> None:
+    with sqlite3.connect(ctx.db_path) as conn:
+        conn.execute("UPDATE news SET news_url=? WHERE id=1", (url,))
+
+
 def test_collect_stage_collects_full_context_and_writes_snapshot(tmp_path) -> None:
     ctx = _ctx(tmp_path)
     crawler = MagicMock()
@@ -107,3 +112,32 @@ def test_collect_stage_reports_image_save_failures_in_receipt_summary(tmp_path) 
             "reason": "save_failed",
         }
     ]
+
+
+def test_collect_stage_routes_youtube_urls_to_youtube_handler(tmp_path) -> None:
+    ctx = _ctx(tmp_path)
+    _set_news_url(ctx, "https://www.youtube.com/watch?v=abc123")
+
+    with (
+        patch(
+            "src.core.handlers.youtube_handler.get_youtube_content",
+            new=AsyncMock(return_value=("Transcript body " * 10, ["thumb.jpg"], ["thumb.jpg"])),
+        ) as youtube_handler,
+        patch("src.core.crawlers.scrapling_crawler.ScraplingCrawler") as crawler_cls,
+        patch(
+            "src.core.handlers.discussion_handler.get_discussion_content_async",
+            new=AsyncMock(return_value="HN discussion"),
+        ),
+        patch("src.core.handlers.screenshot_handler.save_page_screenshot", return_value="shot.png"),
+    ):
+        result = CollectStage().execute(ctx, object(), concurrency=1)
+
+    youtube_handler.assert_awaited_once_with("https://www.youtube.com/watch?v=abc123", "Story")
+    crawler_cls.assert_not_called()
+    assert result["collected"] == 1
+
+    with sqlite3.connect(ctx.db_path) as conn:
+        row = conn.execute(
+            "SELECT article_content, largest_image, image_2, image_3 FROM news WHERE id=1"
+        ).fetchone()
+    assert row == (("Transcript body " * 10).strip(), "thumb.jpg", None, None)

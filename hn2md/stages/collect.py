@@ -7,6 +7,7 @@ import json
 import sqlite3
 from datetime import datetime
 from typing import Any
+from urllib.parse import urlparse
 
 from hn2md.constants import Stage
 from hn2md.context import RuntimeContext
@@ -17,12 +18,19 @@ from src.db.connection import get_db
 MIN_ARTICLE_CONTENT_CHARS = 100
 
 
+def _is_youtube_url(url: str) -> bool:
+    """Return True for YouTube video URLs handled by youtube_handler."""
+    host = urlparse(url).netloc.lower()
+    return host in {"youtube.com", "www.youtube.com", "youtu.be"}
+
+
 async def _collect_item(row: sqlite3.Row, semaphore: asyncio.Semaphore) -> dict[str, Any]:
     """Collect missing context for one news row."""
     from src.core.crawlers.scrapling_crawler import ScraplingCrawler
     from src.core.handlers.discussion_handler import get_discussion_content_async
     from src.core.handlers.image_handler import save_article_image
     from src.core.handlers.screenshot_handler import save_page_screenshot
+    from src.core.handlers.youtube_handler import get_youtube_content
 
     async with semaphore:
         article_content = (row["article_content"] or "").strip()
@@ -34,11 +42,17 @@ async def _collect_item(row: sqlite3.Row, semaphore: asyncio.Semaphore) -> dict[
 
         news_url = row["news_url"] or ""
         if news_url and len(article_content) < MIN_ARTICLE_CONTENT_CHARS:
-            crawler = ScraplingCrawler()
-            try:
-                content, image_urls = await crawler.crawl_article(news_url)
-            finally:
-                await crawler.close()
+            if _is_youtube_url(news_url):
+                content, saved_images, _ = await get_youtube_content(news_url, row["title"] or "")
+                image_urls = []
+                if saved_images:
+                    image_paths = saved_images[:3]
+            else:
+                crawler = ScraplingCrawler()
+                try:
+                    content, image_urls = await crawler.crawl_article(news_url)
+                finally:
+                    await crawler.close()
             if content and len(content.strip()) >= MIN_ARTICLE_CONTENT_CHARS:
                 article_content = content.strip()
                 collected = True
