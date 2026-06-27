@@ -1,3 +1,5 @@
+from unittest.mock import patch
+
 from click.testing import CliRunner
 
 from hn2md.state import JobStateMachine, Stage
@@ -28,3 +30,17 @@ def test_status_reads_existing_hn_ledger(tmp_path, monkeypatch) -> None:
     assert "Source: hackernews" in result.output
     assert "Period: 20260627" in result.output
     assert "Status: FETCHING" in result.output
+
+
+def test_release_dry_run_calls_runner(tmp_path, monkeypatch) -> None:
+    monkeypatch.chdir(tmp_path)
+
+    with patch("publisher.cli.run_release", return_value={"completed_stages": ["FETCHING"]}) as run:
+        result = CliRunner().invoke(
+            main,
+            ["release", "hackernews", "--date", "2026-06-27", "--dry-run"],
+        )
+
+    assert result.exit_code == 0, result.output
+    assert "Release complete" in result.output
+    run.assert_called_once()
