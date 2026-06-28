@@ -15,11 +15,44 @@ logger = logging.getLogger(__name__)
 
 
 _LOCAL_IMAGE_PATTERNS = [
-    r"!\[.*?\]\(([^)]+\.(?:jpg|jpeg|png|gif|webp))\)",
-    r'<img[^>]+src=["\']([^"\']+\.(?:jpg|jpeg|png|gif|webp))["\'][^>]*>',
-    r'src=["\']([^"\']+\.(?:jpg|jpeg|png|gif|webp))["\']',
+    r"!\[.*?\]\(([^)]+\.(?:jpg|jpeg|png|gif|webp|svg))\)",
+    r'<img[^>]+src=["\']([^"\']+\.(?:jpg|jpeg|png|gif|webp|svg))["\'][^>]*>',
+    r'src=["\']([^"\']+\.(?:jpg|jpeg|png|gif|webp|svg))["\']',
 ]
 _WECHAT_IMAGE_LIMIT_BYTES = 1024 * 1024
+_WECHAT_SUPPORTED_IMAGE_SUFFIXES = {".jpg", ".jpeg", ".png", ".webp"}
+
+
+def _keyword_locations(markdown_content: str, keywords: list[str], markdown_file: str) -> list[dict[str, Any]]:
+    """Return line-level context for blocked publish keywords."""
+    lines = markdown_content.splitlines()
+    locations: list[dict[str, Any]] = []
+    for line_number, line in enumerate(lines, 1):
+        for keyword in keywords:
+            if keyword in line:
+                locations.append(
+                    {
+                        "keyword": keyword,
+                        "path": markdown_file,
+                        "line": line_number,
+                        "context": line.strip()[:240],
+                    }
+                )
+    return locations
+
+
+def _format_keyword_gate_error(violations: list[str], markdown_file: str, locations: list[dict[str, Any]]) -> str:
+    details = "; ".join(
+        f"{item['keyword']} at {item['path']} line {item['line']}: {item['context']}" for item in locations[:10]
+    )
+    if not details:
+        details = f"file={markdown_file}"
+    violation_str = ", ".join(violations)
+    return (
+        "Content safety gate BLOCKED publish: "
+        f"illegal keywords found: [{violation_str}]. "
+        f"Locations: {details}. Review content before publishing."
+    )
 
 
 def _find_skipped_local_images(markdown_content: str) -> list[dict[str, Any]]:
@@ -35,6 +68,17 @@ def _find_skipped_local_images(markdown_content: str) -> list[dict[str, Any]]:
         image_path = Path(image)
         if not image_path.exists():
             skipped.append({"path": image, "reason": "missing"})
+            continue
+        suffix = image_path.suffix.lower()
+        if suffix not in _WECHAT_SUPPORTED_IMAGE_SUFFIXES:
+            skipped.append(
+                {
+                    "path": str(image_path),
+                    "reason": "unsupported_format",
+                    "supported_formats": ["jpg", "jpeg", "png", "webp"],
+                    "suffix": suffix,
+                }
+            )
             continue
         size = image_path.stat().st_size
         if size > _WECHAT_IMAGE_LIMIT_BYTES:
@@ -84,12 +128,8 @@ class PublishStage(BaseStage):
             violations = check_illegal_content(md_content, keywords)
 
             if violations:
-                violation_str = ", ".join(violations)
-                raise RuntimeError(
-                    f"Content safety gate BLOCKED publish: "
-                    f"illegal keywords found: [{violation_str}]. "
-                    f"Review content before publishing."
-                )
+                locations = _keyword_locations(md_content, violations, md_file)
+                raise RuntimeError(_format_keyword_gate_error(violations, md_file, locations))
             logger.info("[PUBLISH] Content safety check passed")
 
             # LLM output quality gate

@@ -24,6 +24,19 @@ class TestInitDatabase:
         assert "news" in tables
         conn.close()
 
+    def test_news_table_has_content_source_metadata_columns(self, tmp_path):
+        import src.utils.db_utils as mod
+        db_path = str(tmp_path / "test.db")
+        real_connect = sqlite3.connect
+        with patch("sqlite3.connect", side_effect=lambda *a, **kw: real_connect(db_path)):
+            mod.init_database()
+
+        conn = sqlite3.connect(db_path)
+        columns = {row[1] for row in conn.execute("PRAGMA table_info(news)").fetchall()}
+        conn.close()
+
+        assert {"content_source_type", "content_source_url", "content_source_doi"} <= columns
+
     def test_idempotent(self, tmp_path):
         import src.utils.db_utils as mod
         db_path = str(tmp_path / "test.db")

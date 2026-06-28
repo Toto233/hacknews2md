@@ -9,6 +9,7 @@ import io
 import logging
 import re
 import traceback
+from urllib.parse import urlparse
 
 import certifi
 import requests
@@ -25,12 +26,39 @@ except ImportError:
 logger = logging.getLogger(__name__)
 
 
+def normalize_pdf_url(url: str) -> str:
+    """Return a direct PDF URL when a hosting page wraps the PDF.
+
+    GitHub ``/blob/`` URLs render an HTML file viewer.  Convert them to the
+    corresponding raw URL so the PDF extractor receives actual PDF bytes.
+    """
+    parsed = urlparse(url)
+    if parsed.netloc.lower() == "github.com":
+        parts = parsed.path.strip("/").split("/")
+        if len(parts) >= 5 and parts[2] == "blob" and parts[-1].lower().endswith(".pdf"):
+            owner, repo, _, branch = parts[:4]
+            rest = "/".join(parts[4:])
+            return f"https://raw.githubusercontent.com/{owner}/{repo}/{branch}/{rest}"
+    return url
+
+
+def is_pdf_url(url: str) -> bool:
+    """Return True when *url* points to a PDF or a known PDF wrapper page."""
+    parsed = urlparse(url)
+    path = parsed.path.lower()
+    if path.endswith(".pdf"):
+        return True
+    return normalize_pdf_url(url) != url
+
+
 async def get_pdf_content(url: str) -> str:
     """Extract text from a PDF at *url*.
 
     Returns the full text of all pages joined by double newlines,
     or an empty string on failure.
     """
+    url = normalize_pdf_url(url)
+
     # SSRF protection: validate URL before fetching
     try:
         validate_url(url)

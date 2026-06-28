@@ -3,6 +3,8 @@ import sys
 import textwrap
 from unittest.mock import patch
 
+import pytest
+
 from hn2md.constants import Stage
 from hn2md.context import RuntimeContext
 from hn2md.stages.publish import PublishStage
@@ -49,6 +51,45 @@ def test_publish_reports_oversize_local_images(tmp_path) -> None:
             "size_bytes": 1024 * 1024 + 1,
         }
     ]
+
+
+def test_publish_reports_unsupported_local_image_formats(tmp_path) -> None:
+    image = tmp_path / "animation.gif"
+    image.write_bytes(b"gif")
+    md = tmp_path / "article.md"
+    md.write_text(f"# safe\n\n![gif]({image})\n", encoding="utf-8")
+    machine = type("M", (), {"job": type("J", (), {"stages": {}})()})()
+
+    with (
+        patch("src.utils.db_utils.get_illegal_keywords", return_value=[]),
+        patch("hn2md.stages.publish.load_project_function", return_value=lambda *_, **__: "media-1"),
+    ):
+        result = PublishStage().execute(object(), machine, markdown_file=str(md))
+
+    assert result["skipped_images"] == [
+        {
+            "path": str(image),
+            "reason": "unsupported_format",
+            "supported_formats": ["jpg", "jpeg", "png", "webp"],
+            "suffix": ".gif",
+        }
+    ]
+
+
+def test_publish_safety_gate_reports_keyword_location_and_context(tmp_path) -> None:
+    md = tmp_path / "article.md"
+    md.write_text("# title\n\nfirst line\nblocked keyword here\nlast line\n", encoding="utf-8")
+    machine = type("M", (), {"job": type("J", (), {"stages": {}})()})()
+
+    with patch("src.utils.db_utils.get_illegal_keywords", return_value=["blocked"]):
+        with pytest.raises(RuntimeError) as excinfo:
+            PublishStage().execute(object(), machine, markdown_file=str(md), dry_run=True)
+
+    message = str(excinfo.value)
+    assert "blocked" in message
+    assert str(md) in message
+    assert "line 4" in message
+    assert "blocked keyword here" in message
 
 
 def test_publish_loads_project_script_when_project_root_not_on_sys_path(tmp_path, monkeypatch) -> None:

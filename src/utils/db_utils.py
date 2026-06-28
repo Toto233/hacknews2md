@@ -28,6 +28,9 @@ def init_database():
             largest_image TEXT,
             image_2 TEXT,
             image_3 TEXT,
+            content_source_type TEXT,
+            content_source_url TEXT,
+            content_source_doi TEXT,
             created_at TIMESTAMP
         )
         """)
@@ -46,6 +49,12 @@ def init_database():
             cursor.execute("ALTER TABLE news ADD COLUMN image_3 TEXT")
         if "screenshot" not in columns:
             cursor.execute("ALTER TABLE news ADD COLUMN screenshot TEXT")
+        if "content_source_type" not in columns:
+            cursor.execute("ALTER TABLE news ADD COLUMN content_source_type TEXT")
+        if "content_source_url" not in columns:
+            cursor.execute("ALTER TABLE news ADD COLUMN content_source_url TEXT")
+        if "content_source_doi" not in columns:
+            cursor.execute("ALTER TABLE news ADD COLUMN content_source_doi TEXT")
 
         # 创建过滤域名表
         cursor.execute("""
@@ -82,6 +91,9 @@ def init_database():
             image_2 TEXT,
             image_3 TEXT,
             screenshot TEXT,
+            content_source_type TEXT,
+            content_source_url TEXT,
+            content_source_doi TEXT,
             created_at TIMESTAMP,
             archived_at TIMESTAMP
         )
@@ -100,6 +112,12 @@ def init_database():
             cursor.execute("ALTER TABLE news_history ADD COLUMN image_3 TEXT")
         if "screenshot" not in history_columns:
             cursor.execute("ALTER TABLE news_history ADD COLUMN screenshot TEXT")
+        if "content_source_type" not in history_columns:
+            cursor.execute("ALTER TABLE news_history ADD COLUMN content_source_type TEXT")
+        if "content_source_url" not in history_columns:
+            cursor.execute("ALTER TABLE news_history ADD COLUMN content_source_url TEXT")
+        if "content_source_doi" not in history_columns:
+            cursor.execute("ALTER TABLE news_history ADD COLUMN content_source_doi TEXT")
 
         # 创建微信 access_tokens 表
         cursor.execute("""

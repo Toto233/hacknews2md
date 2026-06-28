@@ -29,7 +29,9 @@ async def _collect_item(row: sqlite3.Row, semaphore: asyncio.Semaphore) -> dict[
     from src.core.crawlers.scrapling_crawler import ScraplingCrawler
     from src.core.handlers.discussion_handler import get_discussion_content_async
     from src.core.handlers.image_handler import save_article_image
+    from src.core.handlers.pdf_handler import get_pdf_content, is_pdf_url
     from src.core.handlers.screenshot_handler import save_page_screenshot
+    from src.core.handlers.stackexchange_handler import build_public_summary_fallback, is_stackexchange_url
     from src.core.handlers.youtube_handler import get_youtube_content
 
     async with semaphore:
@@ -38,6 +40,9 @@ async def _collect_item(row: sqlite3.Row, semaphore: asyncio.Semaphore) -> dict[
         image_paths = [path for path in (row["largest_image"], row["image_2"], row["image_3"]) if path]
         image_warnings: list[dict[str, Any]] = []
         screenshot = row["screenshot"]
+        content_source_type = row["content_source_type"] if "content_source_type" in row.keys() else None
+        content_source_url = row["content_source_url"] if "content_source_url" in row.keys() else None
+        content_source_doi = row["content_source_doi"] if "content_source_doi" in row.keys() else None
         collected = False
 
         news_url = row["news_url"] or ""
@@ -47,6 +52,9 @@ async def _collect_item(row: sqlite3.Row, semaphore: asyncio.Semaphore) -> dict[
                 image_urls = []
                 if saved_images:
                     image_paths = saved_images[:3]
+            elif is_pdf_url(news_url):
+                content = await get_pdf_content(news_url)
+                image_urls = []
             else:
                 crawler = ScraplingCrawler()
                 try:
@@ -55,6 +63,12 @@ async def _collect_item(row: sqlite3.Row, semaphore: asyncio.Semaphore) -> dict[
                     await crawler.close()
             if content and len(content.strip()) >= MIN_ARTICLE_CONTENT_CHARS:
                 article_content = content.strip()
+                collected = True
+            elif is_stackexchange_url(news_url):
+                article_content = build_public_summary_fallback(row["title"] or "", news_url)
+                content_source_type = "public_page_summary"
+                content_source_url = news_url
+                content_source_doi = None
                 collected = True
             if image_urls:
                 saved_images = []
@@ -112,6 +126,9 @@ async def _collect_item(row: sqlite3.Row, semaphore: asyncio.Semaphore) -> dict[
             "largest_image": image_paths[0] if len(image_paths) > 0 else None,
             "image_2": image_paths[1] if len(image_paths) > 1 else None,
             "image_3": image_paths[2] if len(image_paths) > 2 else None,
+            "content_source_type": content_source_type,
+            "content_source_url": content_source_url,
+            "content_source_doi": content_source_doi,
             "image_warnings": image_warnings,
             "collected": collected,
         }
@@ -134,29 +151,72 @@ class CollectStage(BaseStage):
         concurrency = max(1, concurrency)
         with get_db(str(ctx.db_path)) as conn:
             conn.row_factory = sqlite3.Row
+            columns = {row[1] for row in conn.execute("PRAGMA table_info(news)").fetchall()}
+            source_columns = [
+                column
+                for column in ("content_source_type", "content_source_url", "content_source_doi")
+                if column in columns
+            ]
+            select_columns = [
+                "id",
+                "title",
+                "news_url",
+                "discuss_url",
+                "article_content",
+                "discussion_content",
+                "screenshot",
+                "largest_image",
+                "image_2",
+                "image_3",
+                *source_columns,
+            ]
             rows = conn.execute(
-                "SELECT id, title, news_url, discuss_url, article_content, "
-                "discussion_content, screenshot, largest_image, image_2, image_3 "
+                f"SELECT {', '.join(select_columns)} "
                 "FROM news WHERE date(created_at)=date('now','localtime') ORDER BY id"
             ).fetchall()
 
         items = asyncio.run(_collect_rows(rows, concurrency))
 
         with get_db(str(ctx.db_path)) as conn:
+            columns = {row[1] for row in conn.execute("PRAGMA table_info(news)").fetchall()}
+            can_store_source = {
+                "content_source_type",
+                "content_source_url",
+                "content_source_doi",
+            } <= columns
             for item in items:
-                conn.execute(
-                    "UPDATE news SET article_content=?, discussion_content=?, screenshot=?, "
-                    "largest_image=?, image_2=?, image_3=? WHERE id=?",
-                    (
-                        item["article_content"] or None,
-                        item["discussion_content"] or None,
-                        item["screenshot"],
-                        item["largest_image"],
-                        item["image_2"],
-                        item["image_3"],
-                        item["id"],
-                    ),
-                )
+                if can_store_source:
+                    conn.execute(
+                        "UPDATE news SET article_content=?, discussion_content=?, screenshot=?, "
+                        "largest_image=?, image_2=?, image_3=?, content_source_type=?, "
+                        "content_source_url=?, content_source_doi=? WHERE id=?",
+                        (
+                            item["article_content"] or None,
+                            item["discussion_content"] or None,
+                            item["screenshot"],
+                            item["largest_image"],
+                            item["image_2"],
+                            item["image_3"],
+                            item["content_source_type"],
+                            item["content_source_url"],
+                            item["content_source_doi"],
+                            item["id"],
+                        ),
+                    )
+                else:
+                    conn.execute(
+                        "UPDATE news SET article_content=?, discussion_content=?, screenshot=?, "
+                        "largest_image=?, image_2=?, image_3=? WHERE id=?",
+                        (
+                            item["article_content"] or None,
+                            item["discussion_content"] or None,
+                            item["screenshot"],
+                            item["largest_image"],
+                            item["image_2"],
+                            item["image_3"],
+                            item["id"],
+                        ),
+                    )
 
         ctx.codex_dir.mkdir(parents=True, exist_ok=True)
         stamp = datetime.now().strftime("%Y%m%d_%H%M%S")

@@ -1,20 +1,21 @@
-"""Tests for pdf_handler.py.
-
-The pdf_handler module has no standalone pure functions.  Its only public
-function ``get_pdf_content`` is async and performs network I/O (HTTP download +
-PyPDF2 extraction).
-
-This file is a placeholder documenting that fact.  If pure helpers are
-extracted in the future (e.g. a content-type validator, text cleaner), add
-their tests here.
-"""
-
-import pytest
+"""Tests for PDF URL normalization and extraction helpers."""
 
 from src.core.handlers import pdf_handler
 
 
-def test_placeholder_pdf_handler_has_no_pure_functions():
-    """Confirm this is a placeholder -- pdf_handler has no pure functions yet."""
-    # get_pdf_content exists but is async and requires network
-    assert hasattr(pdf_handler, "get_pdf_content")
+def test_github_blob_pdf_url_converts_to_raw_url() -> None:
+    url = "https://github.com/deepseek-ai/DeepSpec/blob/main/DSpark_paper.pdf"
+
+    assert pdf_handler.normalize_pdf_url(url) == (
+        "https://raw.githubusercontent.com/deepseek-ai/DeepSpec/main/DSpark_paper.pdf"
+    )
+
+
+def test_plain_pdf_url_is_unchanged() -> None:
+    url = "https://example.com/paper.pdf"
+
+    assert pdf_handler.normalize_pdf_url(url) == url
+
+
+def test_detects_github_blob_pdf_as_pdf_url() -> None:
+    assert pdf_handler.is_pdf_url("https://github.com/org/repo/blob/main/paper.pdf")

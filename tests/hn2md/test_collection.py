@@ -26,6 +26,9 @@ def _ctx(tmp_path: Path) -> RuntimeContext:
                 largest_image TEXT,
                 image_2 TEXT,
                 image_3 TEXT,
+                content_source_type TEXT,
+                content_source_url TEXT,
+                content_source_doi TEXT,
                 created_at TIMESTAMP
             )
             """
@@ -141,3 +144,59 @@ def test_collect_stage_routes_youtube_urls_to_youtube_handler(tmp_path) -> None:
             "SELECT article_content, largest_image, image_2, image_3 FROM news WHERE id=1"
         ).fetchone()
     assert row == (("Transcript body " * 10).strip(), "thumb.jpg", None, None)
+
+
+def test_collect_stage_routes_github_blob_pdf_to_pdf_handler(tmp_path) -> None:
+    ctx = _ctx(tmp_path)
+    _set_news_url(ctx, "https://github.com/deepseek-ai/DeepSpec/blob/main/DSpark_paper.pdf")
+
+    with (
+        patch(
+            "src.core.handlers.pdf_handler.get_pdf_content",
+            new=AsyncMock(return_value="PDF extracted text " * 10),
+        ) as pdf_handler,
+        patch("src.core.crawlers.scrapling_crawler.ScraplingCrawler") as crawler_cls,
+        patch(
+            "src.core.handlers.discussion_handler.get_discussion_content_async",
+            new=AsyncMock(return_value="HN discussion"),
+        ),
+        patch("src.core.handlers.screenshot_handler.save_page_screenshot", return_value="shot.png"),
+    ):
+        result = CollectStage().execute(ctx, object(), concurrency=1)
+
+    pdf_handler.assert_awaited_once_with("https://github.com/deepseek-ai/DeepSpec/blob/main/DSpark_paper.pdf")
+    crawler_cls.assert_not_called()
+    assert result["collected"] == 1
+
+    with sqlite3.connect(ctx.db_path) as conn:
+        row = conn.execute("SELECT article_content FROM news WHERE id=1").fetchone()
+    assert row == (("PDF extracted text " * 10).strip(),)
+
+
+def test_collect_stage_records_stackexchange_fallback_source_metadata(tmp_path) -> None:
+    ctx = _ctx(tmp_path)
+    _set_news_url(ctx, "https://physics.stackexchange.com/questions/535/example")
+    crawler = MagicMock()
+    crawler.crawl_article = AsyncMock(return_value=("", []))
+    crawler.close = AsyncMock()
+
+    with (
+        patch("src.core.crawlers.scrapling_crawler.ScraplingCrawler", return_value=crawler),
+        patch(
+            "src.core.handlers.discussion_handler.get_discussion_content_async",
+            new=AsyncMock(return_value="HN discussion"),
+        ),
+        patch("src.core.handlers.screenshot_handler.save_page_screenshot", return_value="shot.png"),
+    ):
+        result = CollectStage().execute(ctx, object(), concurrency=1)
+
+    assert result["collected"] == 1
+    with sqlite3.connect(ctx.db_path) as conn:
+        row = conn.execute(
+            "SELECT article_content, content_source_type, content_source_url FROM news WHERE id=1"
+        ).fetchone()
+
+    assert row[0].startswith("Source fallback:")
+    assert len(row[0]) >= 100
+    assert row[1] == "public_page_summary"
+    assert row[2] == "https://physics.stackexchange.com/questions/535/example"
