@@ -42,6 +42,8 @@ def run_release(
         hn_stage = _to_hn_stage(stage_name)
         if not rerun and machine.stage_completed_successfully(hn_stage):
             continue
+        if stage_name in {GenericStage.PLANNING, GenericStage.PUBLISHING}:
+            _ensure_audit_ready(runtime_ctx, machine)
         stage_factory = source.stages[stage_name]
         stage = stage_factory()
         kwargs: dict[str, object] = dict(
@@ -85,6 +87,14 @@ def _validate_stage_artifacts(stage_name: GenericStage, receipt: object, require
     if missing:
         joined = ", ".join(missing)
         raise RuntimeError(f"{stage_name.value} missing required artifacts: {joined}")
+
+
+def _ensure_audit_ready(runtime_ctx: RuntimeContext, machine: JobStateMachine) -> None:
+    from hn2md.stages.audit import require_audit_clear_or_exempt, run_audit
+
+    if machine.job.audit_report is None:
+        machine.record_audit_report(run_audit(runtime_ctx))
+    require_audit_clear_or_exempt(machine)
 
 
 def _to_hn_stage(stage_name: GenericStage):

@@ -1,10 +1,12 @@
 from __future__ import annotations
 
 from pathlib import Path
+import json as json_mod
 
 import click
 
 from hn2md.state import JobStateMachine
+from hn2md.stages.audit import run_audit
 from publisher.constants import GenericStage
 from publisher.context import PublisherContext, parse_date_period
 from publisher.pipeline.runner import run_release
@@ -92,6 +94,34 @@ def collect(source_name: str, date_value: str | None, concurrency: int) -> None:
         GenericStage.COLLECTING,
         kwargs={"concurrency": concurrency},
     )
+
+
+@main.command()
+@click.argument("source_name")
+@click.option("--date", "date_value", default=None, help="YYYY-MM-DD or YYYYMMDD")
+@click.option("--json", "json_output", is_flag=True, help="Print structured audit JSON")
+@click.option("--approve", is_flag=True, help="Approve the current blocking audit snapshot")
+def audit(source_name: str, date_value: str | None, json_output: bool, approve: bool) -> None:
+    source, ctx = _load_date_source(source_name, date_value)
+    machine, _ = JobStateMachine.load_or_create(ctx.job_dir, ctx.period)
+    if approve:
+        try:
+            machine.approve_audit()
+        except ValueError as exc:
+            raise click.ClickException(str(exc)) from exc
+        click.echo("Audit exemption recorded for current period")
+        return
+
+    from publisher.pipeline.runner import _hn_runtime_context
+
+    report = run_audit(_hn_runtime_context(ctx))
+    machine.record_audit_report(report)
+    if json_output:
+        click.echo(json_mod.dumps(report, ensure_ascii=False, indent=2))
+    else:
+        click.echo(f"Audit complete for {source.name}/{ctx.period}: {report['blocking_count']} blocking issue(s)")
+    if report.get("blocking_count", 0):
+        raise click.ClickException("audit blocked: review report and rerun with --approve if acceptable")
 
 
 @main.command()

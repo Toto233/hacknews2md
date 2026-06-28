@@ -84,9 +84,19 @@ def test_collect_stage_collects_full_context_and_writes_snapshot(tmp_path) -> No
 
     with sqlite3.connect(ctx.db_path) as conn:
         row = conn.execute(
-            "SELECT article_content, discussion_content, screenshot, largest_image, image_2, image_3 FROM news"
+            "SELECT article_content, discussion_content, screenshot, largest_image, image_2, image_3, "
+            "content_source_type, content_source_url FROM news"
         ).fetchone()
-    assert row == (("Readable article body " * 10).strip(), "HN discussion", "shot.png", "one.png", "two.png", None)
+    assert row == (
+        ("Readable article body " * 10).strip(),
+        "HN discussion",
+        "shot.png",
+        "one.png",
+        "two.png",
+        None,
+        "full_text",
+        "https://example.com/story",
+    )
     crawler.close.assert_awaited_once()
 
 

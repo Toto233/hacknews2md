@@ -23,6 +23,9 @@ NEWS_ARCHIVE_COLUMNS = [
     "image_2",
     "image_3",
     "screenshot",
+    "content_source_type",
+    "content_source_url",
+    "content_source_doi",
     "created_at",
 ]
 
@@ -46,9 +49,9 @@ def _ensure_column(cursor, table_name, column_name, column_type="TEXT"):
         cursor.execute(f"ALTER TABLE {table_name} ADD COLUMN {column_name} {column_type}")
 
 
-def create_history_table():
+def create_history_table(db_path: str | None = None):
     """创建新闻历史表"""
-    with get_db() as conn:
+    with get_db(db_path) as conn:
         cursor = conn.cursor()
 
         # 创建历史表，结构与主表相同
@@ -67,6 +70,9 @@ def create_history_table():
             image_2 TEXT,
             image_3 TEXT,
             screenshot TEXT,
+            content_source_type TEXT,
+            content_source_url TEXT,
+            content_source_doi TEXT,
             created_at TIMESTAMP,
             archived_at TIMESTAMP
         )
@@ -75,19 +81,21 @@ def create_history_table():
             if column == "id":
                 continue
             _ensure_column(cursor, "news_history", column)
+        for column in ("content_source_type", "content_source_url", "content_source_doi"):
+            _ensure_column(cursor, "news", column)
 
     logger.info("历史表创建成功")
 
 
-def archive_old_news():
+def archive_old_news(db_path: str | None = None):
     """将非当天的新闻数据移动到历史表。
 
     归档以本地自然日为边界，不再使用"减 N 小时"的滑动窗口。
     每天执行抓取前，凡是 created_at 的日期早于今天的新闻都应归档。
     """
-    create_history_table()
+    create_history_table(db_path)
 
-    with get_db() as conn:
+    with get_db(db_path) as conn:
         cursor = conn.cursor()
 
         columns_sql = ", ".join(NEWS_ARCHIVE_COLUMNS)

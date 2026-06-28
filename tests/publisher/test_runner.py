@@ -1,5 +1,7 @@
 from unittest.mock import MagicMock
 
+import pytest
+
 from hn2md.constants import Stage as HnStage
 from hn2md.state import JobStateMachine
 from publisher.constants import GenericStage
@@ -123,3 +125,37 @@ def test_run_release_passes_stage_specific_kwargs(tmp_path) -> None:
 
     fake_stage.run.assert_called_once()
     assert fake_stage.run.call_args.kwargs["concurrency"] == 5
+
+
+def test_run_release_blocks_planning_when_audit_has_unapproved_issues(tmp_path) -> None:
+    fake_stage = FakeStage()
+    source = SourceDefinition(
+        name="hackernews",
+        period_kind="date",
+        stages={GenericStage.PLANNING: lambda: fake_stage},
+    )
+    ctx = PublisherContext.create(tmp_path, source="hackernews", period="20260627")
+    machine, _ = JobStateMachine.load_or_create(ctx.job_dir, ctx.period)
+    machine.record_audit_report({"issues": [{"code": "content_short"}], "blocking_count": 1})
+
+    with pytest.raises(RuntimeError, match="audit blocked"):
+        run_release(ctx, source, stages=[GenericStage.PLANNING])
+
+    fake_stage.run.assert_not_called()
+
+
+def test_run_release_allows_planning_after_approved_audit(tmp_path) -> None:
+    fake_stage = FakeStage()
+    source = SourceDefinition(
+        name="hackernews",
+        period_kind="date",
+        stages={GenericStage.PLANNING: lambda: fake_stage},
+    )
+    ctx = PublisherContext.create(tmp_path, source="hackernews", period="20260627")
+    machine, _ = JobStateMachine.load_or_create(ctx.job_dir, ctx.period)
+    machine.record_audit_report({"issues": [{"code": "content_short"}], "blocking_count": 1})
+    machine.approve_audit()
+
+    run_release(ctx, source, stages=[GenericStage.PLANNING])
+
+    fake_stage.run.assert_called_once()

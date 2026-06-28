@@ -85,6 +85,8 @@ class PublishJob:
     receipts: dict[str, Any] = field(default_factory=dict)
     lock_pid: int | None = None
     error: str | None = None
+    audit_report: dict[str, Any] | None = None
+    audit_exemption: dict[str, Any] | None = None
 
     def to_json(self, path: Path) -> None:
         """Atomically write job state to JSON.
@@ -186,6 +188,25 @@ class JobStateMachine:
     def stage_completed_successfully(self, stage: Stage) -> bool:
         receipt = self.job.stages.get(stage.value)
         return receipt is not None and receipt.get("success", False)
+
+    def record_audit_report(self, report: dict[str, Any]) -> None:
+        """Persist the latest audit result and invalidate stale approval."""
+        self.job.audit_report = report
+        self.job.audit_exemption = None
+        self.job.updated_at = datetime.now().isoformat()
+        self._save()
+
+    def approve_audit(self) -> None:
+        """Approve the current blocking audit snapshot for this daily job."""
+        report = self.job.audit_report
+        if not report or not report.get("blocking_count"):
+            raise ValueError("no blocking audit report to approve")
+        self.job.audit_exemption = {
+            "approved_at": datetime.now().isoformat(),
+            "issue_snapshot": report.get("issues", []),
+        }
+        self.job.updated_at = datetime.now().isoformat()
+        self._save()
 
     def _save(self) -> None:
         self.job.to_json(self.ledger_path)

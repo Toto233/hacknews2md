@@ -63,6 +63,9 @@ async def _collect_item(row: sqlite3.Row, semaphore: asyncio.Semaphore) -> dict[
                     await crawler.close()
             if content and len(content.strip()) >= MIN_ARTICLE_CONTENT_CHARS:
                 article_content = content.strip()
+                content_source_type = "full_text"
+                content_source_url = news_url
+                content_source_doi = None
                 collected = True
             elif is_stackexchange_url(news_url):
                 article_content = build_public_summary_fallback(row["title"] or "", news_url)

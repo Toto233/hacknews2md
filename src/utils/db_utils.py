@@ -8,9 +8,9 @@ from src.db.connection import get_db
 logger = logging.getLogger(__name__)
 
 
-def init_database():
+def init_database(db_path: str | None = None) -> None:
     """初始化数据库，创建或升级所有相关表结构"""
-    with get_db() as conn:
+    with get_db(db_path) as conn:
         cursor = conn.cursor()
 
         # 创建或升级news表

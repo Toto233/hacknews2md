@@ -374,18 +374,27 @@ def status(ctx_obj):
 @click.option("--interactive", is_flag=True)
 @click.option("--llm", default=None)
 @click.option("--json", "json_output", is_flag=True, help="Output audit result as JSON")
+@click.option("--approve", is_flag=True, help="Approve the current daily blocking audit snapshot")
 @click.pass_context
-def audit(ctx_obj, interactive, llm, json_output):
+def audit(ctx_obj, interactive, llm, json_output, approve):
     """Quality checks on database content."""
     from hn2md.stages.audit import run_audit
 
     rt = ctx_obj.obj["ctx"]
+    date_str = datetime.now().strftime("%Y%m%d")
+    machine, _ = JobStateMachine.load_or_create(rt.job_dir, date_str)
+    if approve:
+        machine.approve_audit()
+        _print("Audit exemption recorded for today's job", "yellow")
+        return
     if json_output:
         setup_logging(log_dir=rt.output_dir / "logs", console=False)
     result = run_audit(rt, interactive=interactive, llm_type=llm)
+    machine.record_audit_report(result)
     if json_output:
         print(json_mod.dumps(result, ensure_ascii=False, indent=2))
-        sys.exit(0 if result.get("issues", 0) == 0 else 1)
+        sys.exit(0 if result.get("blocking_count", 0) == 0 else 1)
+    _print(f"Audit complete: {result['blocking_count']} blocking issue(s)")
 
 
 @main.command()

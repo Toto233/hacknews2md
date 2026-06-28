@@ -27,6 +27,18 @@ sqlite3 -header -column ".\data\hacknews.db" "select id, length(coalesce(article
 
 ## 2. Generate the Codex plan
 
+先执行结构化审计：
+
+```powershell
+publisher audit hackernews --json
+```
+
+如果输出包含 `blocking_count > 0`，必须把 blocking 问题摘要给用户确认。用户明确同意继续后，记录当天豁免：
+
+```powershell
+publisher audit hackernews --approve
+```
+
 Codex 阅读 `context_file` 中英文标题、正文和 HN 讨论，为每条新闻生成：
 
 - `title_chs`

@@ -118,13 +118,30 @@ def test_publish_marks_job_done_after_success(tmp_path) -> None:
 
 def test_audit_json_outputs_machine_readable_result(tmp_path) -> None:
     runtime = _runtime(tmp_path)
+    machine = MagicMock()
+    report = {"items": [], "issues": [], "blocking_count": 0}
 
     with (
         patch("hn2md.cli.RuntimeContext.create", return_value=runtime),
-        patch("hn2md.stages.audit.run_audit", return_value={"issues": 0, "details": []}),
+        patch("hn2md.cli.JobStateMachine.load_or_create", return_value=(machine, runtime.job_dir / "job.json")),
+        patch("hn2md.stages.audit.run_audit", return_value=report),
     ):
         result = CliRunner().invoke(main, ["audit", "--json"])
 
     assert result.exit_code == 0, result.output
-    assert '"issues": 0' in result.output
-    assert '"details": []' in result.output
+    machine.record_audit_report.assert_called_once_with(report)
+    assert '"blocking_count": 0' in result.output
+
+
+def test_audit_approve_records_daily_exemption(tmp_path) -> None:
+    runtime = _runtime(tmp_path)
+    machine = MagicMock()
+
+    with (
+        patch("hn2md.cli.RuntimeContext.create", return_value=runtime),
+        patch("hn2md.cli.JobStateMachine.load_or_create", return_value=(machine, runtime.job_dir / "job.json")),
+    ):
+        result = CliRunner().invoke(main, ["audit", "--approve"])
+
+    assert result.exit_code == 0, result.output
+    machine.approve_audit.assert_called_once_with()

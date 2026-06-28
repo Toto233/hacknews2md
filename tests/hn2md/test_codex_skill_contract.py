@@ -6,6 +6,7 @@ def test_codex_skill_uses_publisher_project_entry_points() -> None:
     for command in (
         "publisher fetch hackernews",
         "publisher collect hackernews",
+        "publisher audit hackernews",
         "publisher plan hackernews",
         "publisher apply hackernews",
         "publisher render hackernews",
@@ -29,3 +30,10 @@ def test_codex_skill_explicitly_forbids_external_llm_in_manual_mode() -> None:
     skill = Path("skills/publish-hacknews-codex/SKILL.md").read_text(encoding="utf-8")
     assert "Gemini/Grok/Moonshot" in skill
     assert "不得调用" in skill
+
+
+def test_codex_skill_runs_audit_before_manual_plan() -> None:
+    skill = Path("skills/publish-hacknews-codex/SKILL.md").read_text(encoding="utf-8")
+    assert skill.index("publisher audit hackernews") < skill.index("publisher plan hackernews")
+    assert "--approve" in skill
+    assert "blocking" in skill

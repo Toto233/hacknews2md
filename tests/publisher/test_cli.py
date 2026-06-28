@@ -145,3 +145,28 @@ def test_publish_command_targets_wechat_and_passes_artifacts(tmp_path, monkeypat
         "markdown_file": "article.md",
         "cover_image": "cover.png",
     }
+
+
+def test_audit_command_records_structured_report(tmp_path, monkeypatch) -> None:
+    monkeypatch.chdir(tmp_path)
+    report = {"items": [], "issues": [], "blocking_count": 0}
+
+    with patch("publisher.cli.run_audit", return_value=report):
+        result = CliRunner().invoke(main, ["audit", "hackernews", "--date", "2026-06-27", "--json"])
+
+    assert result.exit_code == 0, result.output
+    assert '"blocking_count": 0' in result.output
+    machine, _ = JobStateMachine.load_or_create(tmp_path / "output" / "jobs", "20260627")
+    assert machine.job.audit_report == report
+
+
+def test_audit_approve_command_records_exemption(tmp_path, monkeypatch) -> None:
+    monkeypatch.chdir(tmp_path)
+    machine, _ = JobStateMachine.load_or_create(tmp_path / "output" / "jobs", "20260627")
+    machine.record_audit_report({"items": [], "issues": [{"code": "content_short"}], "blocking_count": 1})
+
+    result = CliRunner().invoke(main, ["audit", "hackernews", "--date", "2026-06-27", "--approve"])
+
+    assert result.exit_code == 0, result.output
+    machine, _ = JobStateMachine.load_or_create(tmp_path / "output" / "jobs", "20260627")
+    assert machine.job.audit_exemption["issue_snapshot"] == [{"code": "content_short"}]
