@@ -12,7 +12,7 @@ from hn2md.stages.base import BaseStage
 class RenderStage(BaseStage):
     stage_name = Stage.RENDERING
 
-    def execute(self, ctx: RuntimeContext, machine: JobStateMachine) -> dict[str, Any]:
+    def execute(self, ctx: RuntimeContext, machine: JobStateMachine, astro_enabled: bool = True) -> dict[str, Any]:
         from src.core.generate_markdown import generate_markdown
         from src.utils.deployment import load_deployment_settings
 
@@ -26,5 +26,5 @@ class RenderStage(BaseStage):
             db_path=ctx.db_path,
             output_dir=ctx.markdown_dir,
             plan_file=Path(plan_file),
-            astro_blog_dir=settings.astro_blog_dir,
+            astro_blog_dir=settings.astro_blog_dir if astro_enabled else None,
         )

@@ -44,6 +44,8 @@ VALID_TRANSITIONS: set[tuple[Stage, Stage]] = {
     (Stage.COVERING, Stage.FAILED),
     (Stage.PUBLISHING, Stage.DONE),
     (Stage.PUBLISHING, Stage.FAILED),
+    # Re-publish an existing completed run to a new WeChat draft without re-rendering.
+    (Stage.DONE, Stage.PUBLISHING),
     (Stage.FAILED, Stage.IDLE),
     # --from-stage resume
     (Stage.IDLE, Stage.COLLECTING),

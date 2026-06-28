@@ -1,18 +1,19 @@
 from pathlib import Path
 
 
-def test_codex_skill_uses_only_hn2md_project_entry_points() -> None:
+def test_codex_skill_uses_publisher_project_entry_points() -> None:
     skill = Path("skills/publish-hacknews-codex/SKILL.md").read_text(encoding="utf-8")
     for command in (
-        "hn2md fetch",
-        "hn2md collect",
-        "hn2md plan --manual-plan",
-        "hn2md apply",
-        "hn2md render",
-        "hn2md cover",
-        "hn2md publish",
+        "publisher fetch hackernews",
+        "publisher collect hackernews",
+        "publisher plan hackernews",
+        "publisher apply hackernews",
+        "publisher render hackernews",
+        "publisher cover hackernews",
+        "publisher publish hackernews",
     ):
         assert command in skill
+    assert "hn2md " not in skill
     for legacy in (
         "src\\core\\fetch_news.py",
         "collect_news_context.py",

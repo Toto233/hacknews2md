@@ -1,20 +1,20 @@
 ---
 name: publish-hacknews-codex
-description: 使用 Codex 生成 HackNews 中文标题、摘要、排序和标签，并灵活组合 hn2md 子命令完成发布。
+description: 使用 Codex 生成 HackNews 中文标题、摘要、排序和标签，并通过 publisher 命令完成抓取、渲染、微信草稿发布和可选 Astro 同步。
 ---
 
-# Publish HackNews with Codex and hn2md
+# Publish HackNews with Codex and publisher
 
-所有命令在仓库根目录执行。`hn2md` 是唯一项目入口；Codex 是 manual plan 的内容模型。执行 `hn2md plan --manual-plan` 时不得调用 Gemini/Grok/Moonshot。
+所有命令在仓库根目录执行。`publisher` 是项目发布入口；Codex 是 manual plan 的内容模型。导入 manual plan 时不得调用 Gemini/Grok/Moonshot。
 
 ## 1. Fetch and collect
 
 ```powershell
-hn2md fetch
-hn2md collect --concurrency 3
+publisher fetch hackernews
+publisher collect hackernews --concurrency 3
 ```
 
-读取命令返回的 `context_file`，并检查当天数据库正文和讨论长度：
+读取 `COLLECTING` 返回的 `context_file`，并检查当天数据库正文和讨论长度：
 
 ```powershell
 sqlite3 -header -column ".\data\hacknews.db" "select id, length(coalesce(article_content,'')) article_len, length(coalesce(discussion_content,'')) discussion_len, title, news_url from news where date(created_at)=date('now','localtime') order by id;"
@@ -54,25 +54,31 @@ Codex 阅读 `context_file` 中英文标题、正文和 HN 讨论，为每条新
 ## 3. Import, apply, and render
 
 ```powershell
-hn2md plan --manual-plan ".\output\codex\hacknews_plan_YYYYMMDD_HHMMSS.json"
-hn2md apply
-hn2md render
+publisher plan hackernews --manual-plan ".\output\codex\hacknews_plan_YYYYMMDD_HHMMSS.json"
+publisher apply hackernews
+publisher render hackernews
 ```
 
 Plan 校验失败时修正 JSON，不切换到外部 LLM。渲染必须保留 Codex 的 `ordered_ids` 和四个 tags。记录命令返回的 `markdown_file`、`html_file` 和可选 `astro_file`。
+
+只准备微信草稿、不要写 Astro 时：
+
+```powershell
+publisher render hackernews --target wechat --rerun
+```
 
 ## 4. Cover
 
 根据头条提炼 10–15 字“主体 + 事件”短标题：
 
 ```powershell
-hn2md cover "<markdown_file>" --mode ai --target-word "<短标题>"
+publisher cover hackernews "<markdown_file>" --mode ai --target-word "<短标题>"
 ```
 
 检查文字、含义和 2.45:1 横版构图。AI 题图不可用时可改用：
 
 ```powershell
-hn2md cover "<markdown_file>" --mode pillow
+publisher cover hackernews "<markdown_file>" --mode pillow --rerun
 ```
 
 两种题图均失败时，发布命令不传 `--cover-image`，由发布器回退到第一篇新闻图片。
@@ -80,14 +86,24 @@ hn2md cover "<markdown_file>" --mode pillow
 ## 5. Publish WeChat
 
 ```powershell
-hn2md publish "<markdown_file>" --cover-image "<cover_image>"
+publisher publish hackernews "<markdown_file>" --cover-image "<cover_image>" --target wechat
 ```
 
-汇报草稿 Media ID 和超大图片跳过清单。预演时使用 `hn2md release --dry-run --from-stage PUBLISHING`。
+汇报草稿 Media ID 和超大图片跳过清单。预演时使用：
+
+```powershell
+publisher publish hackernews "<markdown_file>" --cover-image "<cover_image>" --target wechat --dry-run --rerun
+```
+
+重新发布当天微信草稿且不要重复写 `hacknews_recap` 时，只重跑 PUBLISHING：
+
+```powershell
+publisher release hackernews --from-stage PUBLISHING --target wechat --rerun
+```
 
 ## 6. Optional Astro publish
 
-仅当 `astro_file` 非空时，从部署配置获取 Astro 仓库，并只提交本次生成文件：
+仅当 `astro_file` 非空且用户明确需要同步 Astro 时，从部署配置获取 Astro 仓库，并只提交本次生成文件：
 
 ```powershell
 git -C "<astro仓库>" status --short
@@ -96,7 +112,7 @@ git -C "<astro仓库>" commit -m "YYYYMMDD: 更新 HackNews 博客"
 git -C "<astro仓库>" push
 ```
 
-不要运行 Astro build，不处理仓库中的其他脏文件。
+不要运行 Astro build，不处理仓库中的其他脏文件。重发微信草稿时必须使用 `--target wechat`，避免生成重复 Astro 文章。
 
 ## 7. Open images
 
@@ -109,6 +125,6 @@ Start-Process explorer.exe -ArgumentList $imgDir
 
 ## Safety
 
-- 可灵活单独重跑 `hn2md collect`、`audit`、`cover` 或 `publish`。
+- 可灵活单独重跑 `publisher collect`、`publisher render`、`publisher cover` 或 `publisher publish`。
 - 删除文件、改写 Git 历史、force push、回滚用户改动前必须确认。
 - 不提交配置、数据库、output 或无关工作树改动。
