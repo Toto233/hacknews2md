@@ -118,3 +118,30 @@ def test_run_doctor_json_check_items(tmp_path):
         assert "ok" in item
         assert "detail" in item
         assert isinstance(item["ok"], bool)
+
+
+def test_run_doctor_json_allows_missing_runtime_secrets_in_ci(tmp_path, monkeypatch):
+    """CI should verify code health without requiring local publish secrets/data."""
+    monkeypatch.setenv("CI", "true")
+    ctx = MagicMock()
+    ctx.db_path = tmp_path / "data" / "hacknews.db"
+    ctx.config_path = tmp_path / "config" / "config.json"
+    ctx.output_dir = tmp_path / "output"
+
+    with (
+        patch("requests.get") as mock_get,
+        patch("src.db.connection.check_integrity", return_value=(True, "ok")),
+    ):
+        mock_get.return_value.status_code = 200
+        result = run_doctor_json(ctx)
+
+    assert result["all_ok"] is True
+    checks = {item["name"]: item for item in result["checks"]}
+    assert checks["SQLite database"]["ok"] is True
+    assert "skipped in CI" in checks["SQLite database"]["detail"]
+    assert checks["config/config.json"]["ok"] is True
+    assert "skipped in CI" in checks["config/config.json"]["detail"]
+    assert checks["WeChat credentials"]["ok"] is True
+    assert "skipped in CI" in checks["WeChat credentials"]["detail"]
+    assert checks["LLM API keys"]["ok"] is True
+    assert "skipped in CI" in checks["LLM API keys"]["detail"]
