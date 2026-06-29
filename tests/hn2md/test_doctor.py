@@ -164,3 +164,24 @@ def test_run_doctor_json_allows_missing_runtime_secrets_in_explicit_ci_doctor_mo
     assert "skipped in CI" in checks["WeChat credentials"]["detail"]
     assert checks["LLM API keys"]["ok"] is True
     assert "skipped in CI" in checks["LLM API keys"]["detail"]
+
+
+def test_explicit_ci_doctor_mode_skips_runtime_database_even_when_empty_file_exists(tmp_path, monkeypatch):
+    """CI doctor should not fail on an empty SQLite file created during earlier checks."""
+    monkeypatch.setenv("HN2MD_DOCTOR_CI", "true")
+    db_path = tmp_path / "data" / "hacknews.db"
+    db_path.parent.mkdir(parents=True)
+    db_path.write_bytes(b"")
+    ctx = MagicMock()
+    ctx.db_path = db_path
+    ctx.config_path = tmp_path / "config" / "config.json"
+    ctx.output_dir = tmp_path / "output"
+
+    with patch("requests.get") as mock_get:
+        mock_get.return_value.status_code = 200
+        result = run_doctor_json(ctx)
+
+    assert result["all_ok"] is True
+    checks = {item["name"]: item for item in result["checks"]}
+    assert checks["SQLite database"]["ok"] is True
+    assert "skipped in CI" in checks["SQLite database"]["detail"]

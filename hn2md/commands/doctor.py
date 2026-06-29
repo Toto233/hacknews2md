@@ -36,7 +36,7 @@ def run_doctor(ctx) -> list[CheckResult]:
     checks.append(CheckResult("Python >= 3.11", ok, f"{v.major}.{v.minor}.{v.micro}"))
 
     # 2. SQLite database accessible
-    if ci_mode and not db_path.exists():
+    if ci_mode:
         checks.append(_ci_skip("SQLite database", "runtime database is not committed"))
     else:
         try:
