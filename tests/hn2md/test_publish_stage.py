@@ -4,6 +4,7 @@ import textwrap
 from unittest.mock import patch
 
 import pytest
+from PIL import Image
 
 from hn2md.constants import Stage
 from hn2md.context import RuntimeContext
@@ -51,6 +52,29 @@ def test_publish_reports_oversize_local_images(tmp_path) -> None:
             "size_bytes": 1024 * 1024 + 1,
         }
     ]
+
+
+def test_publish_compresses_valid_oversize_images_before_wechat_upload(tmp_path) -> None:
+    image = tmp_path / "oversize.png"
+    Image.effect_noise((1600, 1600), 100).convert("RGB").save(image)
+    assert image.stat().st_size > 1024 * 1024
+    md = tmp_path / "article.md"
+    md.write_text(f"# safe\n\n![large]({image})\n", encoding="utf-8")
+    machine = type("M", (), {"job": type("J", (), {"stages": {}})()})()
+
+    with (
+        patch("src.utils.db_utils.get_illegal_keywords", return_value=[]),
+        patch("hn2md.stages.publish.load_project_function", return_value=lambda *_, **__: "media-1"),
+    ):
+        result = PublishStage().execute(object(), machine, markdown_file=str(md))
+
+    assert result["wechat_media_id"] == "media-1"
+    assert result["skipped_images"] == []
+    assert result["compressed_images"]
+    compressed_path = Path(result["compressed_images"][0]["compressed_path"])
+    assert compressed_path.exists()
+    assert compressed_path.stat().st_size <= 1024 * 1024
+    assert str(compressed_path) in md.read_text(encoding="utf-8")
 
 
 def test_publish_reports_unsupported_local_image_formats(tmp_path) -> None:

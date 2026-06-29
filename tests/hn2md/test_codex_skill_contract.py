@@ -37,3 +37,17 @@ def test_codex_skill_runs_audit_before_manual_plan() -> None:
     assert skill.index("publisher audit hackernews") < skill.index("publisher plan hackernews")
     assert "--approve" in skill
     assert "blocking" in skill
+
+
+def test_codex_skill_defaults_to_wechat_and_astro_publish() -> None:
+    skill = Path("skills/publish-hacknews-codex/SKILL.md").read_text(encoding="utf-8")
+    assert "默认完整发布必须同时完成 WeChat 和 Astro" in skill
+    assert "只发微信" in skill
+    assert "明确要求" in skill
+
+
+def test_codex_skill_forbids_guessing_missing_article_content() -> None:
+    skill = Path("skills/publish-hacknews-codex/SKILL.md").read_text(encoding="utf-8")
+    assert "不得用公开知识猜正文" in skill
+    assert "human_input_or_handler" in skill
+    assert "scraper_failures" in skill

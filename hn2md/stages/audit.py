@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 import logging
+import json
 import sqlite3
+from datetime import datetime
 from typing import Any
 
 from hn2md.context import RuntimeContext
@@ -18,6 +20,7 @@ VALID_SOURCE_TYPES = {
     "public_abstract",
     "public_page_summary",
     "public_metadata_summary",
+    "human_supplied",
     "metadata_only",
     "discussion_only",
 }
@@ -32,6 +35,37 @@ def _issue(row: sqlite3.Row, code: str, message: str) -> dict[str, Any]:
         "severity": "blocking",
         "message": message,
     }
+
+
+def _collect_warning_issue(warning: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "news_id": warning.get("id"),
+        "title": warning.get("title"),
+        "news_url": warning.get("url"),
+        "code": "collect_content_warning",
+        "severity": "blocking",
+        "message": warning.get("reason") or "采集阶段存在内容警告",
+        "domain": warning.get("domain"),
+        "action_required": warning.get("action_required"),
+        "failure_count": warning.get("failure_count"),
+    }
+
+
+def _load_collect_content_warnings(ctx: RuntimeContext) -> list[dict[str, Any]]:
+    ledger_path = ctx.job_dir / f"publish_job_{datetime.now().strftime('%Y%m%d')}.json"
+    if not ledger_path.exists():
+        return []
+    try:
+        data = json.loads(ledger_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        logger.warning("Failed to read collect warnings from ledger: %s", ledger_path)
+        return []
+    collecting = data.get("stages", {}).get("COLLECTING", {})
+    output_summary = collecting.get("output_summary", {})
+    warnings = output_summary.get("content_warnings", [])
+    if not isinstance(warnings, list):
+        return []
+    return [warning for warning in warnings if isinstance(warning, dict)]
 
 
 def _available_columns(conn: sqlite3.Connection, table: str) -> set[str]:
@@ -75,7 +109,7 @@ def run_audit(
             "FROM news WHERE date(created_at)=date('now','localtime') ORDER BY id"
         ).fetchall()
 
-    issues: list[dict[str, Any]] = []
+    issues: list[dict[str, Any]] = [_collect_warning_issue(warning) for warning in _load_collect_content_warnings(ctx)]
     items: list[dict[str, Any]] = []
     for row in rows:
         article = (row["article_content"] or "").strip()
@@ -110,6 +144,7 @@ def run_audit(
         elif source_type in {"public_page_summary", "public_metadata_summary"}:
             if not row["content_source_url"]:
                 issues.append(_issue(row, "source_url_missing", "公开摘要或替代内容缺少来源 URL"))
+            issues.append(_issue(row, "fallback_source_requires_review", "替代来源需要人工确认或专用 handler 补全"))
         if not summary:
             issues.append(_issue(row, "summary_missing", "中文正文摘要为空"))
         if not discussion_summary:

@@ -24,7 +24,7 @@ def _is_youtube_url(url: str) -> bool:
     return host in {"youtube.com", "www.youtube.com", "youtu.be"}
 
 
-async def _collect_item(row: sqlite3.Row, semaphore: asyncio.Semaphore) -> dict[str, Any]:
+async def _collect_item(row: sqlite3.Row, semaphore: asyncio.Semaphore, db_path: str | None = None) -> dict[str, Any]:
     """Collect missing context for one news row."""
     from src.core.crawlers.scrapling_crawler import ScraplingCrawler
     from src.core.handlers.discussion_handler import get_discussion_content_async
@@ -33,12 +33,14 @@ async def _collect_item(row: sqlite3.Row, semaphore: asyncio.Semaphore) -> dict[
     from src.core.handlers.screenshot_handler import save_page_screenshot
     from src.core.handlers.stackexchange_handler import build_public_summary_fallback, is_stackexchange_url
     from src.core.handlers.youtube_handler import get_youtube_content
+    from src.utils.scraper_failures import extract_domain, record_scraper_failure
 
     async with semaphore:
         article_content = (row["article_content"] or "").strip()
         discussion_content = (row["discussion_content"] or "").strip()
         image_paths = [path for path in (row["largest_image"], row["image_2"], row["image_3"]) if path]
         image_warnings: list[dict[str, Any]] = []
+        content_warnings: list[dict[str, Any]] = []
         screenshot = row["screenshot"]
         content_source_type = row["content_source_type"] if "content_source_type" in row.keys() else None
         content_source_url = row["content_source_url"] if "content_source_url" in row.keys() else None
@@ -73,6 +75,33 @@ async def _collect_item(row: sqlite3.Row, semaphore: asyncio.Semaphore) -> dict[
                 content_source_url = news_url
                 content_source_doi = None
                 collected = True
+                domain = extract_domain(news_url)
+                failure_count = record_scraper_failure(domain, news_url, db_path)
+                content_warnings.append(
+                    {
+                        "id": row["id"],
+                        "title": row["title"] or "",
+                        "url": news_url,
+                        "domain": domain,
+                        "reason": "fallback_content_requires_review",
+                        "failure_count": failure_count,
+                        "action_required": "human_input_or_handler",
+                    }
+                )
+            elif news_url:
+                domain = extract_domain(news_url)
+                failure_count = record_scraper_failure(domain, news_url, db_path)
+                content_warnings.append(
+                    {
+                        "id": row["id"],
+                        "title": row["title"] or "",
+                        "url": news_url,
+                        "domain": domain,
+                        "reason": "article_content_missing",
+                        "failure_count": failure_count,
+                        "action_required": "human_input_or_handler",
+                    }
+                )
             if image_urls:
                 saved_images = []
                 for index, image_url in enumerate(image_urls[:3], 1):
@@ -133,13 +162,14 @@ async def _collect_item(row: sqlite3.Row, semaphore: asyncio.Semaphore) -> dict[
             "content_source_url": content_source_url,
             "content_source_doi": content_source_doi,
             "image_warnings": image_warnings,
+            "content_warnings": content_warnings,
             "collected": collected,
         }
 
 
-async def _collect_rows(rows: list[sqlite3.Row], concurrency: int) -> list[dict[str, Any]]:
+async def _collect_rows(rows: list[sqlite3.Row], concurrency: int, db_path: str | None = None) -> list[dict[str, Any]]:
     semaphore = asyncio.Semaphore(concurrency)
-    return await asyncio.gather(*(_collect_item(row, semaphore) for row in rows))
+    return await asyncio.gather(*(_collect_item(row, semaphore, db_path) for row in rows))
 
 
 class CollectStage(BaseStage):
@@ -178,7 +208,7 @@ class CollectStage(BaseStage):
                 "FROM news WHERE date(created_at)=date('now','localtime') ORDER BY id"
             ).fetchall()
 
-        items = asyncio.run(_collect_rows(rows, concurrency))
+        items = asyncio.run(_collect_rows(rows, concurrency, str(ctx.db_path)))
 
         with get_db(str(ctx.db_path)) as conn:
             columns = {row[1] for row in conn.execute("PRAGMA table_info(news)").fetchall()}
@@ -230,6 +260,11 @@ class CollectStage(BaseStage):
             for item in items
             for warning in item.get("image_warnings", [])
         ]
+        content_warnings = [
+            warning
+            for item in items
+            for warning in item.get("content_warnings", [])
+        ]
         context_path.write_text(
             json.dumps(
                 {
@@ -249,4 +284,5 @@ class CollectStage(BaseStage):
             "concurrency": concurrency,
             "context_file": str(context_path),
             "image_warnings": image_warnings,
+            "content_warnings": content_warnings,
         }

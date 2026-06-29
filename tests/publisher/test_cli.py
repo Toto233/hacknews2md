@@ -1,9 +1,13 @@
+import sqlite3
+import subprocess
+import sys
 from unittest.mock import patch
 
 from click.testing import CliRunner
 
 from hn2md.state import JobStateMachine, Stage
 from publisher.cli import main
+from src.utils.db_utils import init_database
 
 
 def test_status_reports_not_started_for_missing_hackernews_run(tmp_path, monkeypatch) -> None:
@@ -77,6 +81,18 @@ def test_validate_source_reports_hackernews_contract_ok() -> None:
 
     assert result.exit_code == 0, result.output
     assert "Source contract OK: hackernews" in result.output
+
+
+def test_python_module_entrypoint_invokes_publisher_cli() -> None:
+    result = subprocess.run(
+        [sys.executable, "-m", "publisher.cli", "validate-source", "hackernews"],
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert "Source contract OK: hackernews" in result.stdout
 
 
 def test_graph_prints_hackernews_stage_order() -> None:
@@ -170,3 +186,112 @@ def test_audit_approve_command_records_exemption(tmp_path, monkeypatch) -> None:
     assert result.exit_code == 0, result.output
     machine, _ = JobStateMachine.load_or_create(tmp_path / "output" / "jobs", "20260627")
     assert machine.job.audit_exemption["issue_snapshot"] == [{"code": "content_short"}]
+
+
+def test_mark_source_updates_content_provenance(tmp_path, monkeypatch) -> None:
+    monkeypatch.chdir(tmp_path)
+    db_path = tmp_path / "data" / "hacknews.db"
+    init_database(str(db_path))
+    with sqlite3.connect(db_path) as conn:
+        conn.execute(
+            """
+            INSERT INTO news (id, title, news_url, created_at)
+            VALUES (1, 'Story', 'https://example.com/story', '2026-06-27 10:00:00')
+            """
+        )
+
+    result = CliRunner().invoke(
+        main,
+        [
+            "mark-source",
+            "hackernews",
+            "1",
+            "--date",
+            "2026-06-27",
+            "--type",
+            "human_supplied",
+            "--url",
+            "https://example.com/story",
+        ],
+    )
+
+    assert result.exit_code == 0, result.output
+    with sqlite3.connect(db_path) as conn:
+        row = conn.execute(
+            "SELECT content_source_type, content_source_url FROM news WHERE id=1"
+        ).fetchone()
+    assert row == ("human_supplied", "https://example.com/story")
+
+
+def test_set_content_updates_article_and_source(tmp_path, monkeypatch) -> None:
+    monkeypatch.chdir(tmp_path)
+    db_path = tmp_path / "data" / "hacknews.db"
+    init_database(str(db_path))
+    body_file = tmp_path / "body.txt"
+    body_file.write_text("人工补齐正文。" * 30, encoding="utf-8")
+    with sqlite3.connect(db_path) as conn:
+        conn.execute(
+            """
+            INSERT INTO news (id, title, news_url, created_at)
+            VALUES (1, 'Story', 'https://example.com/story', '2026-06-27 10:00:00')
+            """
+        )
+
+    result = CliRunner().invoke(
+        main,
+        [
+            "set-content",
+            "hackernews",
+            "1",
+            "--date",
+            "2026-06-27",
+            "--file",
+            str(body_file),
+            "--source-type",
+            "human_supplied",
+            "--source-url",
+            "https://example.com/story",
+        ],
+    )
+
+    assert result.exit_code == 0, result.output
+    with sqlite3.connect(db_path) as conn:
+        row = conn.execute(
+            "SELECT article_content, content_source_type, content_source_url FROM news WHERE id=1"
+        ).fetchone()
+    assert row == ("人工补齐正文。" * 30, "human_supplied", "https://example.com/story")
+
+
+def test_skip_story_can_delete_and_add_domain_filter(tmp_path, monkeypatch) -> None:
+    monkeypatch.chdir(tmp_path)
+    db_path = tmp_path / "data" / "hacknews.db"
+    init_database(str(db_path))
+    with sqlite3.connect(db_path) as conn:
+        conn.execute(
+            """
+            INSERT INTO news (id, title, news_url, created_at)
+            VALUES (3839, '403', 'https://www.marfapublicradio.org/story', '2026-06-27 10:00:00')
+            """
+        )
+
+    result = CliRunner().invoke(
+        main,
+        [
+            "skip-story",
+            "hackernews",
+            "3839",
+            "--date",
+            "2026-06-27",
+            "--filter-domain",
+            "--reason",
+            "403",
+        ],
+    )
+
+    assert result.exit_code == 0, result.output
+    with sqlite3.connect(db_path) as conn:
+        assert conn.execute("SELECT COUNT(*) FROM news WHERE id=3839").fetchone()[0] == 0
+        filter_row = conn.execute(
+            "SELECT domain, reason FROM filtered_domains WHERE domain='marfapublicradio.org'"
+        ).fetchone()
+    assert filter_row == ("marfapublicradio.org", "403")

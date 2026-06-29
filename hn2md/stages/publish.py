@@ -93,6 +93,66 @@ def _find_skipped_local_images(markdown_content: str) -> list[dict[str, Any]]:
     return skipped
 
 
+def _compress_image_for_wechat(image_path: Path) -> Path | None:
+    """Create a <=1MB JPEG copy for WeChat when possible."""
+    try:
+        from PIL import Image
+    except ImportError:
+        logger.warning("[PUBLISH] Pillow unavailable; cannot compress image: %s", image_path)
+        return None
+
+    target = image_path.with_name(f"{image_path.stem}_wechat.jpg")
+    try:
+        with Image.open(image_path) as image:
+            if image.mode in {"RGBA", "LA"}:
+                background = Image.new("RGB", image.size, (255, 255, 255))
+                alpha = image.getchannel("A")
+                background.paste(image.convert("RGBA"), mask=alpha)
+                work = background
+            else:
+                work = image.convert("RGB")
+
+            for scale in (1.0, 0.85, 0.7, 0.55, 0.4):
+                resized = work
+                if scale != 1.0:
+                    width = max(1, int(work.width * scale))
+                    height = max(1, int(work.height * scale))
+                    resized = work.resize((width, height), Image.Resampling.LANCZOS)
+                for quality in (85, 75, 65, 55, 45):
+                    resized.save(target, format="JPEG", quality=quality, optimize=True)
+                    if target.stat().st_size <= _WECHAT_IMAGE_LIMIT_BYTES:
+                        return target
+    except Exception as exc:
+        logger.warning("[PUBLISH] Failed to compress image %s: %s", image_path, exc)
+        return None
+    return None
+
+
+def _rewrite_oversize_images_for_wechat(markdown_content: str, markdown_path: Path) -> tuple[str, list[dict[str, Any]]]:
+    """Rewrite valid oversized local image references to compressed JPEG copies."""
+    compressed: list[dict[str, Any]] = []
+    rewritten = markdown_content
+    for skipped in _find_skipped_local_images(markdown_content):
+        if skipped.get("reason") != "oversize":
+            continue
+        original = Path(str(skipped["path"]))
+        compressed_path = _compress_image_for_wechat(original)
+        if not compressed_path:
+            continue
+        rewritten = rewritten.replace(str(original), str(compressed_path))
+        compressed.append(
+            {
+                "original_path": str(original),
+                "compressed_path": str(compressed_path),
+                "original_size_bytes": skipped.get("size_bytes"),
+                "compressed_size_bytes": compressed_path.stat().st_size,
+            }
+        )
+    if compressed and rewritten != markdown_content:
+        markdown_path.write_text(rewritten, encoding="utf-8")
+    return rewritten, compressed
+
+
 class PublishStage(BaseStage):
     stage_name = Stage.PUBLISHING
 
@@ -120,6 +180,7 @@ class PublishStage(BaseStage):
         md_path = Path(md_file)
         if md_path.exists():
             md_content = md_path.read_text(encoding="utf-8")
+            md_content, compressed_images = _rewrite_oversize_images_for_wechat(md_content, md_path)
             skipped_images = _find_skipped_local_images(md_content)
 
             from src.utils.db_utils import check_illegal_content, get_illegal_keywords
@@ -139,6 +200,7 @@ class PublishStage(BaseStage):
                 logger.warning("[PUBLISH] Hallucination markers detected in content")
         else:
             skipped_images = []
+            compressed_images = []
             logger.warning(f"[PUBLISH] Markdown file not found: {md_file}")
 
         # --- Dry-run mode ---
@@ -150,6 +212,7 @@ class PublishStage(BaseStage):
                 "dry_run": True,
                 "safety_check": "passed",
                 "skipped_images": skipped_images,
+                "compressed_images": compressed_images,
             }
 
         publish_to_wechat = load_project_function(ctx, "scripts.publish_wechat", "publish_to_wechat")
@@ -158,4 +221,5 @@ class PublishStage(BaseStage):
             "wechat_media_id": str(media_id) if media_id else None,
             "markdown_file": md_file,
             "skipped_images": skipped_images,
+            "compressed_images": compressed_images,
         }

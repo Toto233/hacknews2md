@@ -210,3 +210,50 @@ def test_collect_stage_records_stackexchange_fallback_source_metadata(tmp_path) 
     assert len(row[0]) >= 100
     assert row[1] == "public_page_summary"
     assert row[2] == "https://physics.stackexchange.com/questions/535/example"
+    assert result["content_warnings"] == [
+        {
+            "id": 1,
+            "title": "Story",
+            "url": "https://physics.stackexchange.com/questions/535/example",
+            "domain": "physics.stackexchange.com",
+            "reason": "fallback_content_requires_review",
+            "failure_count": 1,
+            "action_required": "human_input_or_handler",
+        }
+    ]
+
+
+def test_collect_stage_records_scraper_failure_when_article_missing(tmp_path) -> None:
+    ctx = _ctx(tmp_path)
+    crawler = MagicMock()
+    crawler.crawl_article = AsyncMock(return_value=("", []))
+    crawler.close = AsyncMock()
+
+    with (
+        patch("src.core.crawlers.scrapling_crawler.ScraplingCrawler", return_value=crawler),
+        patch(
+            "src.core.handlers.discussion_handler.get_discussion_content_async",
+            new=AsyncMock(return_value="HN discussion"),
+        ),
+        patch("src.core.handlers.screenshot_handler.save_page_screenshot", return_value="shot.png"),
+    ):
+        result = CollectStage().execute(ctx, object(), concurrency=1)
+
+    assert result["collected"] == 0
+    assert result["content_warnings"] == [
+        {
+            "id": 1,
+            "title": "Story",
+            "url": "https://example.com/story",
+            "domain": "example.com",
+            "reason": "article_content_missing",
+            "failure_count": 1,
+            "action_required": "human_input_or_handler",
+        }
+    ]
+
+    with sqlite3.connect(ctx.db_path) as conn:
+        row = conn.execute(
+            "SELECT domain, sample_url, fail_count FROM scraper_failures WHERE domain='example.com'"
+        ).fetchone()
+    assert row == ("example.com", "https://example.com/story", 1)

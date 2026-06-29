@@ -1,4 +1,5 @@
 import sqlite3
+import json
 from datetime import datetime
 from pathlib import Path
 
@@ -79,3 +80,98 @@ def test_clean_audit_does_not_need_exemption(tmp_path) -> None:
     machine.record_audit_report({"issues": [], "blocking_count": 0})
 
     assert require_audit_clear_or_exempt(machine) is False
+
+
+def test_audit_blocks_fallback_source_until_human_review(tmp_path) -> None:
+    ctx = _ctx(tmp_path)
+    init_database(str(ctx.db_path))
+    with sqlite3.connect(ctx.db_path) as conn:
+        conn.execute(
+            """
+            INSERT INTO news (
+                id, title, news_url, article_content, discussion_content,
+                content_summary, discuss_summary, content_source_type,
+                content_source_url, created_at
+            ) VALUES (
+                1, 'Blocked page', 'https://example.com/story',
+                'Source fallback: local crawler could not retrieve full text, metadata only for review.',
+                'discussion', 'summary', 'discussion summary',
+                'public_page_summary', 'https://example.com/story',
+                datetime('now', 'localtime')
+            )
+            """
+        )
+
+    report = run_audit(ctx)
+
+    codes = {issue["code"] for issue in report["issues"]}
+    assert "fallback_source_requires_review" in codes
+
+
+def test_audit_accepts_human_supplied_content_source(tmp_path) -> None:
+    ctx = _ctx(tmp_path)
+    init_database(str(ctx.db_path))
+    with sqlite3.connect(ctx.db_path) as conn:
+        conn.execute(
+            """
+            INSERT INTO news (
+                id, title, news_url, article_content, discussion_content,
+                content_summary, discuss_summary, content_source_type,
+                content_source_url, created_at
+            ) VALUES (
+                1, 'Human supplied', 'https://example.com/story',
+                '人工补齐的正文，长度足够用于审计通过。人工补齐的正文，长度足够用于审计通过。人工补齐的正文，长度足够用于审计通过。人工补齐的正文，长度足够用于审计通过。人工补齐的正文，长度足够用于审计通过。人工补齐的正文，长度足够用于审计通过。人工补齐的正文，长度足够用于审计通过。人工补齐的正文，长度足够用于审计通过。',
+                'discussion', 'summary', 'discussion summary',
+                'human_supplied', 'https://example.com/story',
+                datetime('now', 'localtime')
+            )
+            """
+        )
+
+    report = run_audit(ctx)
+
+    assert report["blocking_count"] == 0
+
+
+def test_audit_merges_collect_content_warnings_from_ledger(tmp_path) -> None:
+    ctx = _ctx(tmp_path)
+    init_database(str(ctx.db_path))
+    period = datetime.now().strftime("%Y%m%d")
+    ctx.job_dir.mkdir(parents=True)
+    (ctx.job_dir / f"publish_job_{period}.json").write_text(
+        json.dumps(
+            {
+                "date": period,
+                "created_at": datetime.now().isoformat(),
+                "updated_at": datetime.now().isoformat(),
+                "status": "COLLECTING",
+                "stages": {
+                    "COLLECTING": {
+                        "stage": "COLLECTING",
+                        "status": "SUCCESS",
+                        "started_at": datetime.now().isoformat(),
+                        "finished_at": datetime.now().isoformat(),
+                        "output_summary": {
+                            "content_warnings": [
+                                {
+                                    "id": 3838,
+                                    "url": "https://pudding.cool/story",
+                                    "domain": "pudding.cool",
+                                    "reason": "content_missing",
+                                    "action_required": "human_input_or_handler",
+                                    "failure_count": 2,
+                                }
+                            ]
+                        },
+                    }
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    report = run_audit(ctx)
+
+    assert report["blocking_count"] == 1
+    assert report["issues"][0]["code"] == "collect_content_warning"
+    assert report["issues"][0]["action_required"] == "human_input_or_handler"

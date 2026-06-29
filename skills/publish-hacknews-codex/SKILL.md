@@ -1,11 +1,11 @@
 ---
 name: publish-hacknews-codex
-description: 使用 Codex 生成 HackNews 中文标题、摘要、排序和标签，并通过 publisher 命令完成抓取、渲染、微信草稿发布和可选 Astro 同步。
+description: 使用 Codex 生成 HackNews 中文标题、摘要、排序和标签，并通过 publisher 命令完成抓取、渲染、微信草稿发布和 Astro 同步。
 ---
 
 # Publish HackNews with Codex and publisher
 
-所有命令在仓库根目录执行。`publisher` 是项目发布入口；Codex 是 manual plan 的内容模型。导入 manual plan 时不得调用 Gemini/Grok/Moonshot。
+所有命令在仓库根目录执行。`publisher` 是项目发布入口；Codex 是 manual plan 的内容模型。导入 manual plan 时不得调用 Gemini/Grok/Moonshot。默认完整发布必须同时完成 WeChat 和 Astro；只有用户明确要求“只发微信”“不要 Astro”“重发微信草稿”时，才使用 `--target wechat`。
 
 ## 1. Fetch and collect
 
@@ -21,9 +21,25 @@ sqlite3 -header -column ".\data\hacknews.db" "select id, length(coalesce(article
 ```
 
 - 正文为空、登录页或明显截断时列出 ID、标题和 URL。
+- 不得用公开知识猜正文；只允许使用抓取到的 `full_text`、明确标记的替代来源，或用户提供的 `human_supplied` 内容。
+- 如果 `COLLECTING` 返回 `content_warnings`，尤其是 `action_required=human_input_or_handler`，必须暂停并向用户报告 ID、URL、domain、reason、failure_count；由用户选择人工补全、增加 handler、加入 filter 或跳过。
+- `scraper_failures` 中同一 domain 失败次数达到 2 次时提示“可能需要 handler”；达到 3 次及以上时强提示“建议新增 handler 或加入 filter”，但不得自动加入 filter。
 - 单条正文最多补抓两次；只有讨论为空时仅补抓讨论。
 - 稳定 401/403、订阅墙和付费墙要报告，不自动删除。
 - 抓取失败域名先检查 `filtered_domains`，否则用 `record_scraper_failure()` 记录后继续。
+
+人工修复优先使用 publisher 命令，不手写 SQL：
+
+```powershell
+publisher review-missing hackernews
+publisher set-content hackernews <id> --file ".\path\to\body.txt" --source-type human_supplied --source-url "<url>"
+publisher mark-source hackernews <id> --type human_supplied --url "<url>"
+publisher skip-story hackernews <id> --filter-domain --reason "403"
+```
+
+- 用户人工补齐正文后，用 `set-content` 或 `mark-source` 标记为 `human_supplied`。
+- 用户确认某条彻底不可读且要放弃时，用 `skip-story --filter-domain` 删除当天记录并加入 filter。
+- 不要因为一次抓取失败自动 skip；必须有用户明确确认。
 
 ## 2. Generate the Codex plan
 
@@ -73,7 +89,7 @@ publisher render hackernews
 
 Plan 校验失败时修正 JSON，不切换到外部 LLM。渲染必须保留 Codex 的 `ordered_ids` 和四个 tags。记录命令返回的 `markdown_file`、`html_file` 和可选 `astro_file`。
 
-只准备微信草稿、不要写 Astro 时：
+只有用户明确要求只发微信、不要写 Astro，或重发微信草稿时，才使用：
 
 ```powershell
 publisher render hackernews --target wechat --rerun
@@ -113,9 +129,9 @@ publisher publish hackernews "<markdown_file>" --cover-image "<cover_image>" --t
 publisher release hackernews --from-stage PUBLISHING --target wechat --rerun
 ```
 
-## 6. Optional Astro publish
+## 6. Publish Astro
 
-仅当 `astro_file` 非空且用户明确需要同步 Astro 时，从部署配置获取 Astro 仓库，并只提交本次生成文件：
+默认完整发布必须同时完成 WeChat 和 Astro。渲染输出中 `astro_file` 必须非空；从部署配置获取 Astro 仓库，并只提交本次生成文件：
 
 ```powershell
 git -C "<astro仓库>" status --short
@@ -124,7 +140,7 @@ git -C "<astro仓库>" commit -m "YYYYMMDD: 更新 HackNews 博客"
 git -C "<astro仓库>" push
 ```
 
-不要运行 Astro build，不处理仓库中的其他脏文件。重发微信草稿时必须使用 `--target wechat`，避免生成重复 Astro 文章。
+不要运行 Astro build，不处理仓库中的其他脏文件。重发微信草稿或用户明确要求只发微信时，必须使用 `--target wechat`，避免生成重复 Astro 文章。
 
 ## 7. Open images
 
