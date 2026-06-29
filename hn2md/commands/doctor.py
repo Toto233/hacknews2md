@@ -16,7 +16,7 @@ class CheckResult(NamedTuple):
 
 
 def _is_ci_environment() -> bool:
-    return os.getenv("CI", "").lower() == "true" or os.getenv("GITHUB_ACTIONS", "").lower() == "true"
+    return os.getenv("HN2MD_DOCTOR_CI", "").lower() == "true"
 
 
 def _ci_skip(name: str, detail: str) -> CheckResult:

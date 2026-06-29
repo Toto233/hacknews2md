@@ -38,3 +38,5 @@ jobs:
       - name: Run doctor (JSON)
         run: |
           python -m hn2md doctor --json
+        env:
+          HN2MD_DOCTOR_CI: "true"

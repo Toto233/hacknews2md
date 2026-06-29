@@ -8,6 +8,7 @@ from hn2md.commands.doctor import CheckResult, run_doctor, run_doctor_json
 def _disable_ci_mode(monkeypatch):
     monkeypatch.delenv("CI", raising=False)
     monkeypatch.delenv("GITHUB_ACTIONS", raising=False)
+    monkeypatch.delenv("HN2MD_DOCTOR_CI", raising=False)
 
 
 def test_check_result_tuple():
@@ -126,18 +127,30 @@ def test_run_doctor_json_check_items(tmp_path):
         assert isinstance(item["ok"], bool)
 
 
-def test_run_doctor_json_allows_missing_runtime_secrets_in_ci(tmp_path, monkeypatch):
-    """CI should verify code health without requiring local publish secrets/data."""
+def test_generic_ci_env_does_not_change_doctor_strict_mode(tmp_path, monkeypatch):
+    """GitHub's global CI env should not change doctor semantics during pytest."""
     monkeypatch.setenv("CI", "true")
     ctx = MagicMock()
     ctx.db_path = tmp_path / "data" / "hacknews.db"
     ctx.config_path = tmp_path / "config" / "config.json"
     ctx.output_dir = tmp_path / "output"
 
-    with (
-        patch("requests.get") as mock_get,
-        patch("src.db.connection.check_integrity", return_value=(True, "ok")),
-    ):
+    with patch("requests.get") as mock_get:
+        mock_get.return_value.status_code = 200
+        result = run_doctor_json(ctx)
+
+    assert result["all_ok"] is False
+
+
+def test_run_doctor_json_allows_missing_runtime_secrets_in_explicit_ci_doctor_mode(tmp_path, monkeypatch):
+    """The workflow can explicitly run doctor without local publish secrets/data."""
+    monkeypatch.setenv("HN2MD_DOCTOR_CI", "true")
+    ctx = MagicMock()
+    ctx.db_path = tmp_path / "data" / "hacknews.db"
+    ctx.config_path = tmp_path / "config" / "config.json"
+    ctx.output_dir = tmp_path / "output"
+
+    with patch("requests.get") as mock_get:
         mock_get.return_value.status_code = 200
         result = run_doctor_json(ctx)
 
