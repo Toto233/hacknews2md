@@ -5,6 +5,11 @@ from unittest.mock import MagicMock, patch
 from hn2md.commands.doctor import CheckResult, run_doctor, run_doctor_json
 
 
+def _disable_ci_mode(monkeypatch):
+    monkeypatch.delenv("CI", raising=False)
+    monkeypatch.delenv("GITHUB_ACTIONS", raising=False)
+
+
 def test_check_result_tuple():
     """CheckResult is a NamedTuple with name, ok, detail fields."""
     r = CheckResult("test", True, "ok")
@@ -83,8 +88,9 @@ def test_run_doctor_reports_python_version():
     assert python_checks[0].ok is True
 
 
-def test_run_doctor_json_returns_dict(tmp_path):
+def test_run_doctor_json_returns_dict(tmp_path, monkeypatch):
     """run_doctor_json should return a dict with all_ok and checks keys."""
+    _disable_ci_mode(monkeypatch)
     ctx = MagicMock()
     ctx.db_path = tmp_path / "data" / "nonexistent.db"
     ctx.config_path = tmp_path / "config" / "nonexistent.json"
