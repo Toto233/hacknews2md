@@ -31,6 +31,7 @@ def _replace_with_retry(src: Path, dst: Path, attempts: int = 3, delay: float = 
 VALID_TRANSITIONS: set[tuple[Stage, Stage]] = {
     (Stage.IDLE, Stage.FETCHING),
     (Stage.FETCHING, Stage.COLLECTING),
+    (Stage.FETCHING, Stage.RENDERING),
     (Stage.FETCHING, Stage.FAILED),
     (Stage.COLLECTING, Stage.PLANNING),
     (Stage.COLLECTING, Stage.FAILED),

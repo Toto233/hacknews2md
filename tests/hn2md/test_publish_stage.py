@@ -29,6 +29,19 @@ def test_publish_calls_reusable_api_with_explicit_paths(tmp_path) -> None:
     assert result["skipped_images"] == []
 
 
+def test_publish_fails_when_wechat_returns_no_media_id(tmp_path) -> None:
+    md = tmp_path / "article.md"
+    md.write_text("# safe", encoding="utf-8")
+    machine = type("M", (), {"job": type("J", (), {"stages": {}})()})()
+
+    with (
+        patch("src.utils.db_utils.get_illegal_keywords", return_value=[]),
+        patch("hn2md.stages.publish.load_project_function", return_value=lambda *_, **__: None),
+        pytest.raises(RuntimeError, match="no media_id returned"),
+    ):
+        PublishStage().execute(object(), machine, markdown_file=str(md))
+
+
 def test_publish_reports_oversize_local_images(tmp_path) -> None:
     image = tmp_path / "oversize.png"
     image.write_bytes(b"x" * (1024 * 1024 + 1))
@@ -100,20 +113,23 @@ def test_publish_reports_unsupported_local_image_formats(tmp_path) -> None:
     ]
 
 
-def test_publish_safety_gate_reports_keyword_location_and_context(tmp_path) -> None:
+def test_publish_keyword_gate_warns_with_full_sentence_without_blocking(tmp_path) -> None:
     md = tmp_path / "article.md"
-    md.write_text("# title\n\nfirst line\nblocked keyword here\nlast line\n", encoding="utf-8")
+    md.write_text("# title\n\nfirst line\nThis sentence has a blocked keyword here. Next sentence.\nlast line\n", encoding="utf-8")
     machine = type("M", (), {"job": type("J", (), {"stages": {}})()})()
 
     with patch("src.utils.db_utils.get_illegal_keywords", return_value=["blocked"]):
-        with pytest.raises(RuntimeError) as excinfo:
-            PublishStage().execute(object(), machine, markdown_file=str(md), dry_run=True)
+        result = PublishStage().execute(object(), machine, markdown_file=str(md), dry_run=True)
 
-    message = str(excinfo.value)
-    assert "blocked" in message
-    assert str(md) in message
-    assert "line 4" in message
-    assert "blocked keyword here" in message
+    assert result["keyword_warnings"] == [
+        {
+            "keyword": "blocked",
+            "path": str(md),
+            "line": 4,
+            "sentence": "This sentence has a blocked keyword here.",
+            "context": "This sentence has a blocked keyword here. Next sentence.",
+        }
+    ]
 
 
 def test_publish_loads_project_script_when_project_root_not_on_sys_path(tmp_path, monkeypatch) -> None:

@@ -133,6 +133,67 @@ def test_audit_accepts_human_supplied_content_source(tmp_path) -> None:
     assert report["blocking_count"] == 0
 
 
+def test_audit_does_not_block_long_article_with_javascript_marker(tmp_path) -> None:
+    ctx = _ctx(tmp_path)
+    init_database(str(ctx.db_path))
+    long_article = ("Readable article paragraph. " * 80) + " Please enable javascript for comments."
+    with sqlite3.connect(ctx.db_path) as conn:
+        conn.execute(
+            """
+            INSERT INTO news (
+                id, title, news_url, article_content, discussion_content,
+                content_summary, discuss_summary, content_source_type,
+                content_source_url, created_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now', 'localtime'))
+            """,
+            (
+                1,
+                "Readable page",
+                "https://example.com/story",
+                long_article,
+                "discussion",
+                "summary",
+                "discussion summary",
+                "full_text",
+                "https://example.com/story",
+            ),
+        )
+
+    report = run_audit(ctx)
+
+    codes = {issue["code"] for issue in report["issues"]}
+    assert "error_page" not in codes
+    assert "error_page_suspected" in codes
+    assert report["blocking_count"] == 0
+
+
+def test_audit_blocks_short_article_with_javascript_marker(tmp_path) -> None:
+    ctx = _ctx(tmp_path)
+    init_database(str(ctx.db_path))
+    with sqlite3.connect(ctx.db_path) as conn:
+        conn.execute(
+            """
+            INSERT INTO news (
+                id, title, news_url, article_content, discussion_content,
+                content_summary, discuss_summary, content_source_type,
+                content_source_url, created_at
+            ) VALUES (
+                1, 'Blocked page', 'https://example.com/story',
+                'Please enable javascript to view this page.',
+                'discussion', 'summary', 'discussion summary',
+                'full_text', 'https://example.com/story',
+                datetime('now', 'localtime')
+            )
+            """
+        )
+
+    report = run_audit(ctx)
+
+    codes = {issue["code"] for issue in report["issues"]}
+    assert "error_page" in codes
+    assert report["blocking_count"] == 2
+
+
 def test_audit_merges_collect_content_warnings_from_ledger(tmp_path) -> None:
     ctx = _ctx(tmp_path)
     init_database(str(ctx.db_path))

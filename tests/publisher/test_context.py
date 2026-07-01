@@ -14,6 +14,19 @@ def test_context_uses_existing_project_layout(tmp_path: Path) -> None:
     assert ctx.period == "20260627"
 
 
+def test_context_can_use_source_specific_database(tmp_path: Path) -> None:
+    ctx = PublisherContext.create(
+        tmp_path,
+        source="producthunt",
+        period="202606",
+        db_filename="producthunt.db",
+    )
+
+    assert ctx.db_path == tmp_path / "data" / "producthunt.db"
+    assert ctx.source == "producthunt"
+    assert ctx.period == "202606"
+
+
 def test_parse_date_period_accepts_iso_date() -> None:
     assert parse_date_period("2026-06-27") == "20260627"
 

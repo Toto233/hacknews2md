@@ -38,6 +38,13 @@ publisher skip-story hackernews <id> --filter-domain --reason "403"
 ```
 
 - 用户人工补齐正文后，用 `set-content` 或 `mark-source` 标记为 `human_supplied`。
+- 用户说“补齐了”之后，不继续使用旧的 collect receipt/context；必须先刷新采集 receipt/context，再重新审计：
+
+```powershell
+publisher collect hackernews --rerun
+publisher audit hackernews --json
+```
+
 - 用户确认某条彻底不可读且要放弃时，用 `skip-story --filter-domain` 删除当天记录并加入 filter。
 - 不要因为一次抓取失败自动 skip；必须有用户明确确认。
 
@@ -122,6 +129,13 @@ publisher publish hackernews "<markdown_file>" --cover-image "<cover_image>" --t
 ```powershell
 publisher publish hackernews "<markdown_file>" --cover-image "<cover_image>" --target wechat --dry-run --rerun
 ```
+
+关键词命中仅提醒，不硬阻止发布。处理规则：
+
+- dry-run 或正式发布返回 `keyword_warnings` 时，必须查看每条 warning 的 `keyword`、`line` 和 `sentence`。
+- 如果整句话语境是明显褒义，可以直接继续发布，并在最终报告里列出命中句。
+- 如果整句话语境是中性或贬义，必须把带关键词的整句话打印给用户看，等待用户确认后再发布。
+- 用户确认后再发布；不要擅自改写关键词句，除非用户明确要求替换。
 
 重新发布当天微信草稿且不要重复写 `hacknews_recap` 时，只重跑 PUBLISHING：
 

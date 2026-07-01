@@ -51,3 +51,19 @@ def test_codex_skill_forbids_guessing_missing_article_content() -> None:
     assert "不得用公开知识猜正文" in skill
     assert "human_input_or_handler" in skill
     assert "scraper_failures" in skill
+
+
+def test_codex_skill_refreshes_collect_receipt_after_human_backfill() -> None:
+    skill = Path("skills/publish-hacknews-codex/SKILL.md").read_text(encoding="utf-8")
+    assert "用户说“补齐了”" in skill
+    assert "publisher collect hackernews --rerun" in skill
+    assert skill.index("publisher collect hackernews --rerun") < skill.index("publisher audit hackernews --json")
+
+
+def test_codex_skill_keyword_gate_requires_sentence_review_for_neutral_or_negative_context() -> None:
+    skill = Path("skills/publish-hacknews-codex/SKILL.md").read_text(encoding="utf-8")
+    assert "关键词命中仅提醒，不硬阻止发布" in skill
+    assert "褒义" in skill
+    assert "中性或贬义" in skill
+    assert "整句话" in skill
+    assert "确认后再发布" in skill

@@ -19,14 +19,20 @@ class PublisherContext:
     config_path: Path
 
     @classmethod
-    def create(cls, project_root: Path | None, source: str, period: str) -> "PublisherContext":
+    def create(
+        cls,
+        project_root: Path | None,
+        source: str,
+        period: str,
+        db_filename: str = "hacknews.db",
+    ) -> "PublisherContext":
         root = (project_root or Path.cwd()).resolve()
         output_dir = root / "output"
         return cls(
             project_root=root,
             source=source,
             period=period,
-            db_path=root / "data" / "hacknews.db",
+            db_path=root / "data" / db_filename,
             output_dir=output_dir,
             job_dir=output_dir / "jobs",
             markdown_dir=output_dir / "markdown",

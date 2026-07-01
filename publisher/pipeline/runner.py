@@ -42,7 +42,7 @@ def run_release(
         hn_stage = _to_hn_stage(stage_name)
         if not rerun and machine.stage_completed_successfully(hn_stage):
             continue
-        if stage_name in {GenericStage.PLANNING, GenericStage.PUBLISHING}:
+        if stage_name in source.audit_required_stages:
             _ensure_audit_ready(runtime_ctx, machine)
         stage_factory = source.stages[stage_name]
         stage = stage_factory()

@@ -23,8 +23,30 @@ _WECHAT_IMAGE_LIMIT_BYTES = 1024 * 1024
 _WECHAT_SUPPORTED_IMAGE_SUFFIXES = {".jpg", ".jpeg", ".png", ".webp"}
 
 
+def _sentence_for_keyword(line: str, keyword: str) -> str:
+    """Return the full sentence containing keyword within a markdown line."""
+    stripped = line.strip()
+    index = stripped.find(keyword)
+    if index < 0:
+        return stripped[:240]
+
+    start = 0
+    for pos in range(index - 1, -1, -1):
+        if stripped[pos] in ".!?。！？":
+            start = pos + 1
+            break
+
+    end = len(stripped)
+    for pos in range(index + len(keyword), len(stripped)):
+        if stripped[pos] in ".!?。！？":
+            end = pos + 1
+            break
+
+    return stripped[start:end].strip()[:500]
+
+
 def _keyword_locations(markdown_content: str, keywords: list[str], markdown_file: str) -> list[dict[str, Any]]:
-    """Return line-level context for blocked publish keywords."""
+    """Return line-level keyword warnings with the full sentence for review."""
     lines = markdown_content.splitlines()
     locations: list[dict[str, Any]] = []
     for line_number, line in enumerate(lines, 1):
@@ -35,6 +57,7 @@ def _keyword_locations(markdown_content: str, keywords: list[str], markdown_file
                         "keyword": keyword,
                         "path": markdown_file,
                         "line": line_number,
+                        "sentence": _sentence_for_keyword(line, keyword),
                         "context": line.strip()[:240],
                     }
                 )
@@ -178,6 +201,7 @@ class PublishStage(BaseStage):
         # --- Content safety gate ---
         # Check markdown content for illegal keywords before publishing
         md_path = Path(md_file)
+        keyword_warnings: list[dict[str, Any]] = []
         if md_path.exists():
             md_content = md_path.read_text(encoding="utf-8")
             md_content, compressed_images = _rewrite_oversize_images_for_wechat(md_content, md_path)
@@ -189,8 +213,11 @@ class PublishStage(BaseStage):
             violations = check_illegal_content(md_content, keywords)
 
             if violations:
-                locations = _keyword_locations(md_content, violations, md_file)
-                raise RuntimeError(_format_keyword_gate_error(violations, md_file, locations))
+                keyword_warnings = _keyword_locations(md_content, violations, md_file)
+                logger.warning(
+                    "[PUBLISH] Keyword warning(s) detected; publish is not blocked: %s",
+                    keyword_warnings,
+                )
             logger.info("[PUBLISH] Content safety check passed")
 
             # LLM output quality gate
@@ -213,13 +240,17 @@ class PublishStage(BaseStage):
                 "safety_check": "passed",
                 "skipped_images": skipped_images,
                 "compressed_images": compressed_images,
+                "keyword_warnings": keyword_warnings,
             }
 
         publish_to_wechat = load_project_function(ctx, "scripts.publish_wechat", "publish_to_wechat")
         media_id = publish_to_wechat(md_file, cover_image=cover)
+        if not media_id:
+            raise RuntimeError("WeChat draft publish failed: no media_id returned")
         return {
-            "wechat_media_id": str(media_id) if media_id else None,
+            "wechat_media_id": str(media_id),
             "markdown_file": md_file,
             "skipped_images": skipped_images,
             "compressed_images": compressed_images,
+            "keyword_warnings": keyword_warnings,
         }

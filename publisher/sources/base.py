@@ -19,6 +19,8 @@ class SourceDefinition:
     required_artifacts: dict[GenericStage, tuple[str, ...]] = field(default_factory=dict)
     default_publish_targets: tuple[str, ...] = ("wechat", "astro")
     enabled: bool = True
+    db_filename: str = "hacknews.db"
+    audit_required_stages: tuple[GenericStage, ...] = (GenericStage.PLANNING, GenericStage.PUBLISHING)
 
 
 def validate_source_definition(source: SourceDefinition) -> list[str]:

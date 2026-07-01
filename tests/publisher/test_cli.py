@@ -115,6 +115,62 @@ def test_collect_command_runs_collect_stage_with_concurrency(tmp_path, monkeypat
     assert kwargs["stage_kwargs"]["COLLECTING"]["concurrency"] == 5
 
 
+def test_hackernews_fetch_does_not_pass_producthunt_options(tmp_path, monkeypatch) -> None:
+    monkeypatch.chdir(tmp_path)
+
+    with patch("publisher.cli.run_release", return_value={"completed_stages": ["FETCHING"]}) as run:
+        result = CliRunner().invoke(main, ["fetch", "hackernews", "--date", "2026-06-27"])
+
+    assert result.exit_code == 0, result.output
+    _, kwargs = run.call_args
+    assert kwargs.get("stage_kwargs") in (None, {})
+
+
+def test_producthunt_fetch_uses_month_period_and_producthunt_database(tmp_path, monkeypatch) -> None:
+    monkeypatch.chdir(tmp_path)
+
+    with patch("publisher.cli.run_release", return_value={"completed_stages": ["FETCHING"]}) as run:
+        result = CliRunner().invoke(
+            main,
+            ["fetch", "producthunt", "--year", "2026", "--month", "6"],
+        )
+
+    assert result.exit_code == 0, result.output
+    ctx = run.call_args.args[0]
+    _, kwargs = run.call_args
+    assert ctx.period == "202606"
+    assert ctx.db_path == tmp_path / "data" / "producthunt.db"
+    assert [stage.value for stage in kwargs["stages"]] == ["FETCHING"]
+
+
+def test_producthunt_release_from_render_uses_month_period(tmp_path, monkeypatch) -> None:
+    monkeypatch.chdir(tmp_path)
+
+    with patch("publisher.cli.run_release", return_value={"completed_stages": ["RENDERING"]}) as run:
+        result = CliRunner().invoke(
+            main,
+            [
+                "release",
+                "producthunt",
+                "--year",
+                "2026",
+                "--month",
+                "6",
+                "--from-stage",
+                "RENDERING",
+                "--dry-run",
+            ],
+        )
+
+    assert result.exit_code == 0, result.output
+    ctx = run.call_args.args[0]
+    _, kwargs = run.call_args
+    assert ctx.period == "202606"
+    assert ctx.db_path == tmp_path / "data" / "producthunt.db"
+    assert [stage.value for stage in kwargs["stages"]] == ["RENDERING", "COVERING", "PUBLISHING"]
+    assert kwargs["dry_run"] is True
+
+
 def test_plan_command_imports_manual_plan(tmp_path, monkeypatch) -> None:
     monkeypatch.chdir(tmp_path)
     plan = tmp_path / "plan.json"

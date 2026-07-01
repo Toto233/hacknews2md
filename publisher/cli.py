@@ -9,7 +9,7 @@ import click
 from hn2md.state import JobStateMachine
 from hn2md.stages.audit import VALID_SOURCE_TYPES, run_audit
 from publisher.constants import GenericStage
-from publisher.context import PublisherContext, parse_date_period
+from publisher.context import PublisherContext, parse_date_period, parse_month_period
 from publisher.pipeline.runner import run_release
 from publisher.sources import get_source
 from publisher.sources.base import SourceDefinition, validate_source_definition
@@ -23,17 +23,34 @@ def main() -> None:
     """Generic source-driven publishing CLI."""
 
 
-def _load_date_source(source_name: str, date_value: str | None) -> tuple[SourceDefinition, PublisherContext]:
+def _load_source_context(
+    source_name: str,
+    date_value: str | None,
+    year: int | None = None,
+    month: int | None = None,
+) -> tuple[SourceDefinition, PublisherContext]:
     source = get_source(source_name)
     if not source.enabled:
         raise click.ClickException(f"source is not enabled yet: {source.name}")
     contract_errors = validate_source_definition(source)
     if contract_errors:
         raise click.ClickException("; ".join(contract_errors))
-    if source.period_kind != "date":
-        raise click.ClickException(f"{source_name} month periods are not implemented yet")
-    period = parse_date_period(date_value)
-    return source, PublisherContext.create(Path.cwd(), source=source.name, period=period)
+    if source.period_kind == "date":
+        period = parse_date_period(date_value)
+    else:
+        if year is None or month is None:
+            raise click.ClickException(f"{source_name} requires --year and --month")
+        period = parse_month_period(year, month)
+    return source, PublisherContext.create(
+        Path.cwd(),
+        source=source.name,
+        period=period,
+        db_filename=source.db_filename,
+    )
+
+
+def _load_date_source(source_name: str, date_value: str | None) -> tuple[SourceDefinition, PublisherContext]:
+    return _load_source_context(source_name, date_value)
 
 
 def _run_single_stage(
@@ -74,12 +91,11 @@ def _ensure_hackernews(source_name: str, date_value: str | None) -> PublisherCon
 @main.command()
 @click.argument("source_name")
 @click.option("--date", "date_value", default=None, help="YYYY-MM-DD or YYYYMMDD")
-def status(source_name: str, date_value: str | None) -> None:
-    source = get_source(source_name)
-    if source.period_kind != "date":
-        raise click.ClickException(f"status for {source_name} requires a month period and is not implemented yet")
-    period = parse_date_period(date_value)
-    ctx = PublisherContext.create(Path.cwd(), source=source.name, period=period)
+@click.option("--year", type=int, default=None)
+@click.option("--month", type=int, default=None)
+def status(source_name: str, date_value: str | None, year: int | None, month: int | None) -> None:
+    source, ctx = _load_source_context(source_name, date_value, year, month)
+    period = ctx.period
     ledger_path = ctx.job_dir / f"publish_job_{period}.json"
 
     click.echo(f"Source: {source.name}")
@@ -95,8 +111,30 @@ def status(source_name: str, date_value: str | None) -> None:
 @main.command()
 @click.argument("source_name")
 @click.option("--date", "date_value", default=None, help="YYYY-MM-DD or YYYYMMDD")
-def fetch(source_name: str, date_value: str | None) -> None:
-    _run_single_stage(source_name, date_value, GenericStage.FETCHING)
+@click.option("--year", type=int, default=None)
+@click.option("--month", type=int, default=None)
+@click.option("--limit", type=int, default=25, show_default=True)
+@click.option("--html-file", type=click.Path(exists=True, dir_okay=False), default=None)
+def fetch(
+    source_name: str,
+    date_value: str | None,
+    year: int | None,
+    month: int | None,
+    limit: int,
+    html_file: str | None,
+) -> None:
+    source, ctx = _load_source_context(source_name, date_value, year, month)
+    stage_kwargs = {}
+    if source.period_kind == "month":
+        stage_kwargs[GenericStage.FETCHING] = {"limit": limit, "html_file": html_file}
+    result = run_release(
+        ctx,
+        source,
+        stages=(GenericStage.FETCHING,),
+        targets=source.default_publish_targets,
+        stage_kwargs=stage_kwargs,
+    )
+    click.echo(f"{GenericStage.FETCHING.value} complete: {result}")
 
 
 @main.command()
@@ -298,8 +336,25 @@ def apply(source_name: str, plan_file: str | None, date_value: str | None) -> No
 @click.option("--date", "date_value", default=None, help="YYYY-MM-DD or YYYYMMDD")
 @click.option("--target", "targets", multiple=True, type=click.Choice(["wechat", "astro"]))
 @click.option("--rerun", is_flag=True)
-def render(source_name: str, date_value: str | None, targets: tuple[str, ...], rerun: bool) -> None:
-    _run_single_stage(source_name, date_value, GenericStage.RENDERING, targets=targets, rerun=rerun)
+@click.option("--year", type=int, default=None)
+@click.option("--month", type=int, default=None)
+def render(
+    source_name: str,
+    date_value: str | None,
+    targets: tuple[str, ...],
+    rerun: bool,
+    year: int | None,
+    month: int | None,
+) -> None:
+    source, ctx = _load_source_context(source_name, date_value, year, month)
+    result = run_release(
+        ctx,
+        source,
+        stages=(GenericStage.RENDERING,),
+        targets=targets or source.default_publish_targets,
+        rerun=rerun,
+    )
+    click.echo(f"{GenericStage.RENDERING.value} complete: {result}")
 
 
 @main.command()
@@ -309,6 +364,8 @@ def render(source_name: str, date_value: str | None, targets: tuple[str, ...], r
 @click.option("--mode", type=click.Choice(["ai", "pillow"]), default="ai")
 @click.option("--target-word", default=None)
 @click.option("--rerun", is_flag=True)
+@click.option("--year", type=int, default=None)
+@click.option("--month", type=int, default=None)
 def cover(
     source_name: str,
     markdown_file: str | None,
@@ -316,14 +373,18 @@ def cover(
     mode: str,
     target_word: str | None,
     rerun: bool,
+    year: int | None,
+    month: int | None,
 ) -> None:
-    _run_single_stage(
-        source_name,
-        date_value,
-        GenericStage.COVERING,
+    source, ctx = _load_source_context(source_name, date_value, year, month)
+    result = run_release(
+        ctx,
+        source,
+        stages=(GenericStage.COVERING,),
         rerun=rerun,
-        kwargs={"markdown_file": markdown_file, "mode": mode, "target_word": target_word},
+        stage_kwargs={GenericStage.COVERING: {"markdown_file": markdown_file, "mode": mode, "target_word": target_word}},
     )
+    click.echo(f"{GenericStage.COVERING.value} complete: {result}")
 
 
 @main.command()
@@ -334,6 +395,8 @@ def cover(
 @click.option("--target", "targets", multiple=True, type=click.Choice(["wechat", "astro"]))
 @click.option("--dry-run", is_flag=True)
 @click.option("--rerun", is_flag=True)
+@click.option("--year", type=int, default=None)
+@click.option("--month", type=int, default=None)
 def publish(
     source_name: str,
     markdown_file: str | None,
@@ -342,16 +405,20 @@ def publish(
     targets: tuple[str, ...],
     dry_run: bool,
     rerun: bool,
+    year: int | None,
+    month: int | None,
 ) -> None:
-    _run_single_stage(
-        source_name,
-        date_value,
-        GenericStage.PUBLISHING,
+    source, ctx = _load_source_context(source_name, date_value, year, month)
+    result = run_release(
+        ctx,
+        source,
+        stages=(GenericStage.PUBLISHING,),
         dry_run=dry_run,
-        targets=targets,
+        targets=targets or source.default_publish_targets,
         rerun=rerun,
-        kwargs={"markdown_file": markdown_file, "cover_image": cover_image},
+        stage_kwargs={GenericStage.PUBLISHING: {"markdown_file": markdown_file, "cover_image": cover_image}},
     )
+    click.echo(f"{GenericStage.PUBLISHING.value} complete: {result}")
 
 
 @main.command()
@@ -361,6 +428,8 @@ def publish(
 @click.option("--from-stage", default=None, help="Start from a declared stage, e.g. PUBLISHING")
 @click.option("--target", "targets", multiple=True, type=click.Choice(["wechat", "astro"]))
 @click.option("--rerun", is_flag=True, help="Run selected stages even if the ledger says they already succeeded")
+@click.option("--year", type=int, default=None)
+@click.option("--month", type=int, default=None)
 def release(
     source_name: str,
     date_value: str | None,
@@ -368,17 +437,10 @@ def release(
     from_stage: str | None,
     targets: tuple[str, ...],
     rerun: bool,
+    year: int | None,
+    month: int | None,
 ) -> None:
-    source = get_source(source_name)
-    if not source.enabled:
-        raise click.ClickException(f"source is not enabled yet: {source.name}")
-    contract_errors = validate_source_definition(source)
-    if contract_errors:
-        raise click.ClickException("; ".join(contract_errors))
-    if source.period_kind != "date":
-        raise click.ClickException(f"release for {source_name} month periods is not implemented yet")
-    period = parse_date_period(date_value)
-    ctx = PublisherContext.create(Path.cwd(), source=source.name, period=period)
+    source, ctx = _load_source_context(source_name, date_value, year, month)
     stages = source.stage_order
     if from_stage:
         try:

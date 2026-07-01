@@ -37,6 +37,12 @@ def _issue(row: sqlite3.Row, code: str, message: str) -> dict[str, Any]:
     }
 
 
+def _warning_issue(row: sqlite3.Row, code: str, message: str) -> dict[str, Any]:
+    issue = _issue(row, code, message)
+    issue["severity"] = "warning"
+    return issue
+
+
 def _collect_warning_issue(warning: dict[str, Any]) -> dict[str, Any]:
     return {
         "news_id": warning.get("id"),
@@ -153,9 +159,13 @@ def run_audit(
             issues.append(_issue(row, "hallucination_marker", "摘要包含模型拒答或幻觉标记"))
         lowered = article.lower()
         if any(marker in lowered for marker in ("enable javascript", "access denied", "sign in to continue")):
-            issues.append(_issue(row, "error_page", "内容疑似登录页或错误页"))
+            if len(article) >= 1000:
+                issues.append(_warning_issue(row, "error_page_suspected", "内容含登录页或 JS 提示词，但正文长度足够，需人工留意"))
+            else:
+                issues.append(_issue(row, "error_page", "内容疑似登录页或错误页"))
 
-    report = {"items": items, "issues": issues, "blocking_count": len(issues)}
+    blocking_count = sum(1 for issue in issues if issue.get("severity", "blocking") == "blocking")
+    report = {"items": items, "issues": issues, "blocking_count": blocking_count}
     if issues:
         logger.warning("Audit found %s blocking issue(s)", len(issues))
     else:

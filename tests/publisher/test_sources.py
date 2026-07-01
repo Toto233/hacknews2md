@@ -64,14 +64,22 @@ def test_contract_validation_rejects_duplicate_stage_order() -> None:
     assert validate_source_definition(source) == ["stage_order contains duplicate stage: FETCHING"]
 
 
-def test_producthunt_source_is_reserved_not_executable() -> None:
+def test_producthunt_source_is_enabled_monthly_source() -> None:
     source = get_source("producthunt")
 
     assert source.name == "producthunt"
     assert source.period_kind == "month"
-    assert source.stages == {}
-    assert source.stage_order == ()
-    assert source.enabled is False
+    assert source.db_filename == "producthunt.db"
+    assert source.default_publish_targets == ("wechat",)
+    assert source.stage_order == (
+        GenericStage.FETCHING,
+        GenericStage.RENDERING,
+        GenericStage.COVERING,
+        GenericStage.PUBLISHING,
+    )
+    assert GenericStage.FETCHING in source.stages
+    assert GenericStage.PUBLISHING in source.stages
+    assert source.audit_required_stages == ()
     assert validate_source_definition(source) == []
 
 

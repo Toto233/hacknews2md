@@ -159,3 +159,24 @@ def test_run_release_allows_planning_after_approved_audit(tmp_path) -> None:
     run_release(ctx, source, stages=[GenericStage.PLANNING])
 
     fake_stage.run.assert_called_once()
+
+
+def test_run_release_allows_source_to_disable_audit_gate_for_publish(tmp_path) -> None:
+    fake_stage = FakePublishStage()
+    source = SourceDefinition(
+        name="producthunt",
+        period_kind="month",
+        stages={GenericStage.PUBLISHING: lambda: fake_stage},
+        audit_required_stages=(),
+    )
+    ctx = PublisherContext.create(
+        tmp_path,
+        source="producthunt",
+        period="202606",
+        db_filename="producthunt.db",
+    )
+
+    result = run_release(ctx, source, stages=[GenericStage.PUBLISHING], dry_run=True)
+
+    assert result["completed_stages"] == ["PUBLISHING"]
+    fake_stage.run.assert_called_once()
