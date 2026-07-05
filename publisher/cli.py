@@ -141,11 +141,13 @@ def fetch(
 @click.argument("source_name")
 @click.option("--date", "date_value", default=None, help="YYYY-MM-DD or YYYYMMDD")
 @click.option("--concurrency", default=3, type=int)
-def collect(source_name: str, date_value: str | None, concurrency: int) -> None:
+@click.option("--rerun", is_flag=True, help="Rerun collect even if the stage was already completed")
+def collect(source_name: str, date_value: str | None, concurrency: int, rerun: bool) -> None:
     _run_single_stage(
         source_name,
         date_value,
         GenericStage.COLLECTING,
+        rerun=rerun,
         kwargs={"concurrency": concurrency},
     )
 

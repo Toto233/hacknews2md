@@ -133,6 +133,61 @@ def test_audit_accepts_human_supplied_content_source(tmp_path) -> None:
     assert report["blocking_count"] == 0
 
 
+def test_audit_blocks_discussion_summary_without_source_when_discussion_is_empty(tmp_path) -> None:
+    ctx = _ctx(tmp_path)
+    init_database(str(ctx.db_path))
+    with sqlite3.connect(ctx.db_path) as conn:
+        conn.execute(
+            """
+            INSERT INTO news (
+                id, title, news_url, article_content, discussion_content,
+                content_summary, discuss_summary, content_source_type,
+                content_source_url, created_at
+            ) VALUES (
+                1, 'Story', 'https://example.com/story',
+                '正文足够长。正文足够长。正文足够长。正文足够长。正文足够长。正文足够长。正文足够长。正文足够长。正文足够长。正文足够长。正文足够长。正文足够长。正文足够长。正文足够长。正文足够长。正文足够长。正文足够长。正文足够长。正文足够长。正文足够长。正文足够长。正文足够长。正文足够长。正文足够长。',
+                '', 'summary', 'discussion summary from elsewhere',
+                'full_text', 'https://example.com/story',
+                datetime('now', 'localtime')
+            )
+            """
+        )
+
+    report = run_audit(ctx)
+
+    codes = {issue["code"] for issue in report["issues"]}
+    assert "discussion_summary_source_missing" in codes
+    assert report["blocking_count"] == 1
+
+
+def test_audit_accepts_external_discussion_summary_source_when_discussion_is_empty(tmp_path) -> None:
+    ctx = _ctx(tmp_path)
+    init_database(str(ctx.db_path))
+    with sqlite3.connect(ctx.db_path) as conn:
+        conn.execute(
+            """
+            INSERT INTO news (
+                id, title, news_url, article_content, discussion_content,
+                content_summary, discuss_summary, content_source_type,
+                content_source_url, discuss_summary_source_type,
+                discuss_summary_source_url, created_at
+            ) VALUES (
+                1, 'Story', 'https://example.com/story',
+                '正文足够长。正文足够长。正文足够长。正文足够长。正文足够长。正文足够长。正文足够长。正文足够长。正文足够长。正文足够长。正文足够长。正文足够长。正文足够长。正文足够长。正文足够长。正文足够长。正文足够长。正文足够长。正文足够长。正文足够长。正文足够长。正文足够长。正文足够长。正文足够长。',
+                '', 'summary', 'discussion summary from elsewhere',
+                'full_text', 'https://example.com/story',
+                'external_hn_snippet', 'https://news.ycombinator.com/item?id=1',
+                datetime('now', 'localtime')
+            )
+            """
+        )
+
+    report = run_audit(ctx)
+
+    assert report["blocking_count"] == 0
+    assert report["items"][0]["discuss_summary_source_type"] == "external_hn_snippet"
+
+
 def test_audit_does_not_block_long_article_with_javascript_marker(tmp_path) -> None:
     ctx = _ctx(tmp_path)
     init_database(str(ctx.db_path))

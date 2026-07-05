@@ -24,6 +24,11 @@ VALID_SOURCE_TYPES = {
     "metadata_only",
     "discussion_only",
 }
+VALID_DISCUSSION_SUMMARY_SOURCE_TYPES = {
+    "hn_discussion",
+    "external_hn_snippet",
+    "human_supplied",
+}
 
 
 def _issue(row: sqlite3.Row, code: str, message: str) -> dict[str, Any]:
@@ -103,6 +108,8 @@ def run_audit(
             "discussion_content",
             "content_summary",
             "discuss_summary",
+            "discuss_summary_source_type",
+            "discuss_summary_source_url",
             "content_source_type",
             "content_source_url",
         ]
@@ -122,6 +129,8 @@ def run_audit(
         discussion = (row["discussion_content"] or "").strip()
         summary = (row["content_summary"] or "").strip()
         discussion_summary = (row["discuss_summary"] or "").strip()
+        discussion_summary_source_type = (row["discuss_summary_source_type"] or "").strip()
+        discussion_summary_source_url = (row["discuss_summary_source_url"] or "").strip()
         source_type = (row["content_source_type"] or "").strip()
         item = {
             "id": row["id"],
@@ -131,6 +140,8 @@ def run_audit(
             "discussion_length": len(discussion),
             "summary_length": len(summary),
             "discussion_summary_length": len(discussion_summary),
+            "discuss_summary_source_type": discussion_summary_source_type or None,
+            "discuss_summary_source_url": discussion_summary_source_url or None,
             "content_source_type": source_type or None,
             "content_source_url": row["content_source_url"],
         }
@@ -155,6 +166,12 @@ def run_audit(
             issues.append(_issue(row, "summary_missing", "中文正文摘要为空"))
         if not discussion_summary:
             issues.append(_issue(row, "discussion_summary_missing", "中文讨论摘要为空"))
+        elif not discussion and not discussion_summary_source_type:
+            issues.append(_issue(row, "discussion_summary_source_missing", "讨论为空但讨论摘要缺少来源标记"))
+        elif not discussion and discussion_summary_source_type not in VALID_DISCUSSION_SUMMARY_SOURCE_TYPES:
+            issues.append(_issue(row, "discussion_summary_source_invalid", "讨论摘要来源类型无效"))
+        elif not discussion and discussion_summary_source_type != "hn_discussion" and not discussion_summary_source_url:
+            issues.append(_issue(row, "discussion_summary_source_url_missing", "外部或人工讨论摘要缺少来源 URL"))
         if contains_hallucination_markers(summary) or contains_hallucination_markers(discussion_summary):
             issues.append(_issue(row, "hallucination_marker", "摘要包含模型拒答或幻觉标记"))
         lowered = article.lower()

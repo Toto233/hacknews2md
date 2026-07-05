@@ -6,7 +6,7 @@ from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
 
 from hn2md.context import RuntimeContext
-from hn2md.stages.collect import CollectStage
+from hn2md.stages.collect import CollectStage, _fetch_discussion_with_retries
 
 
 def _ctx(tmp_path: Path) -> RuntimeContext:
@@ -183,6 +183,39 @@ def test_collect_stage_routes_github_blob_pdf_to_pdf_handler(tmp_path) -> None:
     assert row == (("PDF extracted text " * 10).strip(),)
 
 
+def test_collect_stage_routes_fediverse_urls_to_fediverse_handler(tmp_path) -> None:
+    ctx = _ctx(tmp_path)
+    _set_news_url(ctx, "https://mathstodon.xyz/@iblech/1161234567890")
+
+    with (
+        patch(
+            "src.core.handlers.fediverse_handler.get_fediverse_content",
+            new=AsyncMock(return_value=("Fediverse toot body " * 10, "full_text")),
+        ) as fediverse_handler,
+        patch("src.core.crawlers.scrapling_crawler.ScraplingCrawler") as crawler_cls,
+        patch(
+            "src.core.handlers.discussion_handler.get_discussion_content_async",
+            new=AsyncMock(return_value="HN discussion"),
+        ),
+        patch("src.core.handlers.screenshot_handler.save_page_screenshot", return_value="shot.png"),
+    ):
+        result = CollectStage().execute(ctx, object(), concurrency=1)
+
+    fediverse_handler.assert_awaited_once_with("https://mathstodon.xyz/@iblech/1161234567890")
+    crawler_cls.assert_not_called()
+    assert result["collected"] == 1
+
+    with sqlite3.connect(ctx.db_path) as conn:
+        row = conn.execute(
+            "SELECT article_content, content_source_type, content_source_url FROM news WHERE id=1"
+        ).fetchone()
+    assert row == (
+        ("Fediverse toot body " * 10).strip(),
+        "full_text",
+        "https://mathstodon.xyz/@iblech/1161234567890",
+    )
+
+
 def test_collect_stage_records_stackexchange_fallback_source_metadata(tmp_path) -> None:
     ctx = _ctx(tmp_path)
     _set_news_url(ctx, "https://physics.stackexchange.com/questions/535/example")
@@ -257,3 +290,60 @@ def test_collect_stage_records_scraper_failure_when_article_missing(tmp_path) ->
             "SELECT domain, sample_url, fail_count FROM scraper_failures WHERE domain='example.com'"
         ).fetchone()
     assert row == ("example.com", "https://example.com/story", 1)
+
+
+def test_collect_stage_records_discussion_retry_failure_in_receipt(tmp_path) -> None:
+    ctx = _ctx(tmp_path)
+    crawler = MagicMock()
+    crawler.crawl_article = AsyncMock(return_value=("Readable article body " * 10, []))
+    crawler.close = AsyncMock()
+
+    with (
+        patch("src.core.crawlers.scrapling_crawler.ScraplingCrawler", return_value=crawler),
+        patch(
+            "src.core.handlers.discussion_handler.get_discussion_content_async",
+            new=AsyncMock(return_value=""),
+        ),
+        patch("src.core.handlers.screenshot_handler.save_page_screenshot", return_value="shot.png"),
+    ):
+        result = CollectStage().execute(ctx, object(), concurrency=1)
+
+    assert result["discussion_warnings"] == [
+        {
+            "id": 1,
+            "title": "Story",
+            "url": "https://news.ycombinator.com/item?id=1",
+            "reason": "discussion_missing_after_retry",
+            "attempts": 2,
+        }
+    ]
+
+
+def test_fetch_discussion_retries_once_when_first_attempt_is_empty() -> None:
+    handler = AsyncMock(side_effect=["", "HN discussion after retry"])
+
+    with patch("src.core.handlers.discussion_handler.get_discussion_content_async", new=handler):
+        discussion, warning = __import__("asyncio").run(
+            _fetch_discussion_with_retries("https://news.ycombinator.com/item?id=1", attempts=2, delay_seconds=0)
+        )
+
+    assert discussion == "HN discussion after retry"
+    assert warning is None
+    assert handler.await_count == 2
+
+
+def test_fetch_discussion_reports_warning_after_retry_exhausted() -> None:
+    handler = AsyncMock(return_value="")
+
+    with patch("src.core.handlers.discussion_handler.get_discussion_content_async", new=handler):
+        discussion, warning = __import__("asyncio").run(
+            _fetch_discussion_with_retries("https://news.ycombinator.com/item?id=1", attempts=2, delay_seconds=0)
+        )
+
+    assert discussion == ""
+    assert warning == {
+        "url": "https://news.ycombinator.com/item?id=1",
+        "reason": "discussion_missing_after_retry",
+        "attempts": 2,
+    }
+    assert handler.await_count == 2

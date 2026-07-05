@@ -115,6 +115,18 @@ def test_collect_command_runs_collect_stage_with_concurrency(tmp_path, monkeypat
     assert kwargs["stage_kwargs"]["COLLECTING"]["concurrency"] == 5
 
 
+def test_collect_command_supports_rerun(tmp_path, monkeypatch) -> None:
+    monkeypatch.chdir(tmp_path)
+
+    with patch("publisher.cli.run_release", return_value={"completed_stages": ["COLLECTING"]}) as run:
+        result = CliRunner().invoke(main, ["collect", "hackernews", "--date", "2026-06-27", "--rerun"])
+
+    assert result.exit_code == 0, result.output
+    _, kwargs = run.call_args
+    assert [stage.value for stage in kwargs["stages"]] == ["COLLECTING"]
+    assert kwargs["rerun"] is True
+
+
 def test_hackernews_fetch_does_not_pass_producthunt_options(tmp_path, monkeypatch) -> None:
     monkeypatch.chdir(tmp_path)
 

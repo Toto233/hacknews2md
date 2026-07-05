@@ -88,3 +88,32 @@ def test_apply_rejects_unknown_id_without_partial_writes(tmp_path) -> None:
 
     with sqlite3.connect(ctx.db_path) as conn:
         assert conn.execute("SELECT title_chs FROM news WHERE id=1").fetchone()[0] is None
+
+
+def test_apply_persists_discussion_summary_source_when_columns_exist(tmp_path) -> None:
+    ctx = _ctx(tmp_path)
+    with sqlite3.connect(ctx.db_path) as conn:
+        conn.execute("ALTER TABLE news ADD COLUMN discuss_summary_source_type TEXT")
+        conn.execute("ALTER TABLE news ADD COLUMN discuss_summary_source_url TEXT")
+    plan = _plan(
+        tmp_path,
+        [
+            {
+                "id": 1,
+                "title_chs": "标题",
+                "content_summary": "摘要",
+                "discuss_summary": "讨论摘要",
+                "discuss_summary_source_type": "external_hn_snippet",
+                "discuss_summary_source_url": "https://news.ycombinator.com/item?id=1",
+            },
+            {"id": 2, "title_chs": "标题二", "content_summary": "摘要二", "discuss_summary": "讨论摘要二"},
+        ],
+    )
+
+    ApplyStage().execute(ctx, object(), plan_file=str(plan))
+
+    with sqlite3.connect(ctx.db_path) as conn:
+        row = conn.execute(
+            "SELECT discuss_summary_source_type, discuss_summary_source_url FROM news WHERE id=1"
+        ).fetchone()
+    assert row == ("external_hn_snippet", "https://news.ycombinator.com/item?id=1")

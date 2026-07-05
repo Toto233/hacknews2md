@@ -68,6 +68,9 @@ Codex 阅读 `context_file` 中英文标题、正文和 HN 讨论，为每条新
 - 约 300–400 字 `content_summary`
 - 约 200–250 字 `discuss_summary`
 - 全局四个 tags 和 `ordered_ids`
+- 如果数据库中的 `discussion_content 为空`，但你基于外部 HN 页面片段或人工补充生成了 `discuss_summary`，该条必须额外写入：
+  - `discuss_summary_source_type`：例如 `external_hn_snippet` 或 `human_supplied`
+  - `discuss_summary_source_url`：对应 HN 讨论 URL 或人工补充来源 URL
 
 保存为 `output/codex/hacknews_plan_YYYYMMDD_HHMMSS.json`：
 
@@ -80,7 +83,9 @@ Codex 阅读 `context_file` 中英文标题、正文和 HN 讨论，为每条新
       "id": 2870,
       "title_chs": "中文标题",
       "content_summary": "正文摘要",
-      "discuss_summary": "讨论摘要"
+      "discuss_summary": "讨论摘要",
+      "discuss_summary_source_type": "external_hn_snippet",
+      "discuss_summary_source_url": "https://news.ycombinator.com/item?id=2870"
     }
   ]
 }

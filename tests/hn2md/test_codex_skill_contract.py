@@ -67,3 +67,10 @@ def test_codex_skill_keyword_gate_requires_sentence_review_for_neutral_or_negati
     assert "中性或贬义" in skill
     assert "整句话" in skill
     assert "确认后再发布" in skill
+
+
+def test_codex_skill_requires_discussion_summary_source_when_discussion_is_empty() -> None:
+    skill = Path("skills/publish-hacknews-codex/SKILL.md").read_text(encoding="utf-8")
+    assert "discuss_summary_source_type" in skill
+    assert "external_hn_snippet" in skill
+    assert "discussion_content 为空" in skill

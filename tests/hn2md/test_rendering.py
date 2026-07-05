@@ -2,8 +2,11 @@
 
 import json
 import sqlite3
+from unittest.mock import patch
 from datetime import datetime
 from pathlib import Path
+
+import pytest
 
 from hn2md.constants import Stage
 from hn2md.context import RuntimeContext
@@ -111,3 +114,25 @@ def test_render_stage_uses_applying_plan_receipt(tmp_path) -> None:
 
     assert result["plan_file"] == str(plan.resolve())
     assert Path(result["markdown_file"]).exists()
+
+
+def test_render_stage_blocks_astro_when_repo_has_staged_changes(tmp_path) -> None:
+    ctx = _ctx(tmp_path)
+    plan = _plan(tmp_path)
+    astro_repo = tmp_path / "astro"
+    (astro_repo / ".git").mkdir(parents=True)
+    astro_blog_dir = astro_repo / "src" / "data" / "blog"
+    machine = type(
+        "Machine",
+        (),
+        {"job": type("Job", (), {"stages": {Stage.APPLYING.value: {"output_summary": {"plan_file": str(plan)}}}})()},
+    )()
+    settings = type("Settings", (), {"astro_blog_dir": astro_blog_dir})()
+
+    completed = type("Completed", (), {"returncode": 0, "stdout": "src/data/blog/old.md\n", "stderr": ""})()
+    with (
+        patch("src.utils.deployment.load_deployment_settings", return_value=settings),
+        patch("subprocess.run", return_value=completed),
+    ):
+        with pytest.raises(RuntimeError, match="Astro repository has staged changes"):
+            RenderStage().execute(ctx, machine)

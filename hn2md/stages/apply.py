@@ -11,6 +11,10 @@ from hn2md.stages.base import BaseStage
 from src.db.connection import get_db
 
 
+def _available_columns(conn, table: str) -> set[str]:
+    return {row[1] for row in conn.execute(f"PRAGMA table_info({table})")}
+
+
 class ApplyStage(BaseStage):
     stage_name = Stage.APPLYING
 
@@ -42,6 +46,7 @@ class ApplyStage(BaseStage):
             item_ids.append(item["id"])
 
         with get_db(str(ctx.db_path)) as conn:
+            columns = _available_columns(conn, "news")
             existing_ids = {row[0] for row in conn.execute("SELECT id FROM news").fetchall()}
             unknown_ids = sorted(set(item_ids) - existing_ids)
             if unknown_ids:
@@ -49,14 +54,28 @@ class ApplyStage(BaseStage):
 
             updated = 0
             for item in items:
-                cursor = conn.execute(
-                    "UPDATE news SET title_chs=?, content_summary=?, discuss_summary=? WHERE id=?",
-                    (
-                        item.get("title_chs"),
-                        item.get("content_summary"),
-                        item.get("discuss_summary"),
-                        item["id"],
-                    ),
-                )
+                if {"discuss_summary_source_type", "discuss_summary_source_url"} <= columns:
+                    cursor = conn.execute(
+                        "UPDATE news SET title_chs=?, content_summary=?, discuss_summary=?, "
+                        "discuss_summary_source_type=?, discuss_summary_source_url=? WHERE id=?",
+                        (
+                            item.get("title_chs"),
+                            item.get("content_summary"),
+                            item.get("discuss_summary"),
+                            item.get("discuss_summary_source_type"),
+                            item.get("discuss_summary_source_url"),
+                            item["id"],
+                        ),
+                    )
+                else:
+                    cursor = conn.execute(
+                        "UPDATE news SET title_chs=?, content_summary=?, discuss_summary=? WHERE id=?",
+                        (
+                            item.get("title_chs"),
+                            item.get("content_summary"),
+                            item.get("discuss_summary"),
+                            item["id"],
+                        ),
+                    )
                 updated += cursor.rowcount
         return {"updated": updated, "plan_file": str(plan_path)}

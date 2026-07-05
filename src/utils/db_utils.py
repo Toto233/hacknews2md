@@ -31,6 +31,8 @@ def init_database(db_path: str | None = None) -> None:
             content_source_type TEXT,
             content_source_url TEXT,
             content_source_doi TEXT,
+            discuss_summary_source_type TEXT,
+            discuss_summary_source_url TEXT,
             created_at TIMESTAMP
         )
         """)
@@ -55,6 +57,10 @@ def init_database(db_path: str | None = None) -> None:
             cursor.execute("ALTER TABLE news ADD COLUMN content_source_url TEXT")
         if "content_source_doi" not in columns:
             cursor.execute("ALTER TABLE news ADD COLUMN content_source_doi TEXT")
+        if "discuss_summary_source_type" not in columns:
+            cursor.execute("ALTER TABLE news ADD COLUMN discuss_summary_source_type TEXT")
+        if "discuss_summary_source_url" not in columns:
+            cursor.execute("ALTER TABLE news ADD COLUMN discuss_summary_source_url TEXT")
 
         # 创建过滤域名表
         cursor.execute("""
@@ -94,6 +100,8 @@ def init_database(db_path: str | None = None) -> None:
             content_source_type TEXT,
             content_source_url TEXT,
             content_source_doi TEXT,
+            discuss_summary_source_type TEXT,
+            discuss_summary_source_url TEXT,
             created_at TIMESTAMP,
             archived_at TIMESTAMP
         )
@@ -118,6 +126,10 @@ def init_database(db_path: str | None = None) -> None:
             cursor.execute("ALTER TABLE news_history ADD COLUMN content_source_url TEXT")
         if "content_source_doi" not in history_columns:
             cursor.execute("ALTER TABLE news_history ADD COLUMN content_source_doi TEXT")
+        if "discuss_summary_source_type" not in history_columns:
+            cursor.execute("ALTER TABLE news_history ADD COLUMN discuss_summary_source_type TEXT")
+        if "discuss_summary_source_url" not in history_columns:
+            cursor.execute("ALTER TABLE news_history ADD COLUMN discuss_summary_source_url TEXT")
 
         # 创建微信 access_tokens 表
         cursor.execute("""

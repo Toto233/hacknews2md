@@ -61,6 +61,13 @@ def _validate_manual_plan(plan: object) -> dict[str, Any]:
                 raise ValueError(f"hallucination marker in items[{index}].{field}")
             normalized[field] = value
 
+        for optional_field in ("discuss_summary_source_type", "discuss_summary_source_url"):
+            value = raw_item.get(optional_field)
+            if value is not None:
+                if not isinstance(value, str) or not value.strip():
+                    raise ValueError(f"items[{index}].{optional_field} must be a non-empty string when provided")
+                normalized[optional_field] = value.strip()
+
         length_errors = validate_summary_length(
             normalized["content_summary"],
             min_length=20,

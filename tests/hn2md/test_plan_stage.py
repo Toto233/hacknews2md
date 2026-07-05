@@ -73,6 +73,19 @@ def test_manual_plan_imports_without_external_llm(tmp_path) -> None:
     tags.assert_not_called()
 
 
+def test_manual_plan_preserves_discussion_summary_source_fields(tmp_path) -> None:
+    plan = _valid_plan()
+    plan["items"][0]["discuss_summary_source_type"] = "external_hn_snippet"
+    plan["items"][0]["discuss_summary_source_url"] = "https://news.ycombinator.com/item?id=1"
+    source = _write_plan(tmp_path, plan)
+
+    result = PlanStage().execute(_ctx(tmp_path), object(), manual_plan_file=str(source))
+
+    imported = json.loads(Path(result["plan_file"]).read_text(encoding="utf-8"))
+    assert imported["items"][0]["discuss_summary_source_type"] == "external_hn_snippet"
+    assert imported["items"][0]["discuss_summary_source_url"] == "https://news.ycombinator.com/item?id=1"
+
+
 @pytest.mark.parametrize(
     ("mutate", "message"),
     [

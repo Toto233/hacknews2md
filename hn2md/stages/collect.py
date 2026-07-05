@@ -24,10 +24,32 @@ def _is_youtube_url(url: str) -> bool:
     return host in {"youtube.com", "www.youtube.com", "youtu.be"}
 
 
+async def _fetch_discussion_with_retries(
+    discuss_url: str,
+    attempts: int = 2,
+    delay_seconds: float = 5.0,
+) -> tuple[str, dict[str, Any] | None]:
+    """Fetch HN discussion content with one lightweight retry on empty result."""
+    from src.core.handlers.discussion_handler import get_discussion_content_async
+
+    attempts = max(1, attempts)
+    for attempt in range(1, attempts + 1):
+        discussion = await get_discussion_content_async(discuss_url)
+        if discussion and discussion.strip():
+            return discussion.strip(), None
+        if attempt < attempts and delay_seconds > 0:
+            await asyncio.sleep(delay_seconds)
+    return "", {
+        "url": discuss_url,
+        "reason": "discussion_missing_after_retry",
+        "attempts": attempts,
+    }
+
+
 async def _collect_item(row: sqlite3.Row, semaphore: asyncio.Semaphore, db_path: str | None = None) -> dict[str, Any]:
     """Collect missing context for one news row."""
     from src.core.crawlers.scrapling_crawler import ScraplingCrawler
-    from src.core.handlers.discussion_handler import get_discussion_content_async
+    from src.core.handlers.fediverse_handler import get_fediverse_content, is_fediverse_url
     from src.core.handlers.image_handler import save_article_image
     from src.core.handlers.pdf_handler import get_pdf_content, is_pdf_url
     from src.core.handlers.screenshot_handler import save_page_screenshot
@@ -41,6 +63,7 @@ async def _collect_item(row: sqlite3.Row, semaphore: asyncio.Semaphore, db_path:
         image_paths = [path for path in (row["largest_image"], row["image_2"], row["image_3"]) if path]
         image_warnings: list[dict[str, Any]] = []
         content_warnings: list[dict[str, Any]] = []
+        discussion_warnings: list[dict[str, Any]] = []
         screenshot = row["screenshot"]
         content_source_type = row["content_source_type"] if "content_source_type" in row.keys() else None
         content_source_url = row["content_source_url"] if "content_source_url" in row.keys() else None
@@ -49,6 +72,7 @@ async def _collect_item(row: sqlite3.Row, semaphore: asyncio.Semaphore, db_path:
 
         news_url = row["news_url"] or ""
         if news_url and len(article_content) < MIN_ARTICLE_CONTENT_CHARS:
+            collected_source_type = "full_text"
             if _is_youtube_url(news_url):
                 content, saved_images, _ = await get_youtube_content(news_url, row["title"] or "")
                 image_urls = []
@@ -56,6 +80,10 @@ async def _collect_item(row: sqlite3.Row, semaphore: asyncio.Semaphore, db_path:
                     image_paths = saved_images[:3]
             elif is_pdf_url(news_url):
                 content = await get_pdf_content(news_url)
+                image_urls = []
+            elif is_fediverse_url(news_url):
+                content, fediverse_source_type = await get_fediverse_content(news_url)
+                collected_source_type = fediverse_source_type or "full_text"
                 image_urls = []
             else:
                 crawler = ScraplingCrawler()
@@ -65,7 +93,7 @@ async def _collect_item(row: sqlite3.Row, semaphore: asyncio.Semaphore, db_path:
                     await crawler.close()
             if content and len(content.strip()) >= MIN_ARTICLE_CONTENT_CHARS:
                 article_content = content.strip()
-                content_source_type = "full_text"
+                content_source_type = collected_source_type
                 content_source_url = news_url
                 content_source_doi = None
                 collected = True
@@ -140,9 +168,17 @@ async def _collect_item(row: sqlite3.Row, semaphore: asyncio.Semaphore, db_path:
 
         discuss_url = row["discuss_url"] or ""
         if discuss_url and not discussion_content:
-            discussion = await get_discussion_content_async(discuss_url)
+            discussion, warning = await _fetch_discussion_with_retries(discuss_url)
             if discussion:
-                discussion_content = discussion.strip()
+                discussion_content = discussion
+            elif warning:
+                discussion_warnings.append(
+                    {
+                        "id": row["id"],
+                        "title": row["title"] or "",
+                        **warning,
+                    }
+                )
 
         if news_url and not screenshot:
             screenshot = await asyncio.to_thread(save_page_screenshot, news_url, row["title"] or "")
@@ -163,6 +199,7 @@ async def _collect_item(row: sqlite3.Row, semaphore: asyncio.Semaphore, db_path:
             "content_source_doi": content_source_doi,
             "image_warnings": image_warnings,
             "content_warnings": content_warnings,
+            "discussion_warnings": discussion_warnings,
             "collected": collected,
         }
 
@@ -265,6 +302,11 @@ class CollectStage(BaseStage):
             for item in items
             for warning in item.get("content_warnings", [])
         ]
+        discussion_warnings = [
+            warning
+            for item in items
+            for warning in item.get("discussion_warnings", [])
+        ]
         context_path.write_text(
             json.dumps(
                 {
@@ -285,4 +327,5 @@ class CollectStage(BaseStage):
             "context_file": str(context_path),
             "image_warnings": image_warnings,
             "content_warnings": content_warnings,
+            "discussion_warnings": discussion_warnings,
         }
