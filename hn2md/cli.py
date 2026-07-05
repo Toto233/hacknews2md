@@ -480,3 +480,38 @@ import os  # noqa: E402 — needed for backup command
 def graph(ctx_obj):
     """CodeGraph integration hook."""
     _print("CodeGraph integration -- placeholder for dependency analysis.", "dim")
+
+
+@main.command()
+@click.option("--source", type=click.Choice(["codex", "claude-code"]), default=None, help="Filter by AI source")
+@click.option("--last", default=3, type=int, help="Number of recent sessions to show")
+@click.option("--summary", "summary_mode", is_flag=True, help="One-line per session (default)")
+@click.option("--full", is_flag=True, help="Full cleaned transcript")
+@click.option("--plan", is_flag=True, help="Generate improvement plan from recent sessions")
+@click.pass_context
+def sessions(ctx_obj, source, last, summary_mode, full, plan):
+    """Read and summarize AI session logs (Codex / Claude Code)."""
+    from src.utils.ai_session_reader import (
+        discover_sessions,
+        format_cleaned,
+        format_plan,
+        format_summary,
+        parse_session,
+    )
+
+    session_files = discover_sessions(source=source, limit=last)
+    if not session_files:
+        _print("No session logs found.", "yellow")
+        return
+
+    parsed = [parse_session(src, path) for src, path in session_files]
+
+    if plan:
+        print(format_plan(parsed))
+    elif full:
+        for s in parsed:
+            print(format_cleaned(s))
+            print()
+    else:
+        for s in parsed:
+            print(format_summary(s))
