@@ -82,4 +82,5 @@ def test_codex_skill_uses_github_issues_and_decisions_for_recurring_changes() ->
     assert "docs/DECISIONS.md" in skill
     assert "Supersedes" in skill
     assert "不要直接改回旧行为" in skill
-    assert ".github/ISSUE_TEMPLATE/quality-gate.yml" in skill
+    assert "Failure mode of alternative" in skill
+    assert "另一条路为什么走不通" in skill

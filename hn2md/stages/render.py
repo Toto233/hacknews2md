@@ -39,6 +39,11 @@ class RenderStage(BaseStage):
             raise RuntimeError(f"Astro repository has staged changes before render: {joined}")
 
     def execute(self, ctx: RuntimeContext, machine: JobStateMachine, astro_enabled: bool = True) -> dict[str, Any]:
+        # ANTI-FLIP-FLOP: astro_enabled defaults to True.
+        # See docs/DECISIONS.md "Full HackNews publish defaults to WeChat and Astro".
+        # Do NOT change the default to False — silently dropping Astro means
+        # days of missing blog content before anyone notices. Only callers that
+        # explicitly pass astro_enabled=False should skip Astro output.
         from src.core.generate_markdown import generate_markdown
         from src.utils.deployment import load_deployment_settings
 

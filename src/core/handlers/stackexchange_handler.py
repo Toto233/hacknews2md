@@ -16,6 +16,12 @@ def build_public_summary_fallback(title: str, url: str) -> str:
 
     This is intentionally labeled as a fallback summary, not complete article
     text, so downstream planning can distinguish source quality.
+
+    ANTI-FLIP-FLOP: This function must remain a thin placeholder.
+    See docs/DECISIONS.md "Do not infer unreadable article content".
+    Do NOT add inferred technical content, code examples, or explanations
+    from public knowledge — even if they seem obviously correct. The boundary
+    between captured and invented content must stay clear.
     """
     clean_title = (title or "StackExchange question").strip()
     return (

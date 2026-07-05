@@ -213,6 +213,12 @@ class PublishStage(BaseStage):
             violations = check_illegal_content(md_content, keywords)
 
             if violations:
+                # ANTI-FLIP-FLOP: warn-only, not hard block.
+                # See docs/DECISIONS.md "Keyword hits are warnings".
+                # Do NOT revert to hard-block — it blocks positive-context hits
+                # (e.g. "AI revolution in healthcare"). Do NOT remove the gate —
+                # it catches genuinely problematic content. The warning-with-
+                # context middle ground is the only stable state.
                 keyword_warnings = _keyword_locations(md_content, violations, md_file)
                 logger.warning(
                     "[PUBLISH] Keyword warning(s) detected; publish is not blocked: %s",
