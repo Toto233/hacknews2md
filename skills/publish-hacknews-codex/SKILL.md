@@ -170,7 +170,40 @@ $imgDir = Join-Path (Get-Location) ("output\images\" + (Get-Date -Format yyyyMMd
 Start-Process explorer.exe -ArgumentList $imgDir
 ```
 
-## 8. Post-run improvement discipline
+## 8. Post-publish audit（自动）
+
+`publisher release` 发布阶段完成后会自动运行 post-publish audit，结果写入 `output/audit/publish_audit_{YYYYMMDD}.jsonl`（append-only JSONL）。
+
+检查项：
+
+| check | 阻断级别 | 说明 |
+|-------|---------|------|
+| `wechat_media_id` | blocking | 非 dry-run 时 media_id 不能为空 |
+| `image_preflight` | warning/info | 跳过或压缩的图片数量 |
+| `keyword_review` | warning | 关键词命中是否被人工确认 |
+| `completeness` | warning | DB story 数 vs 渲染 markdown 中的 story 数 |
+| `astro_output` | warning | Astro 输出文件是否存在 |
+
+也可以手动触发：
+
+```powershell
+publisher audit hackernews --post-publish              # 人类可读摘要
+publisher audit hackernews --post-publish --json       # JSON 输出
+```
+
+JSONL 文件可直接 grep 追踪趋势：
+
+```powershell
+# 查看所有 blocking issues
+Get-Content output/audit/publish_audit_*.jsonl | Select-String '"blocking"'
+
+# 按 check 类型统计
+Get-Content output/audit/publish_audit_*.jsonl |
+  ForEach-Object { ($_ | ConvertFrom-Json).check } |
+  Group-Object | Sort-Object Count -Descending
+```
+
+## 9. Post-run improvement discipline
 
 发布后如果用户询问”有什么可以优化”，先区分：
 

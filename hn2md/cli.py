@@ -328,6 +328,24 @@ def release(ctx_obj, date_str, from_stage, skip_cover, skip_publish, dry_run, ba
                 _print("[DRY-RUN] Pipeline complete — nothing published", "yellow")
             else:
                 _print("Release complete!", "green")
+
+            # --- Auto post-publish audit ---
+            if Stage.PUBLISHING in stages_to_run:
+                from hn2md.stages.post_publish_audit import run_post_publish_audit
+
+                _print("Running post-publish audit...", "dim")
+                audit_result = run_post_publish_audit(
+                    job_dir=rt.job_dir,
+                    db_path=rt.db_path,
+                    output_dir=rt.output_dir,
+                    dry_run=dry_run,
+                )
+                blocking = audit_result["blocking_count"]
+                total = len(audit_result["findings"])
+                if blocking:
+                    _print(f"Post-publish audit: {blocking} blocking issue(s) in {total} finding(s) — check {audit_result['jsonl_path']}", "red")
+                else:
+                    _print(f"Post-publish audit: {total} finding(s), 0 blocking — OK", "green")
     except LockError as e:
         _print(f"Lock error: {e}", "red")
         sys.exit(1)
@@ -375,14 +393,38 @@ def status(ctx_obj):
 @click.option("--llm", default=None)
 @click.option("--json", "json_output", is_flag=True, help="Output audit result as JSON")
 @click.option("--approve", is_flag=True, help="Approve the current daily blocking audit snapshot")
+@click.option("--post-publish", is_flag=True, help="Run post-publish output verification (JSONL trail)")
 @click.pass_context
-def audit(ctx_obj, interactive, llm, json_output, approve):
+def audit(ctx_obj, interactive, llm, json_output, approve, post_publish):
     """Quality checks on database content."""
     from hn2md.stages.audit import run_audit
 
     rt = ctx_obj.obj["ctx"]
     date_str = datetime.now().strftime("%Y%m%d")
     machine, _ = JobStateMachine.load_or_create(rt.job_dir, date_str)
+
+    # --- Post-publish audit (JSONL trail) ---
+    if post_publish:
+        from hn2md.stages.post_publish_audit import run_post_publish_audit
+
+        result = run_post_publish_audit(
+            job_dir=rt.job_dir,
+            db_path=rt.db_path,
+            output_dir=rt.output_dir,
+            dry_run=False,
+        )
+        if json_output:
+            print(json_mod.dumps(result, ensure_ascii=False, indent=2))
+        else:
+            _print(f"Post-publish audit: {len(result['findings'])} finding(s), {result['blocking_count']} blocking")
+            for f in result["findings"]:
+                sev = f["severity"]
+                color = "red" if sev == "blocking" else "yellow" if sev == "warning" else "dim"
+                _print(f"  [{sev}] {f['check']}: {f['message']}", color)
+            _print(f"JSONL trail: {result['jsonl_path']}", "dim")
+        sys.exit(0 if result["blocking_count"] == 0 else 1)
+
+    # --- Pre-publish audit (existing) ---
     if approve:
         machine.approve_audit()
         _print("Audit exemption recorded for today's job", "yellow")
