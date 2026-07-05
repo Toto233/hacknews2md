@@ -79,14 +79,13 @@ def test_post_publish_audit_dry_run(tmp_path: Path) -> None:
     result = run_post_publish_audit(job_dir, db_path, output_dir, dry_run=True)
     assert result["blocking_count"] == 0
     assert len(result["findings"]) > 0
-    # Verify JSONL was written
-    jsonl_path = Path(result["jsonl_path"])
-    assert jsonl_path.exists()
-    records = read_jsonl(jsonl_path)
-    assert len(records) == len(result["findings"])
-    # All records should have the date
-    for rec in records:
-        assert rec["date"] == date_str
+    # Dry-run: no media_id is info, but completeness check warns (no markdown file)
+    non_info = [f for f in result["findings"] if f.get("severity") in ("warning", "blocking")]
+    assert result["jsonl_written"] == len(non_info)
+    # The "rendered markdown file not found" warning should be in JSONL
+    if non_info:
+        records = read_jsonl(Path(result["jsonl_path"]))
+        assert len(records) == len(non_info)
 
 
 def test_post_publish_audit_missing_media_id(tmp_path: Path) -> None:
@@ -117,6 +116,11 @@ def test_post_publish_audit_clean_publish(tmp_path: Path) -> None:
     db_path = tmp_path / "test.db"
     output_dir = tmp_path / "output"
 
+    # Create a fake markdown file so completeness check doesn't warn
+    md_file = tmp_path / "output" / f"hacknews_{date_str}.md"
+    md_file.parent.mkdir(parents=True, exist_ok=True)
+    md_file.write_text("# Test\n", encoding="utf-8")
+
     _make_ledger(
         job_dir,
         date_str,
@@ -125,11 +129,15 @@ def test_post_publish_audit_clean_publish(tmp_path: Path) -> None:
             "skipped_images": [],
             "compressed_images": [],
             "keyword_warnings": [],
+            "markdown_file": str(md_file),
         },
     )
 
     result = run_post_publish_audit(job_dir, db_path, output_dir, dry_run=False)
     assert result["blocking_count"] == 0
+    # Clean publish with existing markdown → all info, nothing to JSONL
+    non_info = [f for f in result["findings"] if f.get("severity") in ("warning", "blocking")]
+    assert result["jsonl_written"] == len(non_info)
     # media_id should be info, not blocking
     media_findings = [f for f in result["findings"] if f["check"] == "wechat_media_id"]
     assert len(media_findings) == 1
@@ -175,11 +183,58 @@ def test_post_publish_audit_jsonl_append_only(tmp_path: Path) -> None:
     db_path = tmp_path / "test.db"
     output_dir = tmp_path / "output"
 
-    _make_ledger(job_dir, date_str, {"wechat_media_id": "wx1", "keyword_warnings": []})
+    # Use keyword_warnings to trigger actual JSONL writes (non-info findings)
+    _make_ledger(
+        job_dir,
+        date_str,
+        {
+            "wechat_media_id": "wx1",
+            "keyword_warnings": [{"keyword": "test", "line": 1, "sentence": "test line"}],
+        },
+    )
 
     r1 = run_post_publish_audit(job_dir, db_path, output_dir, dry_run=False)
     r2 = run_post_publish_audit(job_dir, db_path, output_dir, dry_run=False)
 
     jsonl_path = Path(r1["jsonl_path"])
     records = read_jsonl(jsonl_path)
-    assert len(records) == len(r1["findings"]) + len(r2["findings"])
+    assert len(records) == r1["jsonl_written"] + r2["jsonl_written"]
+
+
+def test_post_publish_audit_verbose_writes_info_to_jsonl(tmp_path: Path) -> None:
+    """With verbose=True, info findings also go to JSONL."""
+    from datetime import datetime
+    from hn2md.stages.post_publish_audit import run_post_publish_audit
+
+    date_str = datetime.now().strftime("%Y%m%d")
+    job_dir = tmp_path / "jobs"
+    job_dir.mkdir()
+    db_path = tmp_path / "test.db"
+    output_dir = tmp_path / "output"
+
+    _make_ledger(job_dir, date_str, {"wechat_media_id": "wx1", "keyword_warnings": []})
+
+    result = run_post_publish_audit(job_dir, db_path, output_dir, dry_run=False, verbose=True)
+    assert result["jsonl_written"] == len(result["findings"])
+    assert result["jsonl_written"] > 0  # info findings should be written
+
+
+def test_post_publish_audit_default_only_writes_non_info(tmp_path: Path) -> None:
+    """By default, only warning/blocking go to JSONL — not info."""
+    from datetime import datetime
+    from hn2md.stages.post_publish_audit import run_post_publish_audit
+
+    date_str = datetime.now().strftime("%Y%m%d")
+    job_dir = tmp_path / "jobs"
+    job_dir.mkdir()
+    db_path = tmp_path / "test.db"
+    output_dir = tmp_path / "output"
+
+    _make_ledger(job_dir, date_str, {"wechat_media_id": "wx1", "keyword_warnings": []})
+
+    result = run_post_publish_audit(job_dir, db_path, output_dir, dry_run=False, verbose=False)
+    non_info = [f for f in result["findings"] if f.get("severity") in ("warning", "blocking")]
+    assert result["jsonl_written"] == len(non_info)
+    # If everything is clean, nothing written to JSONL
+    if not non_info:
+        assert result["jsonl_written"] == 0

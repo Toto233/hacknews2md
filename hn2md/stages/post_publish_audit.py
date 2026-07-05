@@ -188,8 +188,13 @@ def run_post_publish_audit(
     db_path: Path,
     output_dir: Path,
     dry_run: bool = False,
+    verbose: bool = False,
 ) -> dict[str, Any]:
     """Run post-publish audit, append findings to JSONL, return summary.
+
+    By default only writes ``warning`` and ``blocking`` findings to the JSONL
+    file so that the trail stays compact and grep-friendly.  Pass
+    ``verbose=True`` to also persist ``info`` findings.
 
     Returns::
 
@@ -217,13 +222,16 @@ def run_post_publish_audit(
     all_findings.extend(_check_story_completeness(db_path, receipt, date_str))
     all_findings.extend(_check_astro_output(receipt, date_str))
 
-    # Append to JSONL
+    # Append to JSONL — only warning/blocking unless verbose
     for finding in all_findings:
-        append_jsonl(jsonl_path, finding)
+        if verbose or finding.get("severity") in ("warning", "blocking"):
+            append_jsonl(jsonl_path, finding)
 
     blocking_count = sum(1 for f in all_findings if f.get("severity") == "blocking")
+    written = sum(1 for f in all_findings if verbose or f.get("severity") in ("warning", "blocking"))
     return {
         "findings": all_findings,
         "blocking_count": blocking_count,
+        "jsonl_written": written,
         "jsonl_path": str(jsonl_path),
     }

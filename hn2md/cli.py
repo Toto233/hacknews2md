@@ -394,8 +394,9 @@ def status(ctx_obj):
 @click.option("--json", "json_output", is_flag=True, help="Output audit result as JSON")
 @click.option("--approve", is_flag=True, help="Approve the current daily blocking audit snapshot")
 @click.option("--post-publish", is_flag=True, help="Run post-publish output verification (JSONL trail)")
+@click.option("--verbose", is_flag=True, help="Include info-level findings in JSONL output")
 @click.pass_context
-def audit(ctx_obj, interactive, llm, json_output, approve, post_publish):
+def audit(ctx_obj, interactive, llm, json_output, approve, post_publish, verbose):
     """Quality checks on database content."""
     from hn2md.stages.audit import run_audit
 
@@ -412,6 +413,7 @@ def audit(ctx_obj, interactive, llm, json_output, approve, post_publish):
             db_path=rt.db_path,
             output_dir=rt.output_dir,
             dry_run=False,
+            verbose=verbose,
         )
         if json_output:
             print(json_mod.dumps(result, ensure_ascii=False, indent=2))
