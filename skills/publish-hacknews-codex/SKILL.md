@@ -170,6 +170,22 @@ $imgDir = Join-Path (Get-Location) ("output\images\" + (Get-Date -Format yyyyMMd
 Start-Process explorer.exe -ArgumentList $imgDir
 ```
 
+## 8. Post-run improvement discipline
+
+发布后如果用户询问“有什么可以优化”，先区分：
+
+- 当天一次性内容问题：记录在运行反馈即可，不新建 GitHub Issue。
+- 重复出现的抓取失败、门禁误判、状态机问题、发布目标遗漏、skill 流程缺陷：应建议或创建 GitHub Issue，并在后续代码/skill 修改中引用该 issue。
+- 涉及发布策略、质量门禁、fallback 语义或默认目标的行为变化：修改前必须先检查 `docs/DECISIONS.md`。
+- 如果要改变既有决策，不要直接改回旧行为；应在 `docs/DECISIONS.md` 追加新的 decision，并写明 `Supersedes`。
+
+可用模板：
+
+- `.github/ISSUE_TEMPLATE/publish-bug.yml`：发布失败或可复现异常。
+- `.github/ISSUE_TEMPLATE/quality-gate.yml`：审计、关键词、Astro、内容来源等门禁调整。
+- `.github/ISSUE_TEMPLATE/workflow-improvement.yml`：日常流程自动化或人工步骤优化。
+- `.github/ISSUE_TEMPLATE/decision.yml`：需要长期保留的规则或架构决策。
+
 ## Safety
 
 - 可灵活单独重跑 `publisher collect`、`publisher render`、`publisher cover` 或 `publisher publish`。

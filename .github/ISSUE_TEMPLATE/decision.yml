@@ -1,0 +1,32 @@
+name: Decision record
+description: Record a durable project decision or supersede an older one
+title: "[decision] "
+labels: ["decision"]
+body:
+  - type: textarea
+    id: context
+    attributes:
+      label: Context
+      description: Why this decision is needed now.
+    validations:
+      required: true
+  - type: textarea
+    id: decision
+    attributes:
+      label: Decision
+      description: The rule or direction to preserve.
+    validations:
+      required: true
+  - type: input
+    id: supersedes
+    attributes:
+      label: Supersedes
+      description: Existing docs/DECISIONS.md entry this replaces, or N/A.
+      placeholder: "N/A"
+  - type: checkboxes
+    id: checklist
+    attributes:
+      label: Checklist
+      options:
+        - label: docs/DECISIONS.md will be updated or the issue explains why no durable decision is needed.
+          required: true

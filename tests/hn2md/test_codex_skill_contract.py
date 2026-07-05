@@ -74,3 +74,12 @@ def test_codex_skill_requires_discussion_summary_source_when_discussion_is_empty
     assert "discuss_summary_source_type" in skill
     assert "external_hn_snippet" in skill
     assert "discussion_content 为空" in skill
+
+
+def test_codex_skill_uses_github_issues_and_decisions_for_recurring_changes() -> None:
+    skill = Path("skills/publish-hacknews-codex/SKILL.md").read_text(encoding="utf-8")
+    assert "GitHub Issue" in skill
+    assert "docs/DECISIONS.md" in skill
+    assert "Supersedes" in skill
+    assert "不要直接改回旧行为" in skill
+    assert ".github/ISSUE_TEMPLATE/quality-gate.yml" in skill

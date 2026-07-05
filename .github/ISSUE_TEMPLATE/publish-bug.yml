@@ -1,0 +1,46 @@
+name: Publish bug
+description: Track a recurring or actionable publishing failure
+title: "[publish] "
+labels: ["bug", "publish"]
+body:
+  - type: dropdown
+    id: source
+    attributes:
+      label: Source
+      options:
+        - hackernews
+        - producthunt
+        - publisher
+        - other
+    validations:
+      required: true
+  - type: input
+    id: run_date
+    attributes:
+      label: Run date
+      description: Local publish date, if applicable.
+      placeholder: "2026-07-05"
+  - type: textarea
+    id: observed
+    attributes:
+      label: Observed behavior
+      description: What failed, including IDs, URLs, stage names, and receipt snippets when useful.
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected behavior
+      description: What the publisher or skill should have done instead.
+    validations:
+      required: true
+  - type: textarea
+    id: recurrence
+    attributes:
+      label: Recurrence evidence
+      description: Prior runs, failure counts, domains, or logs showing this is not a one-off content correction.
+  - type: textarea
+    id: proposed
+    attributes:
+      label: Proposed fix
+      description: Suggested code, skill, gate, or documentation change.

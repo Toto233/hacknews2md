@@ -52,7 +52,8 @@ ENV/
 AGENT.md
 CLAUDE.md
 QWEN.md
-docs/
+docs/*
+!/docs/DECISIONS.md
 /docs/superpowers/
 
 # ─── Codex / Skills ─────────────────────────────────────────────

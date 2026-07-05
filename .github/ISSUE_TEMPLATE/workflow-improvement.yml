@@ -1,0 +1,31 @@
+name: Workflow improvement
+description: Improve daily or monthly publishing flow without changing article content policy
+title: "[workflow] "
+labels: ["workflow", "publish"]
+body:
+  - type: textarea
+    id: friction
+    attributes:
+      label: Friction
+      description: What manual step, repeated check, or unclear status should be improved?
+    validations:
+      required: true
+  - type: textarea
+    id: current_flow
+    attributes:
+      label: Current flow
+      description: Commands, skill steps, or user actions involved today.
+    validations:
+      required: true
+  - type: textarea
+    id: target_flow
+    attributes:
+      label: Target flow
+      description: The desired stable workflow.
+    validations:
+      required: true
+  - type: textarea
+    id: notes
+    attributes:
+      label: Notes
+      description: Related decisions, risks, or tests to add.

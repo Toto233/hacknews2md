@@ -1,0 +1,35 @@
+name: Quality gate change
+description: Propose or adjust a publish gate, audit rule, or warning policy
+title: "[gate] "
+labels: ["quality-gate", "publish"]
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem
+      description: Which gate is too weak, too strict, or missing?
+    validations:
+      required: true
+  - type: textarea
+    id: examples
+    attributes:
+      label: Examples
+      description: Include concrete article IDs, warning sentences, receipts, or command output.
+    validations:
+      required: true
+  - type: dropdown
+    id: severity
+    attributes:
+      label: Desired behavior
+      options:
+        - Hard block
+        - Warning with human confirmation
+        - Warning only
+        - Logging only
+    validations:
+      required: true
+  - type: textarea
+    id: decision
+    attributes:
+      label: Decision impact
+      description: Note whether docs/DECISIONS.md needs a new or superseding entry.
