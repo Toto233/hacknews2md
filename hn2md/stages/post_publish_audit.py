@@ -1,14 +1,14 @@
-"""Post-publish audit — verifies publish output after the pipeline completes.
+"""Post-run review — inspects publish output after the pipeline completes.
 
 Runs after DONE and appends findings to a daily JSONL file at
-``output/audit/publish_audit_{YYYYMMDD}.jsonl``.
+``output/reviews/run_review_{YYYYMMDD}.jsonl``.
 
 Each finding is one JSONL line with::
 
     {
         "ts": "...",
         "date": "20260705",
-        "check": "image_preflight | keyword_review | completeness | ...",
+        "check": "stage_retry | stage_warning | image_preflight | keyword_review | completeness | ...",
         "severity": "blocking | warning | info",
         "message": "...",
         "details": { ... }
@@ -116,7 +116,7 @@ def _check_keyword_warnings(
 def _check_story_completeness(
     db_path: Path, receipt: dict[str, Any], date_str: str
 ) -> list[dict[str, Any]]:
-    """Compare DB story count vs markdown rendered story count."""
+    """Compare DB stories vs rendered markdown using source/discussion URLs."""
     findings: list[dict[str, Any]] = []
     md_file = receipt.get("markdown_file")
     if not md_file or not Path(md_file).exists():
@@ -127,56 +127,122 @@ def _check_story_completeness(
         with get_db(str(db_path)) as conn:
             conn.row_factory = sqlite3.Row
             rows = conn.execute(
-                "SELECT id, title FROM news WHERE date(created_at)=date('now','localtime') ORDER BY id"
+                """
+                SELECT id, title, news_url, discuss_url
+                FROM news
+                WHERE date(created_at)=date('now','localtime')
+                ORDER BY id
+                """
             ).fetchall()
-        db_ids = {row["id"] for row in rows}
     except Exception:
         findings.append(_finding(date_str, "completeness", "warning", "Could not query DB for story count"))
         return findings
 
     md_text = Path(md_file).read_text(encoding="utf-8")
-    md_lines = md_text.splitlines()
-    # Count HN links in markdown as a proxy for rendered stories
-    rendered_ids = set()
-    for line in md_lines:
-        for sid in db_ids:
-            if f"news.ycombinator.com/item?id={sid}" in line or f"/{sid}" in line:
-                rendered_ids.add(sid)
+    missing: list[dict[str, Any]] = []
+    for row in rows:
+        candidates = [
+            str(row["news_url"] or "").strip(),
+            str(row["discuss_url"] or "").strip(),
+        ]
+        if not any(candidate and candidate in md_text for candidate in candidates):
+            missing.append({"id": row["id"], "title": row["title"]})
 
-    missing = db_ids - rendered_ids
     if missing:
         findings.append(
             _finding(
                 date_str,
                 "completeness",
                 "warning",
-                f"{len(missing)} story ID(s) not found in rendered markdown",
-                {"missing_ids": sorted(missing)},
+                f"{len(missing)} story URL(s) not found in rendered markdown",
+                {"missing": missing},
             )
         )
     else:
-        findings.append(_finding(date_str, "completeness", "info", f"All {len(db_ids)} stories present in markdown"))
+        findings.append(_finding(date_str, "completeness", "info", f"All {len(rows)} stories present in markdown"))
     return findings
 
 
 def _check_astro_output(
-    receipt: dict[str, Any], date_str: str
+    publish_receipt: dict[str, Any], render_receipt: dict[str, Any], date_str: str
 ) -> list[dict[str, Any]]:
     findings: list[dict[str, Any]] = []
-    # The render receipt is in a different stage — check if astro_file was produced
-    # This check works from the publish receipt which carries markdown_file path
-    md_file = receipt.get("markdown_file")
+    astro_file = render_receipt.get("astro_file")
+    if astro_file:
+        if Path(astro_file).exists():
+            findings.append(_finding(date_str, "astro_output", "info", f"Astro output found: {astro_file}"))
+        else:
+            findings.append(_finding(date_str, "astro_output", "warning", f"Astro output missing on disk: {astro_file}"))
+        return findings
+
+    # Fallback for older ledgers that only carried the markdown path.
+    md_file = publish_receipt.get("markdown_file")
     if md_file:
-        # Infer astro_file from markdown_file sibling pattern
         md_path = Path(md_file)
-        # The render stage outputs astro_file separately; check if it exists
-        # Convention: same directory, similar name with _astro or in astro output
         parent = md_path.parent
         astro_candidates = list(parent.glob("*astro*")) + list(parent.glob("*recap*"))
         if astro_candidates:
             findings.append(_finding(date_str, "astro_output", "info", f"Astro output found: {[str(p) for p in astro_candidates[:3]]}"))
         else:
             findings.append(_finding(date_str, "astro_output", "warning", "No Astro output file found alongside markdown"))
+    return findings
+
+
+def _check_stage_receipts(stages: dict[str, Any], date_str: str) -> list[dict[str, Any]]:
+    """Surface run-time problems from stage receipts for post-run follow-up."""
+    findings: list[dict[str, Any]] = []
+    warning_keys = ("image_warnings", "content_warnings", "discussion_warnings")
+
+    for stage_name, receipt in stages.items():
+        if not isinstance(receipt, dict):
+            continue
+
+        if receipt.get("success") is False:
+            findings.append(
+                _finding(
+                    date_str,
+                    "stage_failure",
+                    "blocking",
+                    f"{stage_name} failed during the run",
+                    {"stage": stage_name, "error": receipt.get("error")},
+                )
+            )
+
+        retry_count = int(receipt.get("retry_count") or 0)
+        if retry_count > 0:
+            findings.append(
+                _finding(
+                    date_str,
+                    "stage_retry",
+                    "warning",
+                    f"{stage_name} retried {retry_count} time(s)",
+                    {"stage": stage_name, "retry_count": retry_count, "error": receipt.get("error")},
+                )
+            )
+
+        output_summary = receipt.get("output_summary") or {}
+        if not isinstance(output_summary, dict):
+            continue
+
+        for key in warning_keys:
+            warnings = output_summary.get(key) or []
+            if not warnings:
+                continue
+            severity = "warning"
+            if key in ("content_warnings", "discussion_warnings") and any(
+                isinstance(item, dict) and item.get("action_required") for item in warnings
+            ):
+                severity = "blocking"
+            findings.append(
+                _finding(
+                    date_str,
+                    "stage_warning",
+                    severity,
+                    f"{stage_name} reported {len(warnings)} {key}",
+                    {"stage": stage_name, "warning_key": key, "warnings": warnings[:20]},
+                )
+            )
+
     return findings
 
 
@@ -201,26 +267,31 @@ def run_post_publish_audit(
         {"findings": [...], "blocking_count": int, "jsonl_path": str}
     """
     date_str = datetime.now().strftime("%Y%m%d")
-    jsonl_path = output_dir / "audit" / f"publish_audit_{date_str}.jsonl"
+    jsonl_path = output_dir / "reviews" / f"run_review_{date_str}.jsonl"
 
     # Load the publish receipt from today's job ledger
     ledger_path = job_dir / f"publish_job_{date_str}.json"
+    stages: dict[str, Any] = {}
     receipt: dict[str, Any] = {}
+    render_receipt: dict[str, Any] = {}
     if ledger_path.exists():
         try:
             ledger = json.loads(ledger_path.read_text(encoding="utf-8"))
-            receipt = ledger.get("stages", {}).get("PUBLISHING", {}).get("output_summary", {})
+            stages = ledger.get("stages", {})
+            receipt = stages.get("PUBLISHING", {}).get("output_summary", {})
+            render_receipt = stages.get("RENDERING", {}).get("output_summary", {})
         except (OSError, json.JSONDecodeError):
             pass
 
     all_findings: list[dict[str, Any]] = []
 
     # Run all checks
+    all_findings.extend(_check_stage_receipts(stages, date_str))
     all_findings.extend(_check_wechat_media_id(receipt, date_str, dry_run))
     all_findings.extend(_check_image_preflight(receipt, date_str))
     all_findings.extend(_check_keyword_warnings(receipt, date_str))
     all_findings.extend(_check_story_completeness(db_path, receipt, date_str))
-    all_findings.extend(_check_astro_output(receipt, date_str))
+    all_findings.extend(_check_astro_output(receipt, render_receipt, date_str))
 
     # Append to JSONL — only warning/blocking unless verbose
     for finding in all_findings:

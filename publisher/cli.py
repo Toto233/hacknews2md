@@ -157,7 +157,12 @@ def collect(source_name: str, date_value: str | None, concurrency: int, rerun: b
 @click.option("--date", "date_value", default=None, help="YYYY-MM-DD or YYYYMMDD")
 @click.option("--json", "json_output", is_flag=True, help="Print structured audit JSON")
 @click.option("--approve", is_flag=True, help="Approve the current blocking audit snapshot")
-def audit(source_name: str, date_value: str | None, json_output: bool, approve: bool) -> None:
+def audit(
+    source_name: str,
+    date_value: str | None,
+    json_output: bool,
+    approve: bool,
+) -> None:
     source, ctx = _load_date_source(source_name, date_value)
     machine, _ = JobStateMachine.load_or_create(ctx.job_dir, ctx.period)
     if approve:
@@ -178,6 +183,34 @@ def audit(source_name: str, date_value: str | None, json_output: bool, approve: 
         click.echo(f"Audit complete for {source.name}/{ctx.period}: {report['blocking_count']} blocking issue(s)")
     if report.get("blocking_count", 0):
         raise click.ClickException("audit blocked: review report and rerun with --approve if acceptable")
+
+
+@main.command("review-run")
+@click.argument("source_name")
+@click.option("--date", "date_value", default=None, help="YYYY-MM-DD or YYYYMMDD")
+@click.option("--json", "json_output", is_flag=True, help="Print structured run review JSON")
+@click.option("--verbose", is_flag=True, help="Include info-level findings in JSONL output")
+def review_run(source_name: str, date_value: str | None, json_output: bool, verbose: bool) -> None:
+    """Review a completed publish run for follow-up fixes and optimization opportunities."""
+    _source, ctx = _load_date_source(source_name, date_value)
+    from hn2md.stages.post_publish_audit import run_post_publish_audit
+
+    result = run_post_publish_audit(
+        job_dir=ctx.job_dir,
+        db_path=ctx.db_path,
+        output_dir=ctx.output_dir,
+        dry_run=False,
+        verbose=verbose,
+    )
+    if json_output:
+        click.echo(json_mod.dumps(result, ensure_ascii=False, indent=2))
+    else:
+        click.echo(f"Run review: {len(result['findings'])} finding(s), {result['blocking_count']} blocking")
+        for finding in result["findings"]:
+            click.echo(f"  [{finding['severity']}] {finding['check']}: {finding['message']}")
+        click.echo(f"JSONL trail: {result['jsonl_path']}")
+    if result.get("blocking_count", 0):
+        raise click.ClickException("run review found blocking follow-up item(s)")
 
 
 @main.command("review-missing")

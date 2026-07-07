@@ -84,3 +84,19 @@ def test_codex_skill_uses_github_issues_and_decisions_for_recurring_changes() ->
     assert "不要直接改回旧行为" in skill
     assert "Failure mode of alternative" in skill
     assert "另一条路为什么走不通" in skill
+
+
+def test_codex_skill_handles_existing_astro_staged_changes_without_deleting_files() -> None:
+    skill = Path("skills/publish-hacknews-codex/SKILL.md").read_text(encoding="utf-8")
+    assert "Astro 仓库已有 staged changes" in skill
+    assert "不要删除文件，不要 reset" in skill
+    assert "restore --staged" in skill
+    assert "无关未跟踪文件" in skill
+
+
+def test_codex_skill_post_run_review_uses_dedicated_publisher_command() -> None:
+    skill = Path("skills/publish-hacknews-codex/SKILL.md").read_text(encoding="utf-8")
+    assert "publisher review-run hackernews" in skill
+    assert "publisher review-run hackernews --json" in skill
+    assert "output/reviews/run_review_" in skill
+    assert "publisher audit hackernews --post-publish" not in skill

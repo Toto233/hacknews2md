@@ -159,6 +159,20 @@ git -C "<astro仓库>" commit -m "YYYYMMDD: 更新 HackNews 博客"
 git -C "<astro仓库>" push
 ```
 
+如果 `publisher render hackernews` 因 Astro 仓库已有 staged changes 被门禁阻止：
+
+- 先运行 `git -C "<astro仓库>" status --short`，把 staged 文件和未跟踪文件列给用户。
+- 不要删除文件，不要 reset。
+- 如果用户确认旧文章也要一起提交，先只取消暂存旧文章，让 render 门禁通过：
+
+```powershell
+git -C "<astro仓库>" restore --staged -- "<旧文章相对路径>"
+publisher render hackernews
+```
+
+- render 成功后，只 stage 用户确认的旧文章和本次新生成文章，再 commit/push。
+- 无关未跟踪文件（例如 `SPEC.md`）不处理、不提交。
+
 不要运行 Astro build，不处理仓库中的其他脏文件。重发微信草稿或用户明确要求只发微信时，必须使用 `--target wechat`，避免生成重复 Astro 文章。
 
 ## 7. Open images
@@ -170,9 +184,11 @@ $imgDir = Join-Path (Get-Location) ("output\images\" + (Get-Date -Format yyyyMMd
 Start-Process explorer.exe -ArgumentList $imgDir
 ```
 
-## 8. Post-publish audit（自动）
+## 8. Post-run review（自动）
 
-`publisher release` 发布阶段完成后会自动运行 post-publish audit，结果写入 `output/audit/publish_audit_{YYYYMMDD}.jsonl`（append-only JSONL）。
+发布完成后需要做 post-run review：读取当天 ledger、stage receipt 和发布产物，检查是否有需要后续优化的可复现问题。结果写入 `output/reviews/run_review_{YYYYMMDD}.jsonl`（append-only JSONL）。
+
+review-run 不是普通内容审计；它用于复盘当天发布过程。一旦发现 `stage_retry`、`stage_failure`、`stage_warning`、图片异常、关键词、完整性或 Astro 输出问题，必须追根溯源：说明发生在哪个 stage、直接原因是什么、是否是一过性环境问题、是否需要改 skill 工作方法、是否需要改代码或新增 issue。
 
 检查项：
 
@@ -183,22 +199,24 @@ Start-Process explorer.exe -ArgumentList $imgDir
 | `keyword_review` | warning | 关键词命中是否被人工确认 |
 | `completeness` | warning | DB story 数 vs 渲染 markdown 中的 story 数 |
 | `astro_output` | warning | Astro 输出文件是否存在 |
+| `stage_retry` | warning | 某个 stage 出现过重试，需要说明原因 |
+| `stage_warning` | warning/blocking | stage receipt 中记录的图片、正文或讨论 warning |
 
 也可以手动触发：
 
 ```powershell
-publisher audit hackernews --post-publish              # 人类可读摘要
-publisher audit hackernews --post-publish --json       # JSON 输出
+publisher review-run hackernews              # 人类可读摘要
+publisher review-run hackernews --json       # JSON 输出
 ```
 
 JSONL 文件可直接 grep 追踪趋势：
 
 ```powershell
 # 查看所有 blocking issues
-Get-Content output/audit/publish_audit_*.jsonl | Select-String '"blocking"'
+Get-Content output/reviews/run_review_*.jsonl | Select-String '"blocking"'
 
 # 按 check 类型统计
-Get-Content output/audit/publish_audit_*.jsonl |
+Get-Content output/reviews/run_review_*.jsonl |
   ForEach-Object { ($_ | ConvertFrom-Json).check } |
   Group-Object | Sort-Object Count -Descending
 ```

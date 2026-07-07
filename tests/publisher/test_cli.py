@@ -244,6 +244,47 @@ def test_audit_command_records_structured_report(tmp_path, monkeypatch) -> None:
     assert machine.job.audit_report == report
 
 
+def test_audit_command_does_not_expose_post_publish_review() -> None:
+    result = CliRunner().invoke(main, ["audit", "--help"])
+
+    assert result.exit_code == 0, result.output
+    assert "--post-publish" not in result.output
+    assert "review-run" not in result.output
+
+
+def test_review_run_command_runs_post_publish_review(tmp_path, monkeypatch) -> None:
+    monkeypatch.chdir(tmp_path)
+    audit_result = {
+        "findings": [{"severity": "info", "check": "wechat_media_id", "message": "ok"}],
+        "blocking_count": 0,
+        "jsonl_written": 1,
+        "jsonl_path": str(tmp_path / "output" / "reviews" / "run_review_20260627.jsonl"),
+    }
+
+    with patch("hn2md.stages.post_publish_audit.run_post_publish_audit", return_value=audit_result) as run:
+        result = CliRunner().invoke(
+            main,
+            [
+                "review-run",
+                "hackernews",
+                "--date",
+                "2026-06-27",
+                "--json",
+                "--verbose",
+            ],
+        )
+
+    assert result.exit_code == 0, result.output
+    assert '"blocking_count": 0' in result.output
+    run.assert_called_once()
+    _, kwargs = run.call_args
+    assert kwargs["job_dir"] == tmp_path / "output" / "jobs"
+    assert kwargs["db_path"] == tmp_path / "data" / "hacknews.db"
+    assert kwargs["output_dir"] == tmp_path / "output"
+    assert kwargs["dry_run"] is False
+    assert kwargs["verbose"] is True
+
+
 def test_audit_approve_command_records_exemption(tmp_path, monkeypatch) -> None:
     monkeypatch.chdir(tmp_path)
     machine, _ = JobStateMachine.load_or_create(tmp_path / "output" / "jobs", "20260627")

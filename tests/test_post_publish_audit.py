@@ -47,12 +47,16 @@ def test_append_jsonl_preserves_provided_ts(tmp_path: Path) -> None:
 # ── Post-publish audit integration ──────────────────────────────────
 
 
-def _make_ledger(job_dir: Path, date_str: str, publish_receipt: dict) -> None:
+def _make_ledger(job_dir: Path, date_str: str, publish_receipt: dict, render_receipt: dict | None = None) -> None:
     """Write a minimal job ledger with a PUBLISHING receipt."""
     ledger = {
         "date": date_str,
         "status": "DONE",
         "stages": {
+            "RENDERING": {
+                "output_summary": render_receipt or {},
+                "success": True,
+            },
             "PUBLISHING": {
                 "output_summary": publish_receipt,
                 "success": True,
@@ -238,3 +242,169 @@ def test_post_publish_audit_default_only_writes_non_info(tmp_path: Path) -> None
     # If everything is clean, nothing written to JSONL
     if not non_info:
         assert result["jsonl_written"] == 0
+
+
+def test_post_publish_audit_completeness_matches_story_urls(tmp_path: Path) -> None:
+    from datetime import datetime
+
+    from hn2md.stages.post_publish_audit import run_post_publish_audit
+    from src.utils.db_utils import init_database
+
+    date_str = datetime.now().strftime("%Y%m%d")
+    job_dir = tmp_path / "jobs"
+    job_dir.mkdir()
+    db_path = tmp_path / "test.db"
+    output_dir = tmp_path / "output"
+    init_database(str(db_path))
+
+    created_at = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    with __import__("sqlite3").connect(db_path) as conn:
+        conn.execute(
+            """
+            INSERT INTO news (id, title, news_url, discuss_url, created_at)
+            VALUES (?, ?, ?, ?, ?)
+            """,
+            (
+                1001,
+                "Story",
+                "https://example.com/story",
+                "https://news.ycombinator.com/item?id=999999",
+                created_at,
+            ),
+        )
+
+    md_file = output_dir / "hacknews.md"
+    md_file.parent.mkdir(parents=True, exist_ok=True)
+    md_file.write_text(
+        "原文链接：https://example.com/story\n论坛讨论链接：https://news.ycombinator.com/item?id=999999\n",
+        encoding="utf-8",
+    )
+    _make_ledger(job_dir, date_str, {"wechat_media_id": "wx1", "markdown_file": str(md_file)})
+
+    result = run_post_publish_audit(job_dir, db_path, output_dir, dry_run=False)
+
+    completeness = [f for f in result["findings"] if f["check"] == "completeness"]
+    assert completeness == [
+        {
+            "date": date_str,
+            "check": "completeness",
+            "severity": "info",
+            "message": "All 1 stories present in markdown",
+        }
+    ]
+
+
+def test_post_publish_audit_uses_render_receipt_for_astro_output(tmp_path: Path) -> None:
+    from datetime import datetime
+
+    from hn2md.stages.post_publish_audit import run_post_publish_audit
+
+    date_str = datetime.now().strftime("%Y%m%d")
+    job_dir = tmp_path / "jobs"
+    job_dir.mkdir()
+    db_path = tmp_path / "test.db"
+    output_dir = tmp_path / "output"
+    md_file = output_dir / "hacknews.md"
+    astro_file = tmp_path / "astro" / "src" / "data" / "blog" / "hacknews.md"
+    md_file.parent.mkdir(parents=True, exist_ok=True)
+    astro_file.parent.mkdir(parents=True, exist_ok=True)
+    md_file.write_text("# md\n", encoding="utf-8")
+    astro_file.write_text("# astro\n", encoding="utf-8")
+    _make_ledger(
+        job_dir,
+        date_str,
+        {"wechat_media_id": "wx1", "markdown_file": str(md_file)},
+        {"astro_file": str(astro_file)},
+    )
+
+    result = run_post_publish_audit(job_dir, db_path, output_dir, dry_run=False)
+
+    astro = [f for f in result["findings"] if f["check"] == "astro_output"]
+    assert astro == [
+        {
+            "date": date_str,
+            "check": "astro_output",
+            "severity": "info",
+            "message": f"Astro output found: {astro_file}",
+        }
+    ]
+
+
+def test_post_publish_review_surfaces_stage_retries_and_warnings(tmp_path: Path) -> None:
+    from datetime import datetime
+
+    from hn2md.stages.post_publish_audit import run_post_publish_audit
+
+    date_str = datetime.now().strftime("%Y%m%d")
+    job_dir = tmp_path / "jobs"
+    job_dir.mkdir()
+    db_path = tmp_path / "test.db"
+    output_dir = tmp_path / "output"
+    md_file = output_dir / "hacknews.md"
+    md_file.parent.mkdir(parents=True, exist_ok=True)
+    md_file.write_text("# Test\n", encoding="utf-8")
+    ledger = {
+        "date": date_str,
+        "status": "DONE",
+        "stages": {
+            "COLLECTING": {
+                "success": True,
+                "retry_count": 0,
+                "output_summary": {
+                    "image_warnings": [
+                        {"id": 1, "title": "Story", "image_url": "https://example.com/a.svg", "reason": "save_failed"}
+                    ],
+                    "content_warnings": [],
+                    "discussion_warnings": [],
+                },
+            },
+            "RENDERING": {
+                "success": True,
+                "retry_count": 1,
+                "error": None,
+                "output_summary": {},
+            },
+            "PUBLISHING": {
+                "success": True,
+                "retry_count": 0,
+                "output_summary": {"wechat_media_id": "wx1", "markdown_file": str(md_file)},
+            },
+        },
+    }
+    (job_dir / f"publish_job_{date_str}.json").write_text(json.dumps(ledger), encoding="utf-8")
+
+    result = run_post_publish_audit(job_dir, db_path, output_dir, dry_run=False)
+
+    stage_retry = [f for f in result["findings"] if f["check"] == "stage_retry"]
+    stage_warning = [f for f in result["findings"] if f["check"] == "stage_warning"]
+    for finding in stage_retry + stage_warning:
+        finding.pop("ts", None)
+    assert stage_retry == [
+        {
+            "date": date_str,
+            "check": "stage_retry",
+            "severity": "warning",
+            "message": "RENDERING retried 1 time(s)",
+            "details": {"stage": "RENDERING", "retry_count": 1, "error": None},
+        }
+    ]
+    assert stage_warning == [
+        {
+            "date": date_str,
+            "check": "stage_warning",
+            "severity": "warning",
+            "message": "COLLECTING reported 1 image_warnings",
+            "details": {
+                "stage": "COLLECTING",
+                "warning_key": "image_warnings",
+                "warnings": [
+                    {
+                        "id": 1,
+                        "title": "Story",
+                        "image_url": "https://example.com/a.svg",
+                        "reason": "save_failed",
+                    }
+                ],
+            },
+        }
+    ]

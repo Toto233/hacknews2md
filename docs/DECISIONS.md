@@ -75,3 +75,23 @@ This file records durable project decisions that should not be changed back and 
 - Decision: When the user says content has been completed, rerun collection or refresh the collect receipt/context before auditing or generating the plan.
 - Failure mode of alternative: Skipping the refresh means the audit still sees the old empty content and flags it again. The user gets frustrated repeating "I already fixed it." The stale receipt also carries incorrect `source_type` metadata, which propagates downstream.
 - Consequences: The skill should not continue from stale `context_file` or `receipt` data after human completion.
+
+### 2026-07-06 — Keep Astro staging clean before render, then commit approved old posts together
+
+- Status: Accepted
+- Issue: N/A
+- Supersedes: N/A
+- Context: A daily publish was blocked because the Astro repository already had an older staged blog post. The user wanted that older post committed together with today's post.
+- Decision: `publisher render` must keep blocking when the Astro repository has pre-existing staged changes. If the user confirms an older generated post should be included, first unstage it without deleting it, render today's post, then stage only the user-approved older post and today's generated post for the Astro commit.
+- Failure mode of alternative: Leaving the old file staged lets render/publish mix unknown state into today's release. Deleting or resetting the file risks losing a user-approved generated article. Blindly staging everything can commit unrelated files such as specs or local notes.
+- Consequences: The skill must report Astro staged/untracked files, use non-destructive unstaging to pass the render gate, and only commit the explicit file set confirmed by the user.
+
+### 2026-07-06 — Separate pre-publish audit from post-run review
+
+- Status: Accepted
+- Issue: N/A
+- Supersedes: N/A
+- Context: The generic `publisher audit` command was briefly extended with post-publish checks, mixing content readiness gates with daily run review.
+- Decision: `publisher audit` is reserved for pre-publish content quality gates. Post-publish log and receipt inspection uses a separate command named `publisher review-run`.
+- Failure mode of alternative: Reusing `audit` for every check makes the CLI ambiguous. Agents and humans cannot tell whether a command blocks content generation, validates external publishing side effects, or reviews logs for future optimization. That ambiguity encourages unrelated methods to accumulate under `publisher audit`.
+- Consequences: Skills and runbooks should call `publisher audit` before planning, and `publisher review-run` after publishing when looking for follow-up improvements.
