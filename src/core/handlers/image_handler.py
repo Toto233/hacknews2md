@@ -11,6 +11,7 @@ import os
 import re
 import time
 from datetime import datetime
+from urllib.parse import unquote, urlparse
 
 import certifi
 import requests
@@ -19,6 +20,19 @@ from src.security.url_validator import SecurityError, validate_url
 from src.utils.http_constants import IMAGE_HEADERS
 
 logger = logging.getLogger(__name__)
+
+LOW_SIGNAL_IMAGE_TOKENS = (
+    "logo",
+    "badge",
+    "shield",
+    "icon",
+    "sprite",
+    "avatar",
+    "cc-by",
+    "creative-commons",
+    "app-store",
+    "googleplay",
+)
 
 
 def get_extension_from_content_type(content_type: str) -> str | None:
@@ -37,6 +51,32 @@ def get_extension_from_content_type(content_type: str) -> str | None:
     elif "svg" in content_type:
         return ".svg"
     return None
+
+
+def is_low_signal_article_image_url(image_url: str) -> bool:
+    """Return True for likely decorative image assets such as logos and badges."""
+    try:
+        parsed = urlparse(image_url)
+    except Exception:
+        return False
+
+    host = parsed.netloc.lower()
+    path = unquote(parsed.path).lower()
+    query = unquote(parsed.query).lower()
+    haystack = f"{host}/{path}?{query}"
+    decoded_hex_parts = []
+    for part in path.strip("/").split("/"):
+        if len(part) >= 16 and re.fullmatch(r"[0-9a-f]+", part):
+            try:
+                decoded_hex_parts.append(bytes.fromhex(part).decode("utf-8", errors="ignore").lower())
+            except ValueError:
+                pass
+    if decoded_hex_parts:
+        haystack = f"{haystack} {' '.join(decoded_hex_parts)}"
+
+    if any(token in haystack for token in LOW_SIGNAL_IMAGE_TOKENS):
+        return True
+    return path.endswith(".svg") and "/assets/" in path
 
 
 def save_article_image(

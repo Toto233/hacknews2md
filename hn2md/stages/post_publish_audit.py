@@ -188,7 +188,54 @@ def _check_astro_output(
     return findings
 
 
-def _check_stage_receipts(stages: dict[str, Any], date_str: str) -> list[dict[str, Any]]:
+def _content_warning_resolved_by_db(db_path: Path | None, warning: dict[str, Any]) -> bool:
+    """Return True when a stale collect content warning has been fixed in DB."""
+    if db_path is None:
+        return False
+
+    warning_id = warning.get("id")
+    warning_url = str(warning.get("url") or "").strip()
+    if warning_id is None and not warning_url:
+        return False
+
+    try:
+        with get_db(str(db_path)) as conn:
+            conn.row_factory = sqlite3.Row
+            row = conn.execute(
+                """
+                SELECT article_content, content_source_url
+                FROM news
+                WHERE (? IS NOT NULL AND id=?)
+                   OR (? != '' AND news_url=?)
+                ORDER BY id
+                LIMIT 1
+                """,
+                (warning_id, warning_id, warning_url, warning_url),
+            ).fetchone()
+    except Exception:
+        return False
+
+    if row is None:
+        return False
+    return bool(str(row["article_content"] or "").strip() and str(row["content_source_url"] or "").strip())
+
+
+def _split_resolved_content_warnings(
+    db_path: Path | None, warnings: list[Any]
+) -> tuple[list[Any], list[dict[str, Any]]]:
+    active: list[Any] = []
+    resolved: list[dict[str, Any]] = []
+    for warning in warnings:
+        if isinstance(warning, dict) and _content_warning_resolved_by_db(db_path, warning):
+            resolved.append(warning)
+        else:
+            active.append(warning)
+    return active, resolved
+
+
+def _check_stage_receipts(
+    stages: dict[str, Any], date_str: str, db_path: Path | None = None
+) -> list[dict[str, Any]]:
     """Surface run-time problems from stage receipts for post-run follow-up."""
     findings: list[dict[str, Any]] = []
     warning_keys = ("image_warnings", "content_warnings", "discussion_warnings")
@@ -228,6 +275,27 @@ def _check_stage_receipts(stages: dict[str, Any], date_str: str) -> list[dict[st
             warnings = output_summary.get(key) or []
             if not warnings:
                 continue
+
+            if key == "content_warnings":
+                warnings, resolved_warnings = _split_resolved_content_warnings(db_path, warnings)
+                if resolved_warnings:
+                    findings.append(
+                        _finding(
+                            date_str,
+                            "stage_warning",
+                            "info",
+                            f"{stage_name} reported {len(resolved_warnings)} resolved {key}",
+                            {
+                                "stage": stage_name,
+                                "warning_key": key,
+                                "resolved_by_db": True,
+                                "warnings": resolved_warnings[:20],
+                            },
+                        )
+                    )
+                if not warnings:
+                    continue
+
             severity = "warning"
             if key in ("content_warnings", "discussion_warnings") and any(
                 isinstance(item, dict) and item.get("action_required") for item in warnings
@@ -286,7 +354,7 @@ def run_post_publish_audit(
     all_findings: list[dict[str, Any]] = []
 
     # Run all checks
-    all_findings.extend(_check_stage_receipts(stages, date_str))
+    all_findings.extend(_check_stage_receipts(stages, date_str, db_path))
     all_findings.extend(_check_wechat_media_id(receipt, date_str, dry_run))
     all_findings.extend(_check_image_preflight(receipt, date_str))
     all_findings.extend(_check_keyword_warnings(receipt, date_str))

@@ -50,7 +50,8 @@ async def _collect_item(row: sqlite3.Row, semaphore: asyncio.Semaphore, db_path:
     """Collect missing context for one news row."""
     from src.core.crawlers.scrapling_crawler import ScraplingCrawler
     from src.core.handlers.fediverse_handler import get_fediverse_content, is_fediverse_url
-    from src.core.handlers.image_handler import save_article_image
+    from src.core.handlers.hunyuan_handler import get_hunyuan_blog_content, is_hunyuan_blog_url
+    from src.core.handlers.image_handler import is_low_signal_article_image_url, save_article_image
     from src.core.handlers.pdf_handler import get_pdf_content, is_pdf_url
     from src.core.handlers.screenshot_handler import save_page_screenshot
     from src.core.handlers.stackexchange_handler import build_public_summary_fallback, is_stackexchange_url
@@ -84,6 +85,9 @@ async def _collect_item(row: sqlite3.Row, semaphore: asyncio.Semaphore, db_path:
             elif is_fediverse_url(news_url):
                 content, fediverse_source_type = await get_fediverse_content(news_url)
                 collected_source_type = fediverse_source_type or "full_text"
+                image_urls = []
+            elif is_hunyuan_blog_url(news_url):
+                content = await get_hunyuan_blog_content(news_url)
                 image_urls = []
             else:
                 crawler = ScraplingCrawler()
@@ -132,7 +136,12 @@ async def _collect_item(row: sqlite3.Row, semaphore: asyncio.Semaphore, db_path:
                 )
             if image_urls:
                 saved_images = []
-                for index, image_url in enumerate(image_urls[:3], 1):
+                candidate_image_urls = [
+                    image_url
+                    for image_url in image_urls
+                    if not is_low_signal_article_image_url(image_url)
+                ]
+                for index, image_url in enumerate(candidate_image_urls[:3], 1):
                     try:
                         saved = await asyncio.to_thread(
                             save_article_image,

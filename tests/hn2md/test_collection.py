@@ -127,6 +127,44 @@ def test_collect_stage_reports_image_save_failures_in_receipt_summary(tmp_path) 
     ]
 
 
+def test_collect_stage_filters_decorative_images_before_saving(tmp_path) -> None:
+    ctx = _ctx(tmp_path)
+    crawler = MagicMock()
+    crawler.crawl_article = AsyncMock(
+        return_value=(
+            "Readable article body " * 10,
+            [
+                "https://assets.apnews.com/ap-logo-176-by-208.svg",
+                "https://img.shields.io/badge/Postgres-18.3-brightgreen",
+                "https://static.example.com/getitongoogleplay-badge-web-color-english.png",
+                "https://cdn.example.com/article-photo.jpg",
+            ],
+        )
+    )
+    crawler.close = AsyncMock()
+
+    with (
+        patch("src.core.crawlers.scrapling_crawler.ScraplingCrawler", return_value=crawler),
+        patch(
+            "src.core.handlers.discussion_handler.get_discussion_content_async",
+            new=AsyncMock(return_value="HN discussion"),
+        ),
+        patch("src.core.handlers.image_handler.save_article_image", return_value="article.jpg") as save_image,
+        patch("src.core.handlers.screenshot_handler.save_page_screenshot", return_value="shot.png"),
+    ):
+        result = CollectStage().execute(ctx, object(), concurrency=1)
+
+    assert result["image_warnings"] == []
+    save_image.assert_called_once_with(
+        "https://cdn.example.com/article-photo.jpg",
+        "https://example.com/story",
+        "Story_1",
+    )
+    with sqlite3.connect(ctx.db_path) as conn:
+        row = conn.execute("SELECT largest_image, image_2, image_3 FROM news WHERE id=1").fetchone()
+    assert row == ("article.jpg", None, None)
+
+
 def test_collect_stage_routes_youtube_urls_to_youtube_handler(tmp_path) -> None:
     ctx = _ctx(tmp_path)
     _set_news_url(ctx, "https://www.youtube.com/watch?v=abc123")
@@ -213,6 +251,40 @@ def test_collect_stage_routes_fediverse_urls_to_fediverse_handler(tmp_path) -> N
         ("Fediverse toot body " * 10).strip(),
         "full_text",
         "https://mathstodon.xyz/@iblech/1161234567890",
+    )
+
+
+def test_collect_stage_routes_hunyuan_urls_to_hunyuan_handler(tmp_path) -> None:
+    ctx = _ctx(tmp_path)
+    _set_news_url(ctx, "https://hy.tencent.com/research/hy3")
+
+    with (
+        patch(
+            "src.core.handlers.hunyuan_handler.get_hunyuan_blog_content",
+            new=AsyncMock(return_value="Hunyuan article body " * 10),
+        ) as hunyuan_handler,
+        patch("src.core.crawlers.scrapling_crawler.ScraplingCrawler") as crawler_cls,
+        patch(
+            "src.core.handlers.discussion_handler.get_discussion_content_async",
+            new=AsyncMock(return_value="HN discussion"),
+        ),
+        patch("src.core.handlers.screenshot_handler.save_page_screenshot", return_value="shot.png"),
+    ):
+        result = CollectStage().execute(ctx, object(), concurrency=1)
+
+    hunyuan_handler.assert_awaited_once_with("https://hy.tencent.com/research/hy3")
+    crawler_cls.assert_not_called()
+    assert result["collected"] == 1
+    assert result["content_warnings"] == []
+
+    with sqlite3.connect(ctx.db_path) as conn:
+        row = conn.execute(
+            "SELECT article_content, content_source_type, content_source_url FROM news WHERE id=1"
+        ).fetchone()
+    assert row == (
+        ("Hunyuan article body " * 10).strip(),
+        "full_text",
+        "https://hy.tencent.com/research/hy3",
     )
 
 

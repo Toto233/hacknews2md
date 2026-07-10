@@ -408,3 +408,94 @@ def test_post_publish_review_surfaces_stage_retries_and_warnings(tmp_path: Path)
             },
         }
     ]
+
+
+def test_post_publish_review_downgrades_resolved_content_warning(tmp_path: Path) -> None:
+    import sqlite3
+    from datetime import datetime
+
+    from hn2md.stages.post_publish_audit import run_post_publish_audit
+    from src.utils.db_utils import init_database
+
+    date_str = datetime.now().strftime("%Y%m%d")
+    job_dir = tmp_path / "jobs"
+    job_dir.mkdir()
+    db_path = tmp_path / "test.db"
+    output_dir = tmp_path / "output"
+    init_database(str(db_path))
+
+    with sqlite3.connect(db_path) as conn:
+        conn.execute(
+            """
+            INSERT INTO news (
+                id, title, news_url, article_content, content_source_url, created_at
+            ) VALUES (?, ?, ?, ?, ?, datetime('now', 'localtime'))
+            """,
+            (
+                42,
+                "Introducing Hy3",
+                "https://hy.tencent.com/research/hy3",
+                "Resolved Hy3 article body. " * 160,
+                "https://hy.tencent.com/research/hy3",
+            ),
+        )
+
+    md_file = output_dir / "hacknews.md"
+    md_file.parent.mkdir(parents=True, exist_ok=True)
+    md_file.write_text("https://hy.tencent.com/research/hy3\n", encoding="utf-8")
+    ledger = {
+        "date": date_str,
+        "status": "DONE",
+        "stages": {
+            "COLLECTING": {
+                "success": True,
+                "retry_count": 0,
+                "output_summary": {
+                    "content_warnings": [
+                        {
+                            "id": 42,
+                            "url": "https://hy.tencent.com/research/hy3",
+                            "domain": "hy.tencent.com",
+                            "reason": "article_content_missing",
+                            "action_required": "human_input_or_handler",
+                            "failure_count": 1,
+                        }
+                    ]
+                },
+            },
+            "PUBLISHING": {
+                "success": True,
+                "retry_count": 0,
+                "output_summary": {"wechat_media_id": "wx1", "markdown_file": str(md_file)},
+            },
+        },
+    }
+    (job_dir / f"publish_job_{date_str}.json").write_text(json.dumps(ledger), encoding="utf-8")
+
+    result = run_post_publish_audit(job_dir, db_path, output_dir, dry_run=False)
+
+    stage_warnings = [f for f in result["findings"] if f["check"] == "stage_warning"]
+    assert stage_warnings == [
+        {
+            "date": date_str,
+            "check": "stage_warning",
+            "severity": "info",
+            "message": "COLLECTING reported 1 resolved content_warnings",
+            "details": {
+                "stage": "COLLECTING",
+                "warning_key": "content_warnings",
+                "resolved_by_db": True,
+                "warnings": [
+                    {
+                        "id": 42,
+                        "url": "https://hy.tencent.com/research/hy3",
+                        "domain": "hy.tencent.com",
+                        "reason": "article_content_missing",
+                        "action_required": "human_input_or_handler",
+                        "failure_count": 1,
+                    }
+                ],
+            },
+        }
+    ]
+    assert result["blocking_count"] == 0

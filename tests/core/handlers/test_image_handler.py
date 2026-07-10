@@ -2,7 +2,7 @@
 
 import pytest
 
-from src.core.handlers.image_handler import get_extension_from_content_type
+from src.core.handlers.image_handler import get_extension_from_content_type, is_low_signal_article_image_url
 
 
 # ---------------------------------------------------------------------------
@@ -74,3 +74,23 @@ class TestGetExtensionFromContentType:
 
     def test_application_octet_stream(self):
         assert get_extension_from_content_type("application/octet-stream") is None
+
+
+class TestIsLowSignalArticleImageUrl:
+    """Tests for decorative article image URL filtering."""
+
+    def test_filters_logos_and_badges(self):
+        assert is_low_signal_article_image_url("https://assets.apnews.com/ap-logo-176-by-208.svg")
+        assert is_low_signal_article_image_url("https://img.shields.io/badge/Postgres-18.3-brightgreen")
+        assert is_low_signal_article_image_url(
+            "https://static.example.com/getitongoogleplay-badge-web-color-english.png"
+        )
+        assert is_low_signal_article_image_url(
+            "https://camo.githubusercontent.com/d10e57/68747470733a2f2f696d672e736869656c64732e696f2f62616467652f506f7374677265732d31382e332d333336373931"
+        )
+        assert is_low_signal_article_image_url("https://github.com/project/repo/raw/main/assets/mark.svg")
+
+    def test_keeps_likely_article_images(self):
+        assert not is_low_signal_article_image_url("https://cdn.example.com/photos/article-photo.jpg")
+        assert not is_low_signal_article_image_url("https://example.com/images/chart-of-results.png")
+        assert not is_low_signal_article_image_url("https://example.com/diagrams/architecture.svg")
