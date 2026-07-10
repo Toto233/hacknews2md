@@ -1,0 +1,4 @@
+interface:
+  display_name: "微信公众号头图 ImageGen"
+  short_description: "用 Image 生成公众号 21:9 大字封面头图。"
+  default_prompt: "用 $wechat-cover-imagegen 给今天的稿子生成公众号 21:9 头图，只要大字和图。"

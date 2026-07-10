@@ -58,6 +58,11 @@ docs/*
 
 # ─── Codex / Skills ─────────────────────────────────────────────
 skills/
+!.codex/
+!.codex/skills/
+.codex/skills/*
+!.codex/skills/wechat-cover-imagegen/
+!.codex/skills/wechat-cover-imagegen/**
 .claude/
 .codegraph/
 .mimocode/
