@@ -138,7 +138,7 @@ class PublishJob:
 
         # Try primary file
         try:
-            data = json.loads(path.read_text(encoding="utf-8"))
+            data = json.loads(path.read_text(encoding="utf-8-sig"))
             return cls(**data)
         except (json.JSONDecodeError, KeyError, TypeError) as primary_error:
             logger.warning(f"Primary state file corrupted: {primary_error} | path={path}")
@@ -146,7 +146,7 @@ class PublishJob:
             # Try backup file
             if bak_path.exists():
                 try:
-                    data = json.loads(bak_path.read_text(encoding="utf-8"))
+                    data = json.loads(bak_path.read_text(encoding="utf-8-sig"))
                     logger.info(f"Recovered state from backup: {bak_path}")
                     return cls(**data)
                 except (json.JSONDecodeError, KeyError, TypeError) as backup_error:

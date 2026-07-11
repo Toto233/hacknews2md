@@ -32,13 +32,20 @@ class BaseStage(ABC):
         """Run the stage. Return output summary dict. Raise on failure."""
         ...
 
-    def run(self, ctx: RuntimeContext, machine: JobStateMachine, **kwargs) -> StageReceipt:
+    def run(
+        self,
+        ctx: RuntimeContext,
+        machine: JobStateMachine,
+        *,
+        force_retry: bool = False,
+        **kwargs,
+    ) -> StageReceipt:
         """Wrapper with retry, transition, timing, receipt, and error recording.
 
         Retries transient failures up to self.max_retries times with
         exponential backoff + jitter.
         """
-        if not machine.can_retry(self.stage_name):
+        if not force_retry and not machine.can_retry(self.stage_name):
             raise RuntimeError(f"Retry budget exhausted for {self.stage_name.value}")
 
         if Stage(machine.job.status) != self.stage_name:

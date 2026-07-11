@@ -59,6 +59,17 @@ class TestPublishJob:
         assert loaded.status == sample_job.status
         assert loaded.created_at == sample_job.created_at
 
+    def test_from_json_accepts_utf8_bom(self, sample_job, job_dir):
+        """PowerShell-written UTF-8 BOM JSON should still load."""
+        job_dir.mkdir(parents=True)
+        path = job_dir / "test_job.json"
+        path.write_text(json.dumps(sample_job.__dict__), encoding="utf-8-sig")
+
+        loaded = PublishJob.from_json(path)
+
+        assert loaded.date == sample_job.date
+        assert loaded.status == sample_job.status
+
     def test_to_json_creates_directory(self, sample_job, job_dir):
         """to_json should create parent directories."""
         path = job_dir / "subdir" / "test_job.json"

@@ -499,3 +499,79 @@ def test_post_publish_review_downgrades_resolved_content_warning(tmp_path: Path)
         }
     ]
     assert result["blocking_count"] == 0
+
+
+def test_post_publish_review_flags_environment_compatibility_errors(tmp_path: Path) -> None:
+    from datetime import datetime
+
+    from hn2md.stages.post_publish_audit import run_post_publish_audit
+
+    date_str = datetime.now().strftime("%Y%m%d")
+    job_dir = tmp_path / "jobs"
+    job_dir.mkdir()
+    db_path = tmp_path / "test.db"
+    output_dir = tmp_path / "output"
+    md_file = output_dir / "hacknews.md"
+    md_file.parent.mkdir(parents=True, exist_ok=True)
+    md_file.write_text("# Test\n", encoding="utf-8")
+    ledger = {
+        "date": date_str,
+        "status": "DONE",
+        "stages": {
+            "PUBLISHING": {
+                "success": False,
+                "retry_count": 2,
+                "error": "'gbk' codec can't encode character '\\u2717' in position 2",
+                "output_summary": {"wechat_media_id": "wx1", "markdown_file": str(md_file)},
+            },
+            "REPAIRING": {
+                "success": False,
+                "retry_count": 0,
+                "error": "Unexpected UTF-8 BOM (decode using utf-8-sig): line 1 column 1",
+                "output_summary": {},
+            },
+            "CHECKING": {
+                "success": False,
+                "retry_count": 0,
+                "error": "Missing file specification after redirection operator. The '<' operator is reserved for future use.",
+                "output_summary": {},
+            },
+        },
+    }
+    (job_dir / f"publish_job_{date_str}.json").write_text(json.dumps(ledger), encoding="utf-8")
+
+    result = run_post_publish_audit(job_dir, db_path, output_dir, dry_run=False)
+
+    findings = [f for f in result["findings"] if f["check"] == "environment_compatibility"]
+    for finding in findings:
+        finding.pop("ts", None)
+    assert findings == [
+        {
+            "date": date_str,
+            "check": "environment_compatibility",
+            "severity": "warning",
+            "message": "Detected 3 shell/encoding compatibility issue(s)",
+            "details": {
+                "issues": [
+                    {
+                        "stage": "PUBLISHING",
+                        "kind": "windows_console_encoding",
+                        "hint": "Set PYTHONIOENCODING=utf-8 and PYTHONUTF8=1 before running Python publisher commands.",
+                        "error": "'gbk' codec can't encode character '\\u2717' in position 2",
+                    },
+                    {
+                        "stage": "REPAIRING",
+                        "kind": "utf8_bom",
+                        "hint": "Write JSON with UTF-8 without BOM; avoid Windows PowerShell 5.1 Set-Content -Encoding utf8 for machine JSON.",
+                        "error": "Unexpected UTF-8 BOM (decode using utf-8-sig): line 1 column 1",
+                    },
+                    {
+                        "stage": "CHECKING",
+                        "kind": "bash_syntax_in_powershell",
+                        "hint": "Use PowerShell here-strings or python -c instead of bash heredoc/redirection syntax.",
+                        "error": "Missing file specification after redirection operator. The '<' operator is reserved for future use.",
+                    },
+                ]
+            },
+        }
+    ]

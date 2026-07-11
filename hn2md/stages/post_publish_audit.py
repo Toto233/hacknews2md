@@ -8,7 +8,7 @@ Each finding is one JSONL line with::
     {
         "ts": "...",
         "date": "20260705",
-        "check": "stage_retry | stage_warning | image_preflight | keyword_review | completeness | ...",
+        "check": "stage_retry | stage_warning | image_preflight | keyword_review | environment_compatibility | completeness | ...",
         "severity": "blocking | warning | info",
         "message": "...",
         "details": { ... }
@@ -233,6 +233,71 @@ def _split_resolved_content_warnings(
     return active, resolved
 
 
+_ENVIRONMENT_COMPATIBILITY_PATTERNS: tuple[tuple[str, tuple[str, ...], str], ...] = (
+    (
+        "windows_console_encoding",
+        ("'gbk' codec can't encode", '"gbk" codec can\'t encode'),
+        "Set PYTHONIOENCODING=utf-8 and PYTHONUTF8=1 before running Python publisher commands.",
+    ),
+    (
+        "utf8_bom",
+        ("Unexpected UTF-8 BOM", "decode using utf-8-sig"),
+        "Write JSON with UTF-8 without BOM; avoid Windows PowerShell 5.1 Set-Content -Encoding utf8 for machine JSON.",
+    ),
+    (
+        "bash_syntax_in_powershell",
+        (
+            "Missing file specification after redirection operator",
+            "The '<' operator is reserved for future use",
+        ),
+        "Use PowerShell here-strings or python -c instead of bash heredoc/redirection syntax.",
+    ),
+)
+
+
+def _classify_environment_compatibility_error(error: str) -> tuple[str, str] | None:
+    for kind, needles, hint in _ENVIRONMENT_COMPATIBILITY_PATTERNS:
+        if any(needle in error for needle in needles):
+            return kind, hint
+    return None
+
+
+def _check_environment_compatibility(
+    stages: dict[str, Any], date_str: str
+) -> list[dict[str, Any]]:
+    issues: list[dict[str, str]] = []
+    for stage_name, receipt in stages.items():
+        if not isinstance(receipt, dict):
+            continue
+        error = str(receipt.get("error") or "").strip()
+        if not error:
+            continue
+        classified = _classify_environment_compatibility_error(error)
+        if classified is None:
+            continue
+        kind, hint = classified
+        issues.append(
+            {
+                "stage": stage_name,
+                "kind": kind,
+                "hint": hint,
+                "error": error,
+            }
+        )
+
+    if not issues:
+        return []
+    return [
+        _finding(
+            date_str,
+            "environment_compatibility",
+            "warning",
+            f"Detected {len(issues)} shell/encoding compatibility issue(s)",
+            {"issues": issues},
+        )
+    ]
+
+
 def _check_stage_receipts(
     stages: dict[str, Any], date_str: str, db_path: Path | None = None
 ) -> list[dict[str, Any]]:
@@ -355,6 +420,7 @@ def run_post_publish_audit(
 
     # Run all checks
     all_findings.extend(_check_stage_receipts(stages, date_str, db_path))
+    all_findings.extend(_check_environment_compatibility(stages, date_str))
     all_findings.extend(_check_wechat_media_id(receipt, date_str, dry_run))
     all_findings.extend(_check_image_preflight(receipt, date_str))
     all_findings.extend(_check_keyword_warnings(receipt, date_str))

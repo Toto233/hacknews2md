@@ -55,7 +55,7 @@ def run_release(
             kwargs["dry_run"] = True
         if stage_name == GenericStage.RENDERING and "astro" not in publish_targets:
             kwargs["astro_enabled"] = False
-        receipt = stage.run(runtime_ctx, machine, **kwargs)
+        receipt = stage.run(runtime_ctx, machine, force_retry=rerun, **kwargs)
         _validate_stage_artifacts(stage_name, receipt, source.required_artifacts.get(stage_name, ()))
         completed.append(stage_name.value)
 

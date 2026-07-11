@@ -22,6 +22,49 @@ from src.integrations.wechat_access_token import WeChatAccessToken
 from scripts.generate_wechat_cover_ai import generate_cover_ai
 
 
+def _format_crop_value(value: float) -> str:
+    return f"{value:.6f}".rstrip("0").rstrip(".") or "0"
+
+
+def _center_crop_coordinates(width: int, height: int, target_ratio: float) -> str:
+    """Return WeChat normalized center-crop coordinates as X1_Y1_X2_Y2."""
+    if width <= 0 or height <= 0:
+        return "0_0_1_1"
+
+    source_ratio = width / height
+    if abs(source_ratio - target_ratio) < 0.01:
+        return "0_0_1_1"
+
+    if source_ratio > target_ratio:
+        crop_width = height * target_ratio
+        x1 = (width - crop_width) / 2 / width
+        x2 = 1 - x1
+        y1, y2 = 0.0, 1.0
+    else:
+        crop_height = width / target_ratio
+        y1 = (height - crop_height) / 2 / height
+        y2 = 1 - y1
+        x1, x2 = 0.0, 1.0
+
+    return "_".join(_format_crop_value(v) for v in (x1, y1, x2, y2))
+
+
+def build_cover_crop_fields(cover_image: str) -> dict[str, str]:
+    """Build WeChat draft cover crop fields for 2.35:1 and 1:1 previews."""
+    try:
+        from PIL import Image
+
+        with Image.open(cover_image) as image:
+            width, height = image.size
+    except Exception:
+        return {}
+
+    return {
+        "pic_crop_235_1": _center_crop_coordinates(width, height, 2.35),
+        "pic_crop_1_1": _center_crop_coordinates(width, height, 1.0),
+    }
+
+
 def is_wsl():
     """检查是否运行在 WSL 环境"""
     try:
@@ -285,18 +328,23 @@ def publish_to_wechat(
         'need_open_comment': 1,
         'only_fans_can_comment': 1
     }
+    if cover_image:
+        crop_fields = build_cover_crop_fields(cover_image)
+        if crop_fields:
+            article.update(crop_fields)
+            print(f"封面裁剪参数: 2.35:1={crop_fields['pic_crop_235_1']}, 1:1={crop_fields['pic_crop_1_1']}")
 
     # 上传到草稿箱
     print("\n正在上传到微信公众号草稿箱...")
     media_id = wechat.add_draft_smart([article], thumb_media_id_to_use, thumb_image_path=cover_image)
 
     if media_id:
-        print(f"\n✓ 成功上传到草稿箱!")
+        print("\n[OK] 成功上传到草稿箱!")
         print(f"  Media ID: {media_id}")
         print(f"  你可以在微信公众号后台找到这篇草稿")
         return media_id
     else:
-        print("\n✗ 上传失败")
+        print("\n[ERROR] 上传失败")
         return None
 
 

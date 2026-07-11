@@ -243,6 +243,23 @@ class TestBaseStageRunGivesUp:
         with pytest.raises(RuntimeError, match="Retry budget exhausted"):
             stage.run(ctx, machine)
 
+    def test_force_retry_ignores_retry_budget(self, tmp_path):
+        """Explicit reruns should be able to recover a stage whose retry budget is exhausted."""
+        ctx = _make_ctx(tmp_path)
+        machine = _make_machine(tmp_path)
+        machine.job.stages["FETCHING"] = {
+            "stage": "FETCHING",
+            "retry_count": 10,
+            "success": False,
+        }
+        machine._save()
+
+        stage, _ = _make_stage(Stage.FETCHING, succeed_after=0, max_retries=0)
+        receipt = stage.run(ctx, machine, force_retry=True)
+
+        assert receipt.success is True
+        assert receipt.output_summary == {"items": 42}
+
 
 # ---------------------------------------------------------------------------
 # Tests: Receipt recording
