@@ -71,6 +71,22 @@ def extract_target_word(markdown_path: Path, override: Optional[str]) -> str:
     raise ValueError("cannot determine target word/title from markdown")
 
 
+def extract_context_title(markdown_path: Path, override: Optional[str]) -> str:
+    """Return the full semantic context used for visual metaphors only."""
+    if override and override.strip():
+        return override.strip()
+
+    frontmatter, body = parse_markdown(markdown_path)
+    match = re.search(r"^##\s+\d+\.\s+(.+?)\s*$", body, re.M)
+    if match:
+        return match.group(1).strip()
+
+    title = frontmatter.get("title", "").split("|", 1)[0].strip()
+    if title:
+        return title
+    return markdown_path.stem
+
+
 def split_heading_titles(heading: str) -> Tuple[str, str]:
     match = re.match(r"^(.*?)\s+\(([^()]*)\)\s*$", heading)
     if match:
@@ -180,22 +196,31 @@ def run_image_generator(command: list[str], cwd: Path, raw_path: Path) -> None:
         raise RuntimeError(f"no image written to {raw_path}\n{tail}")
 
 
-def generate_cover_ai(markdown_path: str, output: Optional[str] = None, target_word: Optional[str] = None) -> str:
+def generate_cover_ai(
+    markdown_path: str,
+    output: Optional[str] = None,
+    target_word: Optional[str] = None,
+    context_title: Optional[str] = None,
+) -> str:
     md_path = Path(markdown_path)
     if not PROMPT_TEMPLATE.exists():
         raise FileNotFoundError(f"prompt template missing: {PROMPT_TEMPLATE}")
 
     word = extract_target_word(md_path, target_word)
+    context = extract_context_title(md_path, context_title)
     date_compact = extract_date(md_path)
     out_dir = PROJECT_ROOT / "output" / "images" / date_compact
     out_path = Path(output) if output else out_dir / f"hacknews_cover_ai_{date_compact}.png"
+    out_path = out_path.expanduser().resolve()
     raw_path = out_path.with_name(out_path.stem + "_raw.png")
 
     template = PROMPT_TEMPLATE.read_text(encoding="utf-8")
-    instructions = template.replace("[目标字词]", word)
+    instructions = template.replace("[目标字词]", word).replace("[完整语境]", context)
     prompt = (
         f"为「{word}」生成一张顶级字体美学概念图像。"
+        f"完整语境仅用于画面隐喻，不能作为可见文字：{context}。"
         "严格遵守 instructions 中的所有原则：文字必须绝对突出、字形准确、"
+        "图片中只能出现目标字词，不能出现完整语境里的额外文字；"
         "隐喻系统围绕文字、画幅比例适合 2.45:1 微信公众号主封面横版裁切。"
     )
 
@@ -231,6 +256,7 @@ def generate_cover_ai(markdown_path: str, output: Optional[str] = None, target_w
         json.dumps(
             {
                 "target_word": word,
+                "context_title": context,
                 "prompt_template": str(PROMPT_TEMPLATE),
                 "wrapper": str(wrapper),
                 "raw": str(raw_path),
@@ -250,8 +276,9 @@ def main() -> None:
     parser.add_argument("markdown", help="Rendered HackNews markdown file")
     parser.add_argument("-o", "--output", help="Output PNG path")
     parser.add_argument("--target-word", help="Override target word/title")
+    parser.add_argument("--context-title", help="Full hidden semantic context; not visible text")
     args = parser.parse_args()
-    print(generate_cover_ai(args.markdown, args.output, args.target_word))
+    print(generate_cover_ai(args.markdown, args.output, args.target_word, args.context_title))
 
 
 if __name__ == "__main__":
