@@ -1,0 +1,4 @@
+interface:
+  display_name: "Publish Producthunt Monthly"
+  short_description: "Publish monthly ProductHunt WeChat recaps"
+  default_prompt: "发布这个月的 ProductHunt 月报到微信公众号草稿箱"

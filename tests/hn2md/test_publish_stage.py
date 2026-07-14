@@ -1,13 +1,15 @@
 from pathlib import Path
+import importlib
 import sys
 import textwrap
-from unittest.mock import patch
+from unittest.mock import call, patch
 
 import pytest
 from PIL import Image
 
 from hn2md.constants import Stage
 from hn2md.context import RuntimeContext
+from hn2md.stages.base import NonRetryableStageError
 from hn2md.stages.publish import PublishStage
 
 
@@ -17,16 +19,45 @@ def test_publish_calls_reusable_api_with_explicit_paths(tmp_path) -> None:
     cover = tmp_path / "cover.png"
     machine = type("M", (), {"job": type("J", (), {"stages": {}})()})()
     ctx = object()
+    def _load(_ctx, _module, name):
+        if name == "preflight_wechat_access_token":
+            return lambda: "token-ok"
+        return lambda *_, **__: "media-1"
+
     with (
         patch("src.utils.db_utils.get_illegal_keywords", return_value=[]),
-        patch("hn2md.stages.publish.load_project_function", return_value=lambda *_, **__: "media-1") as load,
+        patch("hn2md.stages.publish.load_project_function", side_effect=_load) as load,
     ):
         result = PublishStage().execute(
             ctx, machine, markdown_file=str(md), cover_image=str(cover)
         )
-    load.assert_called_once_with(ctx, "scripts.publish_wechat", "publish_to_wechat")
+    assert load.call_args_list == [
+        call(ctx, "scripts.publish_wechat", "preflight_wechat_access_token"),
+        call(ctx, "scripts.publish_wechat", "publish_to_wechat"),
+    ]
     assert result["wechat_media_id"] == "media-1"
+    assert result["cover_image"] == str(cover)
     assert result["skipped_images"] == []
+
+
+def test_publish_preflight_whitelist_error_fails_before_upload(tmp_path) -> None:
+    md = tmp_path / "article.md"
+    md.write_text("# safe", encoding="utf-8")
+    machine = type("M", (), {"job": type("J", (), {"stages": {}})()})()
+    ctx = object()
+    publish = lambda *_, **__: "media-should-not-upload"
+
+    def _load(_ctx, _module, name):
+        if name == "preflight_wechat_access_token":
+            return lambda: (_ for _ in ()).throw(RuntimeError("WeChat API error 40164: invalid ip 188.253.120.170"))
+        return publish
+
+    with (
+        patch("src.utils.db_utils.get_illegal_keywords", return_value=[]),
+        patch("hn2md.stages.publish.load_project_function", side_effect=_load),
+        pytest.raises(NonRetryableStageError, match="188.253.120.170"),
+    ):
+        PublishStage().execute(ctx, machine, markdown_file=str(md))
 
 
 def test_publish_fails_when_wechat_returns_no_media_id(tmp_path) -> None:
@@ -139,6 +170,9 @@ def test_publish_loads_project_script_when_project_root_not_on_sys_path(tmp_path
     (script_dir / "publish_wechat.py").write_text(
         textwrap.dedent(
             """
+            def preflight_wechat_access_token():
+                return "token-from-project-script"
+
             def publish_to_wechat(markdown_file, cover_image=None):
                 return "media-from-project-script"
             """
@@ -160,15 +194,31 @@ def test_publish_loads_project_script_when_project_root_not_on_sys_path(tmp_path
     machine = type("M", (), {"job": type("J", (), {"stages": {}})()})()
 
     repo_root = Path(__file__).resolve().parents[2]
+    original_path = list(sys.path)
     monkeypatch.setattr(
         sys,
         "path",
         [p for p in sys.path if Path(p or ".").resolve() not in {repo_root, project}],
     )
+    original_scripts = sys.modules.get("scripts")
+    original_publish_wechat = sys.modules.get("scripts.publish_wechat")
     sys.modules.pop("scripts", None)
     sys.modules.pop("scripts.publish_wechat", None)
 
-    with patch("src.utils.db_utils.get_illegal_keywords", return_value=[]):
-        result = PublishStage().execute(ctx, machine, markdown_file=str(md))
+    try:
+        with patch("src.utils.db_utils.get_illegal_keywords", return_value=[]):
+            result = PublishStage().execute(ctx, machine, markdown_file=str(md))
+    finally:
+        sys.path = original_path
+        sys.modules.pop("scripts", None)
+        sys.modules.pop("scripts.publish_wechat", None)
+        if original_scripts is not None and original_publish_wechat is not None:
+            sys.modules["scripts"] = original_scripts
+        if original_publish_wechat is not None:
+            sys.modules["scripts.publish_wechat"] = original_publish_wechat
+        else:
+            if str(repo_root) not in sys.path:
+                sys.path.insert(0, str(repo_root))
+            importlib.import_module("scripts.publish_wechat")
 
     assert result["wechat_media_id"] == "media-from-project-script"

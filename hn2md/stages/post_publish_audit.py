@@ -168,6 +168,10 @@ def _check_astro_output(
 ) -> list[dict[str, Any]]:
     findings: list[dict[str, Any]] = []
     astro_file = render_receipt.get("astro_file")
+    if render_receipt.get("astro_skipped"):
+        reason = render_receipt.get("astro_skip_reason") or "reason not recorded"
+        findings.append(_finding(date_str, "astro_output", "warning", f"Astro skipped during render: {reason}"))
+        return findings
     if astro_file:
         if Path(astro_file).exists():
             findings.append(_finding(date_str, "astro_output", "info", f"Astro output found: {astro_file}"))
@@ -227,6 +231,51 @@ def _split_resolved_content_warnings(
     resolved: list[dict[str, Any]] = []
     for warning in warnings:
         if isinstance(warning, dict) and _content_warning_resolved_by_db(db_path, warning):
+            resolved.append(warning)
+        else:
+            active.append(warning)
+    return active, resolved
+
+
+def _discussion_warning_resolved_by_db(db_path: Path | None, warning: dict[str, Any]) -> bool:
+    """Return True when a stale collect discussion warning has been fixed in DB."""
+    if db_path is None:
+        return False
+
+    warning_id = warning.get("id")
+    warning_url = str(warning.get("url") or "").strip()
+    if warning_id is None and not warning_url:
+        return False
+
+    try:
+        with get_db(str(db_path)) as conn:
+            conn.row_factory = sqlite3.Row
+            row = conn.execute(
+                """
+                SELECT discussion_content
+                FROM news
+                WHERE (? IS NOT NULL AND id=?)
+                   OR (? != '' AND discuss_url=?)
+                ORDER BY id
+                LIMIT 1
+                """,
+                (warning_id, warning_id, warning_url, warning_url),
+            ).fetchone()
+    except Exception:
+        return False
+
+    if row is None:
+        return False
+    return bool(str(row["discussion_content"] or "").strip())
+
+
+def _split_resolved_discussion_warnings(
+    db_path: Path | None, warnings: list[Any]
+) -> tuple[list[Any], list[dict[str, Any]]]:
+    active: list[Any] = []
+    resolved: list[dict[str, Any]] = []
+    for warning in warnings:
+        if isinstance(warning, dict) and _discussion_warning_resolved_by_db(db_path, warning):
             resolved.append(warning)
         else:
             active.append(warning)
@@ -343,6 +392,26 @@ def _check_stage_receipts(
 
             if key == "content_warnings":
                 warnings, resolved_warnings = _split_resolved_content_warnings(db_path, warnings)
+                if resolved_warnings:
+                    findings.append(
+                        _finding(
+                            date_str,
+                            "stage_warning",
+                            "info",
+                            f"{stage_name} reported {len(resolved_warnings)} resolved {key}",
+                            {
+                                "stage": stage_name,
+                                "warning_key": key,
+                                "resolved_by_db": True,
+                                "warnings": resolved_warnings[:20],
+                            },
+                        )
+                    )
+                if not warnings:
+                    continue
+
+            if key == "discussion_warnings":
+                warnings, resolved_warnings = _split_resolved_discussion_warnings(db_path, warnings)
                 if resolved_warnings:
                     findings.append(
                         _finding(

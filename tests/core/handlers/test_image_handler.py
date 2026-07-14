@@ -90,6 +90,13 @@ class TestIsLowSignalArticleImageUrl:
         )
         assert is_low_signal_article_image_url("https://github.com/project/repo/raw/main/assets/mark.svg")
 
+    def test_filters_branding_and_social_decoration(self):
+        assert is_low_signal_article_image_url("https://techcrunch.com/wp-content/uploads/2026/05/tc-lockup-hp.svg")
+        assert is_low_signal_article_image_url(
+            "https://terrytao.wordpress.com/wp-content/uploads/2020/03/cropped-covid-19-curves-graphic-social-v3.gif"
+        )
+        assert is_low_signal_article_image_url("https://www.gstatic.com/images/branding/googlelogo/svg/googlelogo_clr_74x24px.svg")
+
     def test_keeps_likely_article_images(self):
         assert not is_low_signal_article_image_url("https://cdn.example.com/photos/article-photo.jpg")
         assert not is_low_signal_article_image_url("https://example.com/images/chart-of-results.png")

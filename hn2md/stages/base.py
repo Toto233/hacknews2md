@@ -21,6 +21,10 @@ _DEFAULT_BACKOFF_BASE = 2.0  # seconds
 _DEFAULT_BACKOFF_MAX = 30.0  # seconds
 
 
+class NonRetryableStageError(RuntimeError):
+    """Stage failure that requires operator action and should not be retried."""
+
+
 class BaseStage(ABC):
     """Abstract base for every pipeline stage."""
 
@@ -65,6 +69,10 @@ class BaseStage(ABC):
                 receipt.success = True
                 receipt.output_summary = output
                 last_error = None
+                break
+            except NonRetryableStageError as exc:
+                last_error = exc
+                logger.error(f"[{self.stage_name.value}] Non-retryable failure: {redact_err(str(exc))}")
                 break
             except Exception as exc:
                 last_error = exc

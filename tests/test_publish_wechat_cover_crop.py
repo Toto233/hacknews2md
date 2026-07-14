@@ -54,8 +54,8 @@ def test_publish_to_wechat_adds_cover_crop_fields_to_draft(tmp_path, monkeypatch
             return "draft-media-id"
 
     fake_wechat = FakeWechat("appid", "secret")
-    monkeypatch.setattr("scripts.publish_wechat.Config", lambda: FakeConfig())
-    monkeypatch.setattr("scripts.publish_wechat.WeChatAccessToken", lambda appid, appsec: fake_wechat)
+    monkeypatch.setitem(publish_to_wechat.__globals__, "Config", lambda: FakeConfig())
+    monkeypatch.setitem(publish_to_wechat.__globals__, "WeChatAccessToken", lambda appid, appsec: fake_wechat)
 
     assert publish_to_wechat(str(md), cover_image=str(cover), auto_cover=False) == "draft-media-id"
 

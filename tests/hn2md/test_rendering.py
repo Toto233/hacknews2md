@@ -116,7 +116,7 @@ def test_render_stage_uses_applying_plan_receipt(tmp_path) -> None:
     assert Path(result["markdown_file"]).exists()
 
 
-def test_render_stage_blocks_astro_when_repo_has_staged_changes(tmp_path) -> None:
+def test_render_stage_skips_astro_when_repo_has_staged_changes(tmp_path) -> None:
     ctx = _ctx(tmp_path)
     plan = _plan(tmp_path)
     astro_repo = tmp_path / "astro"
@@ -134,5 +134,29 @@ def test_render_stage_blocks_astro_when_repo_has_staged_changes(tmp_path) -> Non
         patch("src.utils.deployment.load_deployment_settings", return_value=settings),
         patch("subprocess.run", return_value=completed),
     ):
-        with pytest.raises(RuntimeError, match="Astro repository has staged changes"):
-            RenderStage().execute(ctx, machine)
+        result = RenderStage().execute(ctx, machine)
+
+    assert result["astro_file"] is None
+    assert result["astro_skipped"] is True
+    assert "Astro repository has staged changes" in result["astro_skip_reason"]
+
+
+def test_render_stage_skips_missing_astro_repo(tmp_path) -> None:
+    ctx = _ctx(tmp_path)
+    plan = _plan(tmp_path)
+    missing_repo = tmp_path / "missing_astro"
+    astro_blog_dir = missing_repo / "src" / "data" / "blog"
+    machine = type(
+        "Machine",
+        (),
+        {"job": type("Job", (), {"stages": {Stage.APPLYING.value: {"output_summary": {"plan_file": str(plan)}}}})()},
+    )()
+    settings = type("Settings", (), {"astro_repo": missing_repo, "astro_blog_dir": astro_blog_dir})()
+
+    with patch("src.utils.deployment.load_deployment_settings", return_value=settings):
+        result = RenderStage().execute(ctx, machine)
+
+    assert Path(result["markdown_file"]).exists()
+    assert result["astro_file"] is None
+    assert result["astro_skipped"] is True
+    assert "Astro repository not found" in result["astro_skip_reason"]

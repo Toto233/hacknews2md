@@ -1,12 +1,15 @@
 from __future__ import annotations
 
+from datetime import datetime
 from pathlib import Path
 import json as json_mod
+import re
 import sqlite3
 
 import click
 
 from hn2md.state import JobStateMachine
+from hn2md.state import StageReceipt
 from hn2md.stages.audit import VALID_SOURCE_TYPES, run_audit
 from publisher.constants import GenericStage
 from publisher.context import PublisherContext, parse_date_period, parse_month_period
@@ -211,6 +214,64 @@ def review_run(source_name: str, date_value: str | None, json_output: bool, verb
         click.echo(f"JSONL trail: {result['jsonl_path']}")
     if result.get("blocking_count", 0):
         raise click.ClickException("run review found blocking follow-up item(s)")
+
+
+def _existing_render_datetime(machine: JobStateMachine) -> datetime | None:
+    from hn2md.constants import Stage
+
+    render_receipt = machine.job.stages.get(Stage.RENDERING.value, {})
+    markdown_file = render_receipt.get("output_summary", {}).get("markdown_file")
+    if not markdown_file:
+        return None
+    match = re.search(r"hacknews_summary_(\d{8})_(\d{4})\.md$", str(markdown_file))
+    if not match:
+        return None
+    return datetime.strptime("".join(match.groups()), "%Y%m%d%H%M")
+
+
+@main.command("repair-astro")
+@click.argument("source_name")
+@click.option("--date", "date_value", default=None, help="YYYY-MM-DD or YYYYMMDD")
+def repair_astro(source_name: str, date_value: str | None) -> None:
+    """Generate missing Astro output for an existing daily run without publishing."""
+    source, ctx = _load_date_source(source_name, date_value)
+    if source.name != "hackernews":
+        raise click.ClickException("repair-astro currently supports hackernews only")
+
+    machine, _ = JobStateMachine.load_or_create(ctx.job_dir, ctx.period)
+    from hn2md.constants import Stage
+    from src.core.generate_markdown import generate_markdown
+    from src.utils.deployment import load_deployment_settings
+
+    apply_receipt = machine.job.stages.get(Stage.APPLYING.value)
+    plan_file = apply_receipt.get("output_summary", {}).get("plan_file") if apply_receipt else None
+    if not plan_file:
+        raise click.ClickException("No plan file from APPLYING stage; cannot repair Astro output")
+
+    settings = load_deployment_settings(project_root=ctx.project_root)
+    if not settings.astro_enabled or settings.astro_blog_dir is None:
+        raise click.ClickException("Astro is not enabled or repo_path is not configured")
+    if settings.astro_repo and not settings.astro_repo.exists():
+        raise click.ClickException(f"Astro repository not found: {settings.astro_repo}")
+
+    started_at = datetime.now().isoformat()
+    result = generate_markdown(
+        db_path=ctx.db_path,
+        output_dir=ctx.markdown_dir,
+        plan_file=Path(plan_file),
+        astro_blog_dir=settings.astro_blog_dir,
+        now=_existing_render_datetime(machine),
+    )
+    result["astro_repaired"] = True
+    receipt = StageReceipt(
+        stage=Stage.RENDERING.value,
+        started_at=started_at,
+        finished_at=datetime.now().isoformat(),
+        success=True,
+        output_summary=result,
+    )
+    machine.record_receipt(receipt)
+    click.echo(f"Astro repair complete: {result['astro_file']}")
 
 
 @main.command("review-missing")

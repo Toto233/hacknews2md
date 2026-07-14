@@ -1,11 +1,13 @@
+import json
 import sqlite3
 import subprocess
 import sys
+from pathlib import Path
 from unittest.mock import patch
 
 from click.testing import CliRunner
 
-from hn2md.state import JobStateMachine, Stage
+from hn2md.state import JobStateMachine, Stage, StageReceipt
 from publisher.cli import main
 from src.utils.db_utils import init_database
 
@@ -283,6 +285,70 @@ def test_review_run_command_runs_post_publish_review(tmp_path, monkeypatch) -> N
     assert kwargs["output_dir"] == tmp_path / "output"
     assert kwargs["dry_run"] is False
     assert kwargs["verbose"] is True
+
+
+def test_repair_astro_generates_output_and_updates_done_ledger(tmp_path, monkeypatch) -> None:
+    monkeypatch.chdir(tmp_path)
+    db_path = tmp_path / "data" / "hacknews.db"
+    init_database(str(db_path))
+    with sqlite3.connect(db_path) as conn:
+        conn.execute(
+            """
+            INSERT INTO news (
+                id, title, title_chs, news_url, discuss_url, content_summary,
+                discuss_summary, created_at
+            )
+            VALUES (
+                1, 'Story', '中文标题', 'https://example.com/story',
+                'https://news.ycombinator.com/item?id=1', '正文摘要', '讨论摘要',
+                '2026-06-27 10:00:00'
+            )
+            """
+        )
+    plan = tmp_path / "output" / "codex" / "plan.json"
+    plan.parent.mkdir(parents=True)
+    plan.write_text(
+        json.dumps({"ordered_ids": [1], "tags": ["AI", "科技", "开源", "工具"], "items": []}, ensure_ascii=False),
+        encoding="utf-8",
+    )
+    astro_repo = tmp_path / "astro"
+    (astro_repo / "src" / "data" / "blog").mkdir(parents=True)
+    deployment = tmp_path / "config" / "deployment.local.json"
+    deployment.parent.mkdir(parents=True)
+    deployment.write_text(
+        json.dumps(
+            {
+                "astro": {
+                    "enabled": True,
+                    "repo_path": str(astro_repo),
+                    "blog_subdir": "src/data/blog",
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+    machine, _ = JobStateMachine.load_or_create(tmp_path / "output" / "jobs", "20260627")
+    machine.job.status = Stage.DONE.value
+    machine.record_receipt(
+        StageReceipt(
+            stage=Stage.APPLYING.value,
+            started_at="2026-06-27T10:00:00",
+            finished_at="2026-06-27T10:00:01",
+            success=True,
+            output_summary={"plan_file": str(plan)},
+        )
+    )
+
+    result = CliRunner().invoke(main, ["repair-astro", "hackernews", "--date", "2026-06-27"])
+
+    assert result.exit_code == 0, result.output
+    machine, _ = JobStateMachine.load_or_create(tmp_path / "output" / "jobs", "20260627")
+    render_summary = machine.job.stages[Stage.RENDERING.value]["output_summary"]
+    astro_file = render_summary["astro_file"]
+    assert astro_file.endswith(".md")
+    assert (astro_repo / "src" / "data" / "blog" / Path(astro_file).name).exists()
+    assert render_summary["astro_repaired"] is True
+    assert "Astro repair complete" in result.output
 
 
 def test_audit_approve_command_records_exemption(tmp_path, monkeypatch) -> None:

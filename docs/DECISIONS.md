@@ -58,10 +58,11 @@ This file records durable project decisions that should not be changed back and 
 
 ### 2026-07-05 — Full HackNews publish defaults to WeChat and Astro
 
-- Status: Accepted
+- Status: Superseded
 - Issue: N/A
 - Supersedes: N/A
 - Context: A daily publish accidentally skipped the Astro recap target.
+- Status note: Superseded by 2026-07-12 - Treat Astro as recoverable after WeChat publish.
 - Decision: The default full HackNews workflow publishes both WeChat and Astro. Use WeChat-only only when the user explicitly asks for WeChat-only, no Astro, or a WeChat draft resend.
 - Failure mode of alternative: Defaulting to WeChat-only silently drops the Astro blog recap. By the time anyone notices, several days of content are missing. Conversely, requiring explicit Astro opt-in means it gets forgotten on busy days.
 - Consequences: The skill and publisher invocation must preserve the full target set by default.
@@ -78,13 +79,24 @@ This file records durable project decisions that should not be changed back and 
 
 ### 2026-07-06 — Keep Astro staging clean before render, then commit approved old posts together
 
-- Status: Accepted
+- Status: Superseded
 - Issue: N/A
 - Supersedes: N/A
 - Context: A daily publish was blocked because the Astro repository already had an older staged blog post. The user wanted that older post committed together with today's post.
+- Status note: Superseded by 2026-07-12 - Treat Astro as recoverable after WeChat publish.
 - Decision: `publisher render` must keep blocking when the Astro repository has pre-existing staged changes. If the user confirms an older generated post should be included, first unstage it without deleting it, render today's post, then stage only the user-approved older post and today's generated post for the Astro commit.
 - Failure mode of alternative: Leaving the old file staged lets render/publish mix unknown state into today's release. Deleting or resetting the file risks losing a user-approved generated article. Blindly staging everything can commit unrelated files such as specs or local notes.
 - Consequences: The skill must report Astro staged/untracked files, use non-destructive unstaging to pass the render gate, and only commit the explicit file set confirmed by the user.
+
+### 2026-07-12 - Treat Astro as recoverable after WeChat publish
+
+- Status: Accepted
+- Issue: N/A
+- Supersedes: 2026-07-05 - Full HackNews publish defaults to WeChat and Astro; 2026-07-06 - Keep Astro staging clean before render, then commit approved old posts together
+- Context: The WeChat draft is the primary time-sensitive publishing artifact. Astro sync is still desired, but a missing repo, broken Git checkout, or dirty staged state should not block creating the WeChat draft.
+- Decision: The default HackNews workflow still attempts Astro output, but Astro preflight failures are recorded as `astro_skipped` with `astro_skip_reason` instead of failing render. Use `publisher repair-astro hackernews --date YYYY-MM-DD` to generate the missing Astro file and update the run ledger after the repo is fixed.
+- Failure mode of alternative: Hard-blocking the full publish on Astro turns an optional blog mirror problem into a WeChat publishing outage. Silently ignoring Astro is also bad because missing blog entries accumulate without a clear repair path.
+- Consequences: Post-run review should warn when Astro was skipped, but treat it as a recoverable follow-up. The repair command may update the `RENDERING` receipt of a completed run without reopening or republishing the WeChat draft.
 
 ### 2026-07-06 — Separate pre-publish audit from post-run review
 

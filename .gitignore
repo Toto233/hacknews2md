@@ -57,7 +57,9 @@ docs/*
 /docs/superpowers/
 
 # ─── Codex / Skills ─────────────────────────────────────────────
-skills/
+skills/*
+!skills/publish-producthunt-monthly/
+!skills/publish-producthunt-monthly/**
 !.codex/
 !.codex/skills/
 .codex/skills/*

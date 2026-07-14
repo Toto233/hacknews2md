@@ -13,8 +13,20 @@ from hn2md.stages.base import BaseStage
 class RenderStage(BaseStage):
     stage_name = Stage.RENDERING
 
+    def _astro_skip_reason(self, settings: Any, astro_blog_dir: Path | None) -> str | None:
+        if astro_blog_dir is None:
+            return None
+        astro_repo = getattr(settings, "astro_repo", None)
+        if astro_repo and not Path(astro_repo).exists():
+            return f"Astro repository not found: {astro_repo}"
+        try:
+            self._ensure_astro_staging_clean(astro_blog_dir)
+        except RuntimeError as exc:
+            return str(exc)
+        return None
+
     def _ensure_astro_staging_clean(self, astro_blog_dir: Path | None) -> None:
-        """Block Astro rendering when the target repo already has staged changes."""
+        """Raise when Astro has staged changes that should be skipped."""
         if astro_blog_dir is None:
             return
         blog_dir = Path(astro_blog_dir).resolve()
@@ -39,11 +51,9 @@ class RenderStage(BaseStage):
             raise RuntimeError(f"Astro repository has staged changes before render: {joined}")
 
     def execute(self, ctx: RuntimeContext, machine: JobStateMachine, astro_enabled: bool = True) -> dict[str, Any]:
-        # ANTI-FLIP-FLOP: astro_enabled defaults to True.
-        # See docs/DECISIONS.md "Full HackNews publish defaults to WeChat and Astro".
+        # Astro is attempted by default, but repo/preflight failures are
+        # recoverable follow-ups so they do not block the WeChat draft.
         # Do NOT change the default to False — silently dropping Astro means
-        # days of missing blog content before anyone notices. Only callers that
-        # explicitly pass astro_enabled=False should skip Astro output.
         from src.core.generate_markdown import generate_markdown
         from src.utils.deployment import load_deployment_settings
 
@@ -54,10 +64,16 @@ class RenderStage(BaseStage):
 
         settings = load_deployment_settings(project_root=ctx.project_root)
         astro_blog_dir = settings.astro_blog_dir if astro_enabled else None
-        self._ensure_astro_staging_clean(astro_blog_dir)
-        return generate_markdown(
+        astro_skip_reason = self._astro_skip_reason(settings, astro_blog_dir) if astro_enabled else None
+        if astro_skip_reason:
+            astro_blog_dir = None
+        result = generate_markdown(
             db_path=ctx.db_path,
             output_dir=ctx.markdown_dir,
             plan_file=Path(plan_file),
             astro_blog_dir=astro_blog_dir,
         )
+        if astro_skip_reason:
+            result["astro_skipped"] = True
+            result["astro_skip_reason"] = astro_skip_reason
+        return result

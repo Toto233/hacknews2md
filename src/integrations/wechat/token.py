@@ -17,6 +17,10 @@ import requests
 logger = logging.getLogger(__name__)
 
 
+class WeChatWhitelistError(RuntimeError):
+    """Raised when WeChat rejects the current outbound IP."""
+
+
 class TokenManager:
     """WeChat access-token persistence and refresh."""
 
@@ -166,11 +170,15 @@ class TokenManager:
                 error_code = data.get("errcode", "unknown")
                 error_msg = data.get("errmsg", "unknown error")
                 logger.error(f"WeChat API error {error_code}: {error_msg}")
+                if error_code == 40164:
+                    raise WeChatWhitelistError(f"WeChat API error 40164: {error_msg}")
                 if attempt < retry_count - 1:
                     logger.info("Will retry in 2 seconds...")
                     time.sleep(2)
                 continue
 
+            except WeChatWhitelistError:
+                raise
             except (requests.exceptions.RequestException, json.JSONDecodeError, Exception) as e:
                 logger.error(f"Error: {e}")
                 if attempt < retry_count - 1:

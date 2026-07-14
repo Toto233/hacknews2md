@@ -330,6 +330,35 @@ def test_post_publish_audit_uses_render_receipt_for_astro_output(tmp_path: Path)
     ]
 
 
+def test_post_publish_audit_reports_astro_skip_reason(tmp_path: Path) -> None:
+    from datetime import datetime
+
+    from hn2md.stages.post_publish_audit import run_post_publish_audit
+
+    date_str = datetime.now().strftime("%Y%m%d")
+    job_dir = tmp_path / "jobs"
+    job_dir.mkdir()
+    db_path = tmp_path / "test.db"
+    output_dir = tmp_path / "output"
+    md_file = output_dir / "hacknews.md"
+    md_file.parent.mkdir(parents=True, exist_ok=True)
+    md_file.write_text("# md\n", encoding="utf-8")
+    _make_ledger(
+        job_dir,
+        date_str,
+        {"wechat_media_id": "wx1", "markdown_file": str(md_file)},
+        {"astro_file": None, "astro_skipped": True, "astro_skip_reason": "Astro repository not found: C:/missing"},
+    )
+
+    result = run_post_publish_audit(job_dir, db_path, output_dir, dry_run=False)
+
+    astro = [f for f in result["findings"] if f["check"] == "astro_output"]
+    assert len(astro) == 1
+    assert astro[0]["date"] == date_str
+    assert astro[0]["severity"] == "warning"
+    assert astro[0]["message"] == "Astro skipped during render: Astro repository not found: C:/missing"
+
+
 def test_post_publish_review_surfaces_stage_retries_and_warnings(tmp_path: Path) -> None:
     from datetime import datetime
 
@@ -493,6 +522,97 @@ def test_post_publish_review_downgrades_resolved_content_warning(tmp_path: Path)
                         "reason": "article_content_missing",
                         "action_required": "human_input_or_handler",
                         "failure_count": 1,
+                    }
+                ],
+            },
+        }
+    ]
+    assert result["blocking_count"] == 0
+
+
+def test_post_publish_review_downgrades_resolved_discussion_warning(tmp_path: Path) -> None:
+    import sqlite3
+    from datetime import datetime
+
+    from hn2md.stages.post_publish_audit import run_post_publish_audit
+    from src.utils.db_utils import init_database
+
+    date_str = datetime.now().strftime("%Y%m%d")
+    job_dir = tmp_path / "jobs"
+    job_dir.mkdir()
+    db_path = tmp_path / "test.db"
+    output_dir = tmp_path / "output"
+    init_database(str(db_path))
+
+    with sqlite3.connect(db_path) as conn:
+        conn.execute(
+            """
+            INSERT INTO news (
+                id, title, news_url, discuss_url, discussion_content, created_at
+            ) VALUES (?, ?, ?, ?, ?, datetime('now', 'localtime'))
+            """,
+            (
+                43,
+                "Running Train",
+                "https://example.com/running-train",
+                "https://news.ycombinator.com/item?id=48876505",
+                "HN discussion body. " * 80,
+            ),
+        )
+
+    md_file = output_dir / "hacknews.md"
+    md_file.parent.mkdir(parents=True, exist_ok=True)
+    md_file.write_text("https://news.ycombinator.com/item?id=48876505\n", encoding="utf-8")
+    ledger = {
+        "date": date_str,
+        "status": "DONE",
+        "stages": {
+            "COLLECTING": {
+                "success": True,
+                "retry_count": 0,
+                "output_summary": {
+                    "discussion_warnings": [
+                        {
+                            "id": 43,
+                            "title": "Running Train",
+                            "url": "https://news.ycombinator.com/item?id=48876505",
+                            "reason": "discussion_missing_after_retry",
+                            "action_required": "human_input_or_handler",
+                            "attempts": 2,
+                        }
+                    ]
+                },
+            },
+            "PUBLISHING": {
+                "success": True,
+                "retry_count": 0,
+                "output_summary": {"wechat_media_id": "wx1", "markdown_file": str(md_file)},
+            },
+        },
+    }
+    (job_dir / f"publish_job_{date_str}.json").write_text(json.dumps(ledger), encoding="utf-8")
+
+    result = run_post_publish_audit(job_dir, db_path, output_dir, dry_run=False)
+
+    stage_warnings = [f for f in result["findings"] if f["check"] == "stage_warning"]
+    assert stage_warnings == [
+        {
+            "date": date_str,
+            "check": "stage_warning",
+            "severity": "info",
+            "message": "COLLECTING reported 1 resolved discussion_warnings",
+            "details": {
+                "stage": "COLLECTING",
+                "warning_key": "discussion_warnings",
+                "resolved_by_db": True,
+                "warnings": [
+                    {
+                        "id": 43,
+                        "title": "Running Train",
+                        "url": "https://news.ycombinator.com/item?id=48876505",
+                        "reason": "discussion_missing_after_retry",
+                        "action_required": "human_input_or_handler",
+                        "attempts": 2,
                     }
                 ],
             },

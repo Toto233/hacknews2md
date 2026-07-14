@@ -7,7 +7,7 @@ from datetime import datetime
 from pathlib import Path
 from unittest.mock import patch
 
-from hn2md.stages.base import BaseStage, redact_err
+from hn2md.stages.base import BaseStage, NonRetryableStageError, redact_err
 from hn2md.context import RuntimeContext
 from hn2md.state import JobStateMachine, PublishJob, StageReceipt
 from hn2md.constants import Stage
@@ -161,6 +161,29 @@ class TestBaseStageRunRetries:
 
         # Should sleep twice (after attempt 1 and 2, not after final attempt 3)
         assert mock_sleep.call_count == 2
+
+    def test_non_retryable_error_does_not_retry(self, tmp_path):
+        """Operator-action errors should fail once without retry delays."""
+        ctx = _make_ctx(tmp_path)
+        machine = _make_machine(tmp_path)
+        calls = []
+
+        def _execute(self, ctx, machine):
+            calls.append(1)
+            raise NonRetryableStageError("WeChat IP whitelist missing: 188.253.120.170")
+
+        StageType = type(
+            "NonRetryableFailingStage",
+            (BaseStage,),
+            {"stage_name": Stage.FETCHING, "max_retries": 3, "execute": _execute},
+        )
+
+        with patch("hn2md.stages.base.time.sleep") as mock_sleep:
+            with pytest.raises(NonRetryableStageError, match="188.253.120.170"):
+                StageType().run(ctx, machine)
+
+        assert len(calls) == 1
+        mock_sleep.assert_not_called()
 
 
 # ---------------------------------------------------------------------------

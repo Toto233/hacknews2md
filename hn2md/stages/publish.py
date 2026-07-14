@@ -8,10 +8,25 @@ from typing import Any
 from hn2md.constants import Stage
 from hn2md.context import RuntimeContext
 from hn2md.state import JobStateMachine
-from hn2md.stages.base import BaseStage
+from hn2md.stages.base import BaseStage, NonRetryableStageError
 from hn2md.stages.script_loader import load_project_function
 
 logger = logging.getLogger(__name__)
+
+
+def _is_wechat_whitelist_error(message: str) -> bool:
+    return "40164" in message and "invalid ip" in message.lower()
+
+
+def _preflight_wechat(ctx: RuntimeContext) -> None:
+    preflight = load_project_function(ctx, "scripts.publish_wechat", "preflight_wechat_access_token")
+    try:
+        preflight()
+    except Exception as exc:
+        message = str(exc)
+        if _is_wechat_whitelist_error(message):
+            raise NonRetryableStageError(message) from exc
+        raise
 
 
 _LOCAL_IMAGE_PATTERNS = [
@@ -249,6 +264,7 @@ class PublishStage(BaseStage):
                 "keyword_warnings": keyword_warnings,
             }
 
+        _preflight_wechat(ctx)
         publish_to_wechat = load_project_function(ctx, "scripts.publish_wechat", "publish_to_wechat")
         media_id = publish_to_wechat(md_file, cover_image=cover)
         if not media_id:
@@ -256,6 +272,7 @@ class PublishStage(BaseStage):
         return {
             "wechat_media_id": str(media_id),
             "markdown_file": md_file,
+            "cover_image": cover,
             "skipped_images": skipped_images,
             "compressed_images": compressed_images,
             "keyword_warnings": keyword_warnings,

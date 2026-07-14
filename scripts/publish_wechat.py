@@ -22,6 +22,19 @@ from src.integrations.wechat_access_token import WeChatAccessToken
 from scripts.generate_wechat_cover_ai import generate_cover_ai
 
 
+def preflight_wechat_access_token() -> str:
+    """Verify WeChat access token before expensive image processing/upload work."""
+    config = Config()
+    wechat_config = config.get_wechat_config()
+    if not wechat_config:
+        raise RuntimeError("WeChat config not found; check config/config.json")
+    wechat = WeChatAccessToken(wechat_config["appid"], wechat_config["appsec"])
+    token = wechat.get_access_token(force_refresh=True, retry_count=1)
+    if not token:
+        raise RuntimeError("Could not get WeChat access token")
+    return token
+
+
 def _format_crop_value(value: float) -> str:
     return f"{value:.6f}".rstrip("0").rstrip(".") or "0"
 
