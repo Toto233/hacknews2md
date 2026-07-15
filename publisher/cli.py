@@ -8,6 +8,7 @@ import sqlite3
 
 import click
 
+from src.utils.console_encoding import configure_utf8_stdio
 from hn2md.state import JobStateMachine
 from hn2md.state import StageReceipt
 from hn2md.stages.audit import VALID_SOURCE_TYPES, run_audit
@@ -24,6 +25,7 @@ from src.utils.scraper_failures import extract_domain
 @click.group()
 def main() -> None:
     """Generic source-driven publishing CLI."""
+    configure_utf8_stdio()
 
 
 def _load_source_context(
@@ -214,6 +216,24 @@ def review_run(source_name: str, date_value: str | None, json_output: bool, verb
         click.echo(f"JSONL trail: {result['jsonl_path']}")
     if result.get("blocking_count", 0):
         raise click.ClickException("run review found blocking follow-up item(s)")
+
+
+@main.command("export-context")
+@click.argument("source_name")
+@click.option("--date", "date_value", default=None, help="YYYY-MM-DD or YYYYMMDD")
+def export_context(source_name: str, date_value: str | None) -> None:
+    """Export current DB rows to a Codex planning context file."""
+    source, ctx = _load_date_source(source_name, date_value)
+    if source.name != "hackernews":
+        raise click.ClickException("export-context currently supports hackernews only")
+    from hn2md.context_export import export_hackernews_context_from_db
+
+    context_path = export_hackernews_context_from_db(
+        db_path=ctx.db_path,
+        codex_dir=ctx.codex_dir,
+        period=ctx.period,
+    )
+    click.echo(f"Context exported: {context_path}")
 
 
 def _existing_render_datetime(machine: JobStateMachine) -> datetime | None:
@@ -457,8 +477,9 @@ def render(
 @click.argument("source_name")
 @click.argument("markdown_file", required=False)
 @click.option("--date", "date_value", default=None, help="YYYY-MM-DD or YYYYMMDD")
-@click.option("--mode", type=click.Choice(["ai", "pillow"]), default="ai")
+@click.option("--mode", type=click.Choice(["ai", "pillow", "external"]), default="ai")
 @click.option("--target-word", default=None)
+@click.option("--cover-image", default=None, type=click.Path(exists=True, dir_okay=False))
 @click.option("--rerun", is_flag=True)
 @click.option("--year", type=int, default=None)
 @click.option("--month", type=int, default=None)
@@ -468,6 +489,7 @@ def cover(
     date_value: str | None,
     mode: str,
     target_word: str | None,
+    cover_image: str | None,
     rerun: bool,
     year: int | None,
     month: int | None,
@@ -478,7 +500,14 @@ def cover(
         source,
         stages=(GenericStage.COVERING,),
         rerun=rerun,
-        stage_kwargs={GenericStage.COVERING: {"markdown_file": markdown_file, "mode": mode, "target_word": target_word}},
+        stage_kwargs={
+            GenericStage.COVERING: {
+                "markdown_file": markdown_file,
+                "mode": mode,
+                "target_word": target_word,
+                "cover_image": cover_image,
+            }
+        },
     )
     click.echo(f"{GenericStage.COVERING.value} complete: {result}")
 

@@ -30,6 +30,44 @@ def test_cover_pillow_calls_reusable_api(tmp_path) -> None:
     assert result["cover_image"] == "pillow.png"
 
 
+def test_cover_external_registers_existing_image(tmp_path) -> None:
+    md = tmp_path / "a.md"
+    cover = tmp_path / "cover.png"
+    cover.write_bytes(b"png")
+
+    result = CoverStage().execute(
+        object(),
+        _machine(md),
+        markdown_file=str(md),
+        mode="external",
+        cover_image=str(cover),
+        target_word="幽灵锁漏洞",
+    )
+
+    assert result == {
+        "cover_image": str(cover),
+        "mode": "external",
+        "target_word": "幽灵锁漏洞",
+    }
+
+
+def test_cover_external_requires_existing_image(tmp_path) -> None:
+    md = tmp_path / "a.md"
+
+    try:
+        CoverStage().execute(
+            object(),
+            _machine(md),
+            markdown_file=str(md),
+            mode="external",
+            cover_image=str(tmp_path / "missing.png"),
+        )
+    except RuntimeError as exc:
+        assert "External cover image not found" in str(exc)
+    else:
+        raise AssertionError("expected RuntimeError")
+
+
 def test_cover_loads_project_script_when_project_root_not_on_sys_path(tmp_path, monkeypatch) -> None:
     project = tmp_path / "project"
     script_dir = project / "scripts"

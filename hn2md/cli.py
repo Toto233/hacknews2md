@@ -11,6 +11,7 @@ from hn2md.constants import STAGE_ORDER, Stage
 from hn2md.context import RuntimeContext
 from hn2md.lock import LockError, daily_lock
 from hn2md.state import JobStateMachine
+from src.utils.console_encoding import configure_utf8_stdio
 from src.utils.logging_setup import setup_logging
 
 STAGE_CLASSES = {
@@ -69,6 +70,7 @@ def _job_story_count(job) -> int:
 @click.pass_context
 def main(ctx, project_root):
     """hn2md: Unified HackNews-to-Markdown publishing CLI."""
+    configure_utf8_stdio()
     root = Path(project_root) if project_root else None
     runtime_ctx = RuntimeContext.create(root)
     setup_logging(log_dir=runtime_ctx.output_dir / "logs")
@@ -214,10 +216,11 @@ def render(ctx_obj):
 
 @main.command()
 @click.argument("markdown_file", required=False)
-@click.option("--mode", type=click.Choice(["ai", "pillow"]), default="ai")
+@click.option("--mode", type=click.Choice(["ai", "pillow", "external"]), default="ai")
 @click.option("--target-word", default=None, help="Short cover headline override")
+@click.option("--cover-image", default=None, type=click.Path(exists=True, dir_okay=False))
 @click.pass_context
-def cover(ctx_obj, markdown_file, mode, target_word):
+def cover(ctx_obj, markdown_file, mode, target_word, cover_image):
     """Generate cover image."""
     rt = ctx_obj.obj["ctx"]
     date_str = datetime.now().strftime("%Y%m%d")
@@ -226,12 +229,17 @@ def cover(ctx_obj, markdown_file, mode, target_word):
     try:
         with daily_lock(lock_path):
             stage = _load_stage(Stage.COVERING)
+            kwargs = {
+                "markdown_file": markdown_file,
+                "mode": mode,
+                "target_word": target_word,
+            }
+            if cover_image is not None:
+                kwargs["cover_image"] = cover_image
             receipt = stage.run(
                 rt,
                 machine,
-                markdown_file=markdown_file,
-                mode=mode,
-                target_word=target_word,
+                **kwargs,
             )
             _print(f"Cover complete: {receipt.output_summary}", "green")
     except LockError as e:

@@ -1,6 +1,7 @@
 """Cover stage: generate cover image."""
 
 from typing import Any
+from pathlib import Path
 
 from hn2md.constants import Stage
 from hn2md.context import RuntimeContext
@@ -19,6 +20,7 @@ class CoverStage(BaseStage):
         markdown_file: str | None = None,
         mode: str = "ai",
         target_word: str | None = None,
+        cover_image: str | None = None,
     ) -> dict[str, Any]:
         render_receipt = machine.job.stages.get(Stage.RENDERING.value)
         md_file = markdown_file or (
@@ -27,6 +29,17 @@ class CoverStage(BaseStage):
         if not md_file:
             raise RuntimeError("No markdown file from RENDERING stage")
 
+        if mode == "external":
+            if not cover_image:
+                raise RuntimeError("External cover image path is required")
+            cover_path = Path(cover_image)
+            if not cover_path.exists():
+                raise RuntimeError(f"External cover image not found: {cover_image}")
+            return {
+                "cover_image": str(cover_path),
+                "mode": "external",
+                "target_word": target_word,
+            }
         if mode == "ai":
             generate_cover_ai = load_project_function(
                 ctx,
@@ -43,4 +56,8 @@ class CoverStage(BaseStage):
             cover_path = generate_cover(md_file)
         else:
             raise ValueError(f"Unsupported cover mode: {mode}")
-        return {"cover_image": str(cover_path) if cover_path else None}
+        return {
+            "cover_image": str(cover_path) if cover_path else None,
+            "mode": mode,
+            "target_word": target_word,
+        }

@@ -233,6 +233,72 @@ def test_publish_command_targets_wechat_and_passes_artifacts(tmp_path, monkeypat
     }
 
 
+def test_cover_command_can_register_external_cover(tmp_path, monkeypatch) -> None:
+    monkeypatch.chdir(tmp_path)
+    cover = tmp_path / "cover.png"
+    cover.write_bytes(b"png")
+
+    with patch("publisher.cli.run_release", return_value={"completed_stages": ["COVERING"]}) as run:
+        result = CliRunner().invoke(
+            main,
+            [
+                "cover",
+                "hackernews",
+                "--date",
+                "2026-06-27",
+                "article.md",
+                "--mode",
+                "external",
+                "--cover-image",
+                str(cover),
+                "--target-word",
+                "幽灵锁漏洞",
+            ],
+        )
+
+    assert result.exit_code == 0, result.output
+    _, kwargs = run.call_args
+    assert [stage.value for stage in kwargs["stages"]] == ["COVERING"]
+    assert kwargs["stage_kwargs"]["COVERING"] == {
+        "markdown_file": "article.md",
+        "mode": "external",
+        "target_word": "幽灵锁漏洞",
+        "cover_image": str(cover),
+    }
+
+
+def test_export_context_writes_db_snapshot(tmp_path, monkeypatch) -> None:
+    monkeypatch.chdir(tmp_path)
+    db_path = tmp_path / "data" / "hacknews.db"
+    init_database(str(db_path))
+    with sqlite3.connect(db_path) as conn:
+        conn.execute(
+            """
+            INSERT INTO news (
+                id, title, news_url, discuss_url, article_content,
+                discussion_content, content_source_type, content_source_url,
+                created_at
+            )
+            VALUES (
+                1, 'Story', 'https://example.com/story',
+                'https://news.ycombinator.com/item?id=1',
+                'article body', 'discussion body', 'human_supplied',
+                'https://example.com/story', '2026-06-27 10:00:00'
+            )
+            """
+        )
+
+    result = CliRunner().invoke(main, ["export-context", "hackernews", "--date", "2026-06-27"])
+
+    assert result.exit_code == 0, result.output
+    context_path = Path(result.output.strip().split(": ", 1)[1])
+    payload = json.loads(context_path.read_text(encoding="utf-8"))
+    assert payload["count"] == 1
+    assert payload["items"][0]["id"] == 1
+    assert payload["items"][0]["article_content"] == "article body"
+    assert payload["items"][0]["discussion_content"] == "discussion body"
+
+
 def test_audit_command_records_structured_report(tmp_path, monkeypatch) -> None:
     monkeypatch.chdir(tmp_path)
     report = {"items": [], "issues": [], "blocking_count": 0}

@@ -39,6 +39,7 @@ LOW_SIGNAL_IMAGE_TOKENS = (
     "share",
     "og-image",
     "cropped",
+    "certified",
     "cc-by",
     "creative-commons",
     "app-store",
@@ -87,7 +88,15 @@ def is_low_signal_article_image_url(image_url: str) -> bool:
 
     if any(token in haystack for token in LOW_SIGNAL_IMAGE_TOKENS):
         return True
-    return path.endswith(".svg") and "/assets/" in path
+    if path.endswith(".svg") and ("/assets/" in path or "/_astro/" in path or "/static/" in path):
+        return True
+    dimension_match = re.search(r"(?:^|[/?_,])w_(\d+),h_(\d+)(?:[,_/?]|$)", haystack)
+    if dimension_match:
+        width = int(dimension_match.group(1))
+        height = int(dimension_match.group(2))
+        if width < 100 or height < 100:
+            return True
+    return False
 
 
 def save_article_image(

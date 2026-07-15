@@ -96,8 +96,19 @@ class TestIsLowSignalArticleImageUrl:
             "https://terrytao.wordpress.com/wp-content/uploads/2020/03/cropped-covid-19-curves-graphic-social-v3.gif"
         )
         assert is_low_signal_article_image_url("https://www.gstatic.com/images/branding/googlelogo/svg/googlelogo_clr_74x24px.svg")
+        assert is_low_signal_article_image_url("https://nebusec.ai/static/nebula_security.svg")
+        assert is_low_signal_article_image_url("https://nebusec.ai/_astro/race-timeline.light.BdOWiamE.svg")
+        assert is_low_signal_article_image_url(
+            "https://static.wixstatic.com/media/d3c6c2_6cb311b23d384e589472df9b57ce7e21~mv2.jpg/v1/fill/w_94,h_73,al_c,q_80,usm_0.66_1.00_0.01,enc_avif,quality_auto/IMG_4008.jpg"
+        )
+        assert is_low_signal_article_image_url(
+            "https://static.wixstatic.com/media/d3c6c2_a5bf2bded3f24154963d832491833e70~mv2.png/v1/fill/w_40,h_47,al_c,q_85,usm_0.66_1.00_0.01,enc_avif,quality_auto/SN_Certified_ART.png"
+        )
 
     def test_keeps_likely_article_images(self):
         assert not is_low_signal_article_image_url("https://cdn.example.com/photos/article-photo.jpg")
         assert not is_low_signal_article_image_url("https://example.com/images/chart-of-results.png")
         assert not is_low_signal_article_image_url("https://example.com/diagrams/architecture.svg")
+        assert not is_low_signal_article_image_url(
+            "https://static.wixstatic.com/media/d3c6c2_real_chart.png/v1/fill/w_900,h_700,al_c,q_85,enc_avif,quality_auto/chart.png"
+        )
