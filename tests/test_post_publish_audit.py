@@ -176,8 +176,8 @@ def test_post_publish_audit_with_keyword_warnings(tmp_path: Path) -> None:
     assert "1 keyword hit" in kw_findings[0]["message"]
 
 
-def test_post_publish_audit_jsonl_append_only(tmp_path: Path) -> None:
-    """Running audit twice appends, not overwrites."""
+def test_post_publish_audit_jsonl_deduplicates_repeated_findings(tmp_path: Path) -> None:
+    """Running the same audit twice should not duplicate identical findings."""
     from datetime import datetime
     from hn2md.stages.post_publish_audit import run_post_publish_audit
 
@@ -202,7 +202,60 @@ def test_post_publish_audit_jsonl_append_only(tmp_path: Path) -> None:
 
     jsonl_path = Path(r1["jsonl_path"])
     records = read_jsonl(jsonl_path)
-    assert len(records) == r1["jsonl_written"] + r2["jsonl_written"]
+    assert r1["jsonl_written"] > 0
+    assert r2["jsonl_written"] == 0
+    assert len(records) == r1["jsonl_written"]
+
+
+def test_post_publish_audit_tolerates_malformed_jsonl_line(tmp_path: Path) -> None:
+    from datetime import datetime
+
+    from hn2md.stages.post_publish_audit import run_post_publish_audit
+
+    date_str = datetime.now().strftime("%Y%m%d")
+    job_dir = tmp_path / "jobs"
+    job_dir.mkdir()
+    db_path = tmp_path / "test.db"
+    output_dir = tmp_path / "output"
+    _make_ledger(job_dir, date_str, {"wechat_media_id": "wx1", "keyword_warnings": []})
+    jsonl_path = output_dir / "reviews" / f"run_review_{date_str}.jsonl"
+    jsonl_path.parent.mkdir(parents=True)
+    jsonl_path.write_text('{"broken":\n', encoding="utf-8")
+
+    first = run_post_publish_audit(job_dir, db_path, output_dir, dry_run=False)
+    second = run_post_publish_audit(job_dir, db_path, output_dir, dry_run=False)
+
+    integrity_findings = [
+        finding for finding in first["findings"] if finding["check"] == "jsonl_integrity"
+    ]
+    assert len(integrity_findings) == 1
+    assert integrity_findings[0]["severity"] == "warning"
+    assert first["jsonl_written"] > 0
+    assert second["jsonl_written"] == 0
+
+
+def test_post_publish_audit_tolerates_invalid_utf8_jsonl_line(tmp_path: Path) -> None:
+    from datetime import datetime
+
+    from hn2md.stages.post_publish_audit import run_post_publish_audit
+
+    date_str = datetime.now().strftime("%Y%m%d")
+    job_dir = tmp_path / "jobs"
+    job_dir.mkdir()
+    db_path = tmp_path / "test.db"
+    output_dir = tmp_path / "output"
+    _make_ledger(job_dir, date_str, {"wechat_media_id": "wx1", "keyword_warnings": []})
+    jsonl_path = output_dir / "reviews" / f"run_review_{date_str}.jsonl"
+    jsonl_path.parent.mkdir(parents=True)
+    jsonl_path.write_bytes(b'{"message":"' + bytes([0xE4, 0xB8]) + b'"}\n')
+
+    result = run_post_publish_audit(job_dir, db_path, output_dir, dry_run=False)
+
+    integrity_findings = [
+        finding for finding in result["findings"] if finding["check"] == "jsonl_integrity"
+    ]
+    assert len(integrity_findings) == 1
+    assert integrity_findings[0]["details"]["lines"] == [1]
 
 
 def test_post_publish_audit_verbose_writes_info_to_jsonl(tmp_path: Path) -> None:
@@ -437,6 +490,128 @@ def test_post_publish_review_surfaces_stage_retries_and_warnings(tmp_path: Path)
             },
         }
     ]
+
+
+def test_post_publish_review_reads_historical_stage_receipts(tmp_path: Path) -> None:
+    from datetime import datetime
+
+    from hn2md.stages.post_publish_audit import run_post_publish_audit
+
+    date_str = datetime.now().strftime("%Y%m%d")
+    job_dir = tmp_path / "jobs"
+    job_dir.mkdir()
+    db_path = tmp_path / "test.db"
+    output_dir = tmp_path / "output"
+    md_file = output_dir / "hacknews.md"
+    md_file.parent.mkdir(parents=True, exist_ok=True)
+    md_file.write_text("# Test\n", encoding="utf-8")
+    old_collect = {
+        "success": True,
+        "retry_count": 0,
+        "output_summary": {
+            "content_warnings": [
+                {
+                    "id": 42,
+                    "url": "https://example.com/story",
+                    "reason": "article_content_missing",
+                    "action_required": "human_input_or_handler",
+                }
+            ]
+        },
+    }
+    latest_collect = {
+        "success": True,
+        "retry_count": 0,
+        "output_summary": {"content_warnings": []},
+    }
+    ledger = {
+        "date": date_str,
+        "status": "DONE",
+        "stages": {
+            "COLLECTING": latest_collect,
+            "PUBLISHING": {
+                "success": True,
+                "output_summary": {"wechat_media_id": "wx1", "markdown_file": str(md_file)},
+            },
+        },
+        "receipts": {"COLLECTING": [old_collect, latest_collect]},
+    }
+    (job_dir / f"publish_job_{date_str}.json").write_text(json.dumps(ledger), encoding="utf-8")
+
+    result = run_post_publish_audit(job_dir, db_path, output_dir, dry_run=False)
+
+    history_findings = [
+        finding
+        for finding in result["findings"]
+        if finding["check"] == "stage_warning"
+        and finding.get("details", {}).get("warning_key") == "content_warnings"
+    ]
+    assert len(history_findings) == 1
+    assert history_findings[0]["severity"] == "blocking"
+    assert history_findings[0]["details"]["warnings"] == old_collect["output_summary"]["content_warnings"]
+
+
+def test_post_publish_review_reads_historical_process_findings_once(tmp_path: Path) -> None:
+    from datetime import datetime
+
+    from hn2md.stages.post_publish_audit import run_post_publish_audit
+
+    date_str = datetime.now().strftime("%Y%m%d")
+    job_dir = tmp_path / "jobs"
+    job_dir.mkdir()
+    db_path = tmp_path / "test.db"
+    output_dir = tmp_path / "output"
+    md_file = output_dir / "hacknews.md"
+    md_file.parent.mkdir(parents=True, exist_ok=True)
+    md_file.write_text("# Test\n", encoding="utf-8")
+    keyword_warning = {"keyword": "test", "line": 1, "sentence": "test line"}
+    old_publish = {
+        "success": True,
+        "output_summary": {
+            "wechat_media_id": "old",
+            "skipped_images": ["https://example.com/large.png"],
+            "keyword_warnings": [keyword_warning],
+        },
+    }
+    latest_publish = {
+        "success": True,
+        "output_summary": {
+            "wechat_media_id": "latest",
+            "markdown_file": str(md_file),
+            "keyword_warnings": [keyword_warning],
+        },
+    }
+    old_collect = {
+        "success": False,
+        "error": "'gbk' codec can't encode character",
+        "output_summary": {},
+    }
+    latest_collect = {"success": True, "output_summary": {}}
+    ledger = {
+        "date": date_str,
+        "status": "DONE",
+        "stages": {"COLLECTING": latest_collect, "PUBLISHING": latest_publish},
+        "receipts": {
+            "COLLECTING": [old_collect, latest_collect],
+            "PUBLISHING": [old_publish, latest_publish],
+        },
+    }
+    (job_dir / f"publish_job_{date_str}.json").write_text(json.dumps(ledger), encoding="utf-8")
+
+    result = run_post_publish_audit(job_dir, db_path, output_dir, dry_run=False)
+
+    image_warnings = [
+        finding
+        for finding in result["findings"]
+        if finding["check"] == "image_preflight" and finding["severity"] == "warning"
+    ]
+    keyword_warnings = [finding for finding in result["findings"] if finding["check"] == "keyword_review"]
+    environment_warnings = [
+        finding for finding in result["findings"] if finding["check"] == "environment_compatibility"
+    ]
+    assert len(image_warnings) == 1
+    assert len(keyword_warnings) == 1
+    assert len(environment_warnings) == 1
 
 
 def test_post_publish_review_downgrades_resolved_content_warning(tmp_path: Path) -> None:

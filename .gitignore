@@ -58,8 +58,12 @@ docs/*
 
 # ─── Codex / Skills ─────────────────────────────────────────────
 skills/*
+!skills/publish-hacknews-codex/
+!skills/publish-hacknews-codex/**
 !skills/publish-producthunt-monthly/
 !skills/publish-producthunt-monthly/**
+skills/**/__pycache__/
+skills/**/*.py[cod]
 !.codex/
 !.codex/skills/
 .codex/skills/*

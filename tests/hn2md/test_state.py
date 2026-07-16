@@ -222,6 +222,61 @@ class TestJobStateMachine:
         machine.record_receipt(receipt)
         assert Stage.FETCHING.value in machine.job.stages
 
+    def test_record_receipt_preserves_stage_history(self, job_dir):
+        """record_receipt should retain every execution while exposing the latest receipt."""
+        job_dir.mkdir(parents=True)
+        machine, ledger_path = JobStateMachine.load_or_create(job_dir, "20260620")
+        first = StageReceipt(
+            stage=Stage.COLLECTING.value,
+            started_at=datetime.now().isoformat(),
+            finished_at=datetime.now().isoformat(),
+            success=True,
+            output_summary={"content_warnings": [{"id": 42, "reason": "missing"}]},
+        )
+        second = StageReceipt(
+            stage=Stage.COLLECTING.value,
+            started_at=datetime.now().isoformat(),
+            finished_at=datetime.now().isoformat(),
+            success=True,
+            output_summary={"content_warnings": []},
+        )
+
+        machine.record_receipt(first)
+        machine.record_receipt(second)
+
+        assert machine.job.stages[Stage.COLLECTING.value] == second.__dict__
+        assert machine.job.receipts[Stage.COLLECTING.value] == [first.__dict__, second.__dict__]
+        reloaded = PublishJob.from_json(ledger_path)
+        assert reloaded.receipts[Stage.COLLECTING.value] == [first.__dict__, second.__dict__]
+
+    def test_record_receipt_migrates_latest_receipt_from_legacy_ledger(self, job_dir):
+        """The first rerun after upgrade should preserve the pre-history stage receipt."""
+        job_dir.mkdir(parents=True)
+        machine, _ = JobStateMachine.load_or_create(job_dir, "20260620")
+        legacy_receipt = StageReceipt(
+            stage=Stage.COLLECTING.value,
+            started_at=datetime.now().isoformat(),
+            finished_at=datetime.now().isoformat(),
+            success=True,
+            output_summary={"content_warnings": [{"id": 42, "reason": "missing"}]},
+        )
+        rerun_receipt = StageReceipt(
+            stage=Stage.COLLECTING.value,
+            started_at=datetime.now().isoformat(),
+            finished_at=datetime.now().isoformat(),
+            success=True,
+            output_summary={"content_warnings": []},
+        )
+        machine.job.stages[Stage.COLLECTING.value] = legacy_receipt.__dict__
+        machine.job.receipts = {}
+
+        machine.record_receipt(rerun_receipt)
+
+        assert machine.job.receipts[Stage.COLLECTING.value] == [
+            legacy_receipt.__dict__,
+            rerun_receipt.__dict__,
+        ]
+
     def test_stage_completed_successfully(self, job_dir):
         """stage_completed_successfully should check receipt success."""
         job_dir.mkdir(parents=True)

@@ -39,6 +39,13 @@ def test_codex_skill_runs_audit_before_manual_plan() -> None:
     assert "blocking" in skill
 
 
+def test_codex_skill_prefers_compact_draft_plan_material() -> None:
+    skill = Path("skills/publish-hacknews-codex/SKILL.md").read_text(encoding="utf-8")
+    assert "publisher draft-plan hackernews" in skill
+    assert "context_file" in skill
+    assert skill.index("publisher audit hackernews") < skill.index("publisher draft-plan hackernews")
+
+
 def test_codex_skill_defaults_to_wechat_and_astro_publish() -> None:
     skill = Path("skills/publish-hacknews-codex/SKILL.md").read_text(encoding="utf-8")
     assert "默认完整发布必须同时完成 WeChat 和 Astro" in skill
@@ -100,3 +107,9 @@ def test_codex_skill_post_run_review_uses_dedicated_publisher_command() -> None:
     assert "publisher review-run hackernews --json" in skill
     assert "output/reviews/run_review_" in skill
     assert "publisher audit hackernews --post-publish" not in skill
+
+
+def test_codex_skill_uses_publisher_for_future_domain_filters() -> None:
+    skill = Path("skills/publish-hacknews-codex/SKILL.md").read_text(encoding="utf-8")
+
+    assert "publisher filter-domain hackernews" in skill

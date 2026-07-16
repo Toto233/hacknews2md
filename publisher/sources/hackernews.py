@@ -36,4 +36,5 @@ HACKERNEWS_SOURCE = SourceDefinition(
         GenericStage.RENDERING: ("markdown_file", "html_file"),
         GenericStage.COVERING: ("cover_image",),
     },
+    supports_domain_filter=True,
 )

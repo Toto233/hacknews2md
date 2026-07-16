@@ -103,7 +103,7 @@ def test_collect_stage_collects_full_context_and_writes_snapshot(tmp_path) -> No
 def test_collect_stage_reports_image_save_failures_in_receipt_summary(tmp_path) -> None:
     ctx = _ctx(tmp_path)
     crawler = MagicMock()
-    crawler.crawl_article = AsyncMock(return_value=("Readable article body " * 10, ["https://img/fail.svg"]))
+    crawler.crawl_article = AsyncMock(return_value=("Readable article body " * 10, ["https://img/fail.jpg"]))
     crawler.close = AsyncMock()
 
     with (
@@ -121,7 +121,7 @@ def test_collect_stage_reports_image_save_failures_in_receipt_summary(tmp_path) 
         {
             "id": 1,
             "title": "Story",
-            "image_url": "https://img/fail.svg",
+            "image_url": "https://img/fail.jpg",
             "reason": "save_failed",
         }
     ]

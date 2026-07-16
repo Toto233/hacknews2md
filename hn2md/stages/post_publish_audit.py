@@ -312,12 +312,12 @@ def _classify_environment_compatibility_error(error: str) -> tuple[str, str] | N
 
 
 def _check_environment_compatibility(
-    stages: dict[str, Any], date_str: str
+    stages: dict[str, Any],
+    date_str: str,
+    receipt_history: dict[str, Any] | None = None,
 ) -> list[dict[str, Any]]:
     issues: list[dict[str, str]] = []
-    for stage_name, receipt in stages.items():
-        if not isinstance(receipt, dict):
-            continue
+    for stage_name, receipt in _iter_stage_receipts(stages, receipt_history):
         error = str(receipt.get("error") or "").strip()
         if not error:
             continue
@@ -347,16 +347,75 @@ def _check_environment_compatibility(
     ]
 
 
+def _iter_stage_receipts(
+    stages: dict[str, Any], receipt_history: dict[str, Any] | None
+) -> list[tuple[str, dict[str, Any]]]:
+    """Return historical receipts when available, falling back to latest stage receipts."""
+    history = receipt_history if isinstance(receipt_history, dict) else {}
+    stage_names = dict.fromkeys((*stages.keys(), *history.keys()))
+    receipts: list[tuple[str, dict[str, Any]]] = []
+    for stage_name in stage_names:
+        stage_history = history.get(stage_name)
+        if isinstance(stage_history, list) and stage_history:
+            receipts.extend(
+                (stage_name, item) for item in stage_history if isinstance(item, dict)
+            )
+            continue
+        latest = stages.get(stage_name)
+        if isinstance(latest, dict):
+            receipts.append((stage_name, latest))
+    return receipts
+
+
+def _finding_key(finding: dict[str, Any]) -> str:
+    payload = {key: value for key, value in finding.items() if key != "ts"}
+    return json.dumps(payload, ensure_ascii=False, sort_keys=True)
+
+
+def _deduplicate_findings(findings: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    unique: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    for finding in findings:
+        key = _finding_key(finding)
+        if key in seen:
+            continue
+        seen.add(key)
+        unique.append(finding)
+    return unique
+
+
+def _read_existing_finding_keys(path: Path) -> tuple[set[str], list[int]]:
+    if not path.exists():
+        return set(), []
+    keys: set[str] = set()
+    malformed_lines: list[int] = []
+    for line_number, raw_line in enumerate(path.read_bytes().splitlines(), start=1):
+        if not raw_line.strip():
+            continue
+        try:
+            line = raw_line.decode("utf-8")
+            record = json.loads(line)
+        except (UnicodeDecodeError, json.JSONDecodeError):
+            malformed_lines.append(line_number)
+            continue
+        if not isinstance(record, dict):
+            malformed_lines.append(line_number)
+            continue
+        keys.add(_finding_key(record))
+    return keys, malformed_lines
+
+
 def _check_stage_receipts(
-    stages: dict[str, Any], date_str: str, db_path: Path | None = None
+    stages: dict[str, Any],
+    date_str: str,
+    db_path: Path | None = None,
+    receipt_history: dict[str, Any] | None = None,
 ) -> list[dict[str, Any]]:
     """Surface run-time problems from stage receipts for post-run follow-up."""
     findings: list[dict[str, Any]] = []
     warning_keys = ("image_warnings", "content_warnings", "discussion_warnings")
 
-    for stage_name, receipt in stages.items():
-        if not isinstance(receipt, dict):
-            continue
+    for stage_name, receipt in _iter_stage_receipts(stages, receipt_history):
 
         if receipt.get("success") is False:
             findings.append(
@@ -474,12 +533,14 @@ def run_post_publish_audit(
     # Load the publish receipt from today's job ledger
     ledger_path = job_dir / f"publish_job_{date_str}.json"
     stages: dict[str, Any] = {}
+    receipt_history: dict[str, Any] = {}
     receipt: dict[str, Any] = {}
     render_receipt: dict[str, Any] = {}
     if ledger_path.exists():
         try:
             ledger = json.loads(ledger_path.read_text(encoding="utf-8"))
             stages = ledger.get("stages", {})
+            receipt_history = ledger.get("receipts", {})
             receipt = stages.get("PUBLISHING", {}).get("output_summary", {})
             render_receipt = stages.get("RENDERING", {}).get("output_summary", {})
         except (OSError, json.JSONDecodeError):
@@ -488,21 +549,45 @@ def run_post_publish_audit(
     all_findings: list[dict[str, Any]] = []
 
     # Run all checks
-    all_findings.extend(_check_stage_receipts(stages, date_str, db_path))
-    all_findings.extend(_check_environment_compatibility(stages, date_str))
+    all_findings.extend(_check_stage_receipts(stages, date_str, db_path, receipt_history))
+    all_findings.extend(_check_environment_compatibility(stages, date_str, receipt_history))
     all_findings.extend(_check_wechat_media_id(receipt, date_str, dry_run))
-    all_findings.extend(_check_image_preflight(receipt, date_str))
-    all_findings.extend(_check_keyword_warnings(receipt, date_str))
+    for stage_name, historical_receipt in _iter_stage_receipts(stages, receipt_history):
+        if stage_name != "PUBLISHING":
+            continue
+        output_summary = historical_receipt.get("output_summary") or {}
+        if not isinstance(output_summary, dict):
+            continue
+        all_findings.extend(_check_image_preflight(output_summary, date_str))
+        all_findings.extend(_check_keyword_warnings(output_summary, date_str))
     all_findings.extend(_check_story_completeness(db_path, receipt, date_str))
     all_findings.extend(_check_astro_output(receipt, render_receipt, date_str))
+    all_findings = _deduplicate_findings(all_findings)
 
-    # Append to JSONL — only warning/blocking unless verbose
+    # Append only new findings — only warning/blocking unless verbose.
+    existing_keys, malformed_lines = _read_existing_finding_keys(jsonl_path)
+    if malformed_lines:
+        all_findings.append(
+            _finding(
+                date_str,
+                "jsonl_integrity",
+                "warning",
+                f"Skipped {len(malformed_lines)} malformed JSONL line(s)",
+                {"lines": malformed_lines[:20]},
+            )
+        )
+        all_findings = _deduplicate_findings(all_findings)
+    written = 0
     for finding in all_findings:
         if verbose or finding.get("severity") in ("warning", "blocking"):
-            append_jsonl(jsonl_path, finding)
+            finding_key = _finding_key(finding)
+            if finding_key in existing_keys:
+                continue
+            append_jsonl(jsonl_path, dict(finding))
+            existing_keys.add(finding_key)
+            written += 1
 
     blocking_count = sum(1 for f in all_findings if f.get("severity") == "blocking")
-    written = sum(1 for f in all_findings if verbose or f.get("severity") in ("warning", "blocking"))
     return {
         "findings": all_findings,
         "blocking_count": blocking_count,

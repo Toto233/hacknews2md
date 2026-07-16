@@ -5,6 +5,7 @@ from pathlib import Path
 import json as json_mod
 import re
 import sqlite3
+from urllib.parse import urlsplit
 
 import click
 
@@ -17,6 +18,7 @@ from publisher.context import PublisherContext, parse_date_period, parse_month_p
 from publisher.pipeline.runner import run_release
 from publisher.sources import get_source
 from publisher.sources.base import SourceDefinition, validate_source_definition
+from src.core.fetch_news import normalize_domain
 from src.db.connection import get_db
 from src.utils.db_utils import init_database
 from src.utils.scraper_failures import extract_domain
@@ -91,6 +93,38 @@ def _ensure_hackernews(source_name: str, date_value: str | None) -> PublisherCon
         raise click.ClickException("manual story repair commands currently support hackernews only")
     init_database(str(ctx.db_path))
     return ctx
+
+
+def _load_domain_filter_source(source_name: str) -> tuple[SourceDefinition, PublisherContext]:
+    source = get_source(source_name)
+    if not source.supports_domain_filter:
+        raise click.ClickException(f"source does not support domain filtering: {source.name}")
+    return _load_date_source(source_name, None)
+
+
+def _normalize_filter_domain(value: str) -> str:
+    raw = value.strip()
+    if not raw or any(char.isspace() for char in raw):
+        raise ValueError("domain contains whitespace")
+
+    parsed = urlsplit(raw if "://" in raw else f"//{raw}")
+    if parsed.scheme and parsed.scheme.lower() not in ("http", "https"):
+        raise ValueError("unsupported URL scheme")
+    if parsed.username is not None or parsed.password is not None:
+        raise ValueError("URL userinfo is not allowed")
+    try:
+        parsed.port
+    except ValueError as exc:
+        raise ValueError("invalid URL port") from exc
+
+    hostname = normalize_domain(parsed.hostname or "")
+    labels = hostname.split(".")
+    if len(labels) < 2 or any(
+        not re.fullmatch(r"[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?", label)
+        for label in labels
+    ):
+        raise ValueError("invalid hostname")
+    return hostname
 
 
 @main.command()
@@ -234,6 +268,28 @@ def export_context(source_name: str, date_value: str | None) -> None:
         period=ctx.period,
     )
     click.echo(f"Context exported: {context_path}")
+
+
+@main.command("draft-plan")
+@click.argument("source_name")
+@click.option("--date", "date_value", default=None, help="YYYY-MM-DD or YYYYMMDD")
+@click.option("--article-chars", default=1200, show_default=True, type=click.IntRange(min=0))
+@click.option("--discussion-chars", default=800, show_default=True, type=click.IntRange(min=0))
+def draft_plan(source_name: str, date_value: str | None, article_chars: int, discussion_chars: int) -> None:
+    """Export compact manual plan material with short excerpts."""
+    source, ctx = _load_date_source(source_name, date_value)
+    if source.name != "hackernews":
+        raise click.ClickException("draft-plan currently supports hackernews only")
+    from hn2md.context_export import export_hackernews_plan_draft_from_db
+
+    draft_path = export_hackernews_plan_draft_from_db(
+        db_path=ctx.db_path,
+        codex_dir=ctx.codex_dir,
+        period=ctx.period,
+        article_chars=article_chars,
+        discussion_chars=discussion_chars,
+    )
+    click.echo(f"Plan draft exported: {draft_path}")
 
 
 def _existing_render_datetime(machine: JobStateMachine) -> datetime | None:
@@ -418,6 +474,30 @@ def skip_story(
             )
     suffix = f" and filtered {domain}" if filter_domain else ""
     click.echo(f"Skipped story {news_id}{suffix}")
+
+
+@main.command("filter-domain")
+@click.argument("source_name")
+@click.argument("domain")
+@click.option("--reason", default="filtered by human review", show_default=True)
+def filter_domain(source_name: str, domain: str, reason: str) -> None:
+    """Filter future stories from a source domain without deleting current stories."""
+    source, ctx = _load_domain_filter_source(source_name)
+    init_database(str(ctx.db_path))
+    try:
+        normalized_domain = _normalize_filter_domain(domain)
+    except ValueError as exc:
+        raise click.ClickException(f"invalid domain or URL: {domain}") from exc
+    with get_db(str(ctx.db_path)) as conn:
+        conn.execute(
+            """
+            INSERT INTO filtered_domains (domain, reason, created_at)
+            VALUES (?, ?, datetime('now', 'localtime'))
+            ON CONFLICT(domain) DO UPDATE SET reason=excluded.reason, created_at=excluded.created_at
+            """,
+            (normalized_domain, reason),
+        )
+    click.echo(f"Filtered domain for {source.name}: {normalized_domain}")
 
 
 @main.command()

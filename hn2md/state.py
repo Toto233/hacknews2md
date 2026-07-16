@@ -175,7 +175,20 @@ class JobStateMachine:
         self._save()
 
     def record_receipt(self, receipt: StageReceipt) -> None:
-        self.job.stages[receipt.stage] = asdict(receipt)
+        serialized = asdict(receipt)
+        history = self.job.receipts.get(receipt.stage)
+        if isinstance(history, list):
+            stage_history = history
+        elif isinstance(history, dict):
+            stage_history = [history]
+        else:
+            stage_history = []
+            previous = self.job.stages.get(receipt.stage)
+            if isinstance(previous, dict):
+                stage_history.append(previous)
+        stage_history.append(serialized)
+        self.job.receipts[receipt.stage] = stage_history
+        self.job.stages[receipt.stage] = serialized
         self.job.updated_at = datetime.now().isoformat()
         self._save()
 

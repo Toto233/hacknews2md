@@ -21,6 +21,7 @@ class SourceDefinition:
     enabled: bool = True
     db_filename: str = "hacknews.db"
     audit_required_stages: tuple[GenericStage, ...] = (GenericStage.PLANNING, GenericStage.PUBLISHING)
+    supports_domain_filter: bool = False
 
 
 def validate_source_definition(source: SourceDefinition) -> list[str]:

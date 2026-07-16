@@ -299,6 +299,60 @@ def test_export_context_writes_db_snapshot(tmp_path, monkeypatch) -> None:
     assert payload["items"][0]["discussion_content"] == "discussion body"
 
 
+def test_draft_plan_writes_compact_manual_material(tmp_path, monkeypatch) -> None:
+    monkeypatch.chdir(tmp_path)
+    db_path = tmp_path / "data" / "hacknews.db"
+    init_database(str(db_path))
+    article = "article body " * 20
+    discussion = "discussion body " * 20
+    with sqlite3.connect(db_path) as conn:
+        conn.execute(
+            """
+            INSERT INTO news (
+                id, title, news_url, discuss_url, article_content,
+                discussion_content, title_chs, content_summary, discuss_summary,
+                content_source_type, content_source_url, created_at
+            )
+            VALUES (
+                1, 'Story', 'https://example.com/story',
+                'https://news.ycombinator.com/item?id=1',
+                ?, ?, '旧中文标题', '旧正文摘要', '旧讨论摘要',
+                'scraped', 'https://example.com/story', '2026-06-27 10:00:00'
+            )
+            """,
+            (article, discussion),
+        )
+
+    result = CliRunner().invoke(
+        main,
+        [
+            "draft-plan",
+            "hackernews",
+            "--date",
+            "2026-06-27",
+            "--article-chars",
+            "20",
+            "--discussion-chars",
+            "15",
+        ],
+    )
+
+    assert result.exit_code == 0, result.output
+    draft_path = Path(result.output.strip().split(": ", 1)[1])
+    payload = json.loads(draft_path.read_text(encoding="utf-8"))
+    item = payload["items"][0]
+    assert payload["period"] == "20260627"
+    assert payload["ordered_ids"] == [1]
+    assert payload["tags"] == []
+    assert item["id"] == 1
+    assert item["title_chs"] == "旧中文标题"
+    assert item["content_summary"] == "旧正文摘要"
+    assert item["article_length"] == len(article)
+    assert item["discussion_length"] == len(discussion)
+    assert item["article_excerpt"] == article[:20].rstrip() + "..."
+    assert item["discussion_excerpt"] == discussion[:15].rstrip() + "..."
+
+
 def test_audit_command_records_structured_report(tmp_path, monkeypatch) -> None:
     monkeypatch.chdir(tmp_path)
     report = {"items": [], "issues": [], "blocking_count": 0}
@@ -536,3 +590,65 @@ def test_skip_story_can_delete_and_add_domain_filter(tmp_path, monkeypatch) -> N
             "SELECT domain, reason FROM filtered_domains WHERE domain='marfapublicradio.org'"
         ).fetchone()
     assert filter_row == ("marfapublicradio.org", "403")
+
+
+def test_filter_domain_adds_hackernews_filter_without_deleting_story(tmp_path, monkeypatch) -> None:
+    monkeypatch.chdir(tmp_path)
+    db_path = tmp_path / "data" / "hacknews.db"
+    init_database(str(db_path))
+    with sqlite3.connect(db_path) as conn:
+        conn.execute(
+            """
+            INSERT INTO news (id, title, news_url, created_at)
+            VALUES (4001, 'Reuters story', 'https://www.reuters.com/world/story', datetime('now', 'localtime'))
+            """
+        )
+
+    result = CliRunner().invoke(
+        main,
+        ["filter-domain", "hackernews", "https://www.reuters.com/world/story", "--reason", "paywall"],
+    )
+
+    assert result.exit_code == 0, result.output
+    with sqlite3.connect(db_path) as conn:
+        story_count = conn.execute("SELECT COUNT(*) FROM news WHERE id=4001").fetchone()[0]
+        filter_row = conn.execute(
+            "SELECT domain, reason FROM filtered_domains WHERE domain='reuters.com'"
+        ).fetchone()
+    assert story_count == 1
+    assert filter_row == ("reuters.com", "paywall")
+
+
+def test_filter_domain_rejects_unsupported_source(tmp_path, monkeypatch) -> None:
+    monkeypatch.chdir(tmp_path)
+
+    result = CliRunner().invoke(main, ["filter-domain", "producthunt", "example.com"])
+
+    assert result.exit_code != 0
+    assert "does not support domain filtering" in result.output
+
+
+def test_filter_domain_rejects_malformed_or_unsafe_domain_inputs(tmp_path, monkeypatch) -> None:
+    monkeypatch.chdir(tmp_path)
+
+    for domain in ("not a domain", "mailto:foo@example.com", "https://user@example.com/story"):
+        result = CliRunner().invoke(main, ["filter-domain", "hackernews", domain])
+
+        assert result.exit_code != 0
+        assert "invalid domain or URL" in result.output
+
+
+def test_filter_domain_normalizes_url_with_port(tmp_path, monkeypatch) -> None:
+    monkeypatch.chdir(tmp_path)
+
+    result = CliRunner().invoke(
+        main,
+        ["filter-domain", "hackernews", "https://www.example.com:8443/story"],
+    )
+
+    assert result.exit_code == 0, result.output
+    with sqlite3.connect(tmp_path / "data" / "hacknews.db") as conn:
+        filter_row = conn.execute(
+            "SELECT domain FROM filtered_domains WHERE domain='example.com'"
+        ).fetchone()
+    assert filter_row == ("example.com",)

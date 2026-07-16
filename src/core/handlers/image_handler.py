@@ -1,7 +1,7 @@
 """
 Image handler -- extracted from summarize_news5.py.
 
-Downloads article images, converts unsupported formats (avif/webp/svg) to PNG,
+Downloads article images, converts unsupported formats (avif/webp) to PNG,
 and enforces a minimum dimension filter.
 """
 
@@ -86,9 +86,9 @@ def is_low_signal_article_image_url(image_url: str) -> bool:
     if decoded_hex_parts:
         haystack = f"{haystack} {' '.join(decoded_hex_parts)}"
 
-    if any(token in haystack for token in LOW_SIGNAL_IMAGE_TOKENS):
+    if path.endswith(".svg"):
         return True
-    if path.endswith(".svg") and ("/assets/" in path or "/_astro/" in path or "/static/" in path):
+    if any(token in haystack for token in LOW_SIGNAL_IMAGE_TOKENS):
         return True
     dimension_match = re.search(r"(?:^|[/?_,])w_(\d+),h_(\d+)(?:[,_/?]|$)", haystack)
     if dimension_match:
@@ -137,6 +137,8 @@ def save_article_image(
         ext = get_extension_from_content_type(content_type)
         if not ext:
             return None
+        if ext == ".svg":
+            return None
 
         today = datetime.now()
         date_dir = os.path.join("output/images", f"{today.year:04d}{today.month:02d}{today.day:02d}")
@@ -176,8 +178,8 @@ def save_article_image(
                     os.remove(full_path)
                     return None
 
-                # Convert avif / webp / svg to PNG for broader compatibility
-                if ext in [".avif", ".webp", ".svg"]:
+                # Convert avif / webp to PNG for broader compatibility
+                if ext in [".avif", ".webp"]:
                     png_path = full_path.replace(ext, ".png")
                     img.save(png_path, "PNG")
                     os.remove(full_path)

@@ -20,4 +20,5 @@ crawl4ai
 scrapling
 playwright
 PyPDF2
+pycryptodome
 pyperclip

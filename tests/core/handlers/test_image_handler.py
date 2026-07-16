@@ -105,10 +105,16 @@ class TestIsLowSignalArticleImageUrl:
             "https://static.wixstatic.com/media/d3c6c2_a5bf2bded3f24154963d832491833e70~mv2.png/v1/fill/w_40,h_47,al_c,q_85,usm_0.66_1.00_0.01,enc_avif,quality_auto/SN_Certified_ART.png"
         )
 
+    def test_filters_all_svg_images(self):
+        assert is_low_signal_article_image_url("https://example.com/diagrams/architecture.svg")
+        assert is_low_signal_article_image_url(
+            "https://jj-vcs.github.io/jj/latest/images/operation-log/fixup-before-light.svg"
+        )
+        assert is_low_signal_article_image_url("https://example.com/image.svg?width=1200")
+
     def test_keeps_likely_article_images(self):
         assert not is_low_signal_article_image_url("https://cdn.example.com/photos/article-photo.jpg")
         assert not is_low_signal_article_image_url("https://example.com/images/chart-of-results.png")
-        assert not is_low_signal_article_image_url("https://example.com/diagrams/architecture.svg")
         assert not is_low_signal_article_image_url(
             "https://static.wixstatic.com/media/d3c6c2_real_chart.png/v1/fill/w_900,h_700,al_c,q_85,enc_avif,quality_auto/chart.png"
         )

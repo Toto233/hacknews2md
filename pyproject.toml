@@ -32,6 +32,7 @@ dependencies = [
     "scrapling",
     "playwright",
     "PyPDF2",
+    "pycryptodome",
     "pyperclip",
     "click>=8.1",
 ]
