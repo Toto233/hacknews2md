@@ -8,6 +8,9 @@ from src.security.url_validator import SecurityError, validate_url
 
 logger = logging.getLogger(__name__)
 
+
+FETCH_TIMEOUT_SECONDS = 30
+
 try:
     from scrapling.fetchers import Fetcher
 
@@ -44,7 +47,15 @@ class ScraplingCrawler:
             return "", []
 
         try:
-            page = Fetcher.get(url, stealthy_headers=True)
+            page = Fetcher.get(
+                url,
+                stealthy_headers=True,
+                timeout=FETCH_TIMEOUT_SECONDS,
+                retries=0,
+            )
+        except TimeoutError:
+            logger.warning("[SCRAPLING] Fetch timed out for %s", url[:60])
+            return "", []
         except Exception as exc:
             logger.error("[SCRAPLING] Fetch failed for %s: %s", url[:60], exc)
             return "", []

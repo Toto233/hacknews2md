@@ -10,7 +10,7 @@ Create a WeChat Official Account main cover with the native image generation too
 ## Workflow
 
 1. Identify the article's cover hook.
-   - For HackNews daily posts, use the lead story unless the user specifies another topic.
+   - For HackNews daily posts, use the first story in the manual plan's `ordered_ids` unless the user explicitly specifies another topic. Do not select a lower-ranked story for visual appeal.
    - Compress the hook into `DISPLAY_TITLE`, usually 4-12 Chinese characters for maximum impact.
    - Preserve the original meaning, emotion, and core conflict.
    - If the title is long, split it into 2-3 short lines; do not shrink the font to force one line.

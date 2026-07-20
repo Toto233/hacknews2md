@@ -26,6 +26,16 @@ This file records durable project decisions that should not be changed back and 
 
 ## Accepted decisions
 
+### 2026-07-18 - Keep visual fallback work outside content readiness
+
+- Status: Accepted
+- Issue: N/A (narrow daily-publishing maintenance, implemented with focused regression tests)
+- Supersedes: N/A
+- Context: A slow or blocked Selenium page could hold the whole collection batch open even though article text and discussion data were already available. Pre-plan audit also treated not-yet-written manual summaries as blockers, requiring a routine exemption.
+- Decision: Article collection persists readable content without waiting for screenshots. `publisher capture-screenshots` performs optional, per-page-bounded visual capture separately. Pre-plan audit checks content and provenance only; strict audit runs before publishing and checks final summaries. Covers must use the first `ordered_ids` story unless the user explicitly chooses another topic.
+- Failure mode of alternative: Keeping screenshots in the critical path can turn one slow page into a publishing outage. Treating expected empty manual summaries as pre-plan failures normalizes broad audit exemptions, which can hide a real content-source issue. Selecting a visually stronger lower-ranked story makes the cover contradict the article order readers receive.
+- Consequences: Screenshot warnings do not block planning or publishing. Skills must call the pre-plan audit phase and derive `DISPLAY_TITLE` from the first planned item. Cover receipts record that planned lead story for review.
+
 ### 2026-07-05 — Use GitHub issues for recurring publish improvements
 
 - Status: Accepted

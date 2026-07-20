@@ -90,7 +90,7 @@ def test_collect_stage_collects_full_context_and_writes_snapshot(tmp_path) -> No
     assert row == (
         ("Readable article body " * 10).strip(),
         "HN discussion",
-        "shot.png",
+        None,
         "one.png",
         "two.png",
         None,
@@ -362,6 +362,30 @@ def test_collect_stage_records_scraper_failure_when_article_missing(tmp_path) ->
             "SELECT domain, sample_url, fail_count FROM scraper_failures WHERE domain='example.com'"
         ).fetchone()
     assert row == ("example.com", "https://example.com/story", 1)
+
+
+def test_collect_stage_rejects_paywall_shell_content(tmp_path) -> None:
+    ctx = _ctx(tmp_path)
+    crawler = MagicMock()
+    crawler.crawl_article = AsyncMock(return_value=("Subscribe to read this article. " * 10, []))
+    crawler.close = AsyncMock()
+
+    with (
+        patch("src.core.crawlers.scrapling_crawler.ScraplingCrawler", return_value=crawler),
+        patch(
+            "src.core.handlers.discussion_handler.get_discussion_content_async",
+            new=AsyncMock(return_value="HN discussion"),
+        ),
+    ):
+        result = CollectStage().execute(ctx, object(), concurrency=1)
+
+    assert result["collected"] == 0
+    assert result["content_warnings"][0]["reason"] == "paywall_or_shell_page"
+    with sqlite3.connect(ctx.db_path) as conn:
+        row = conn.execute(
+            "SELECT article_content, content_source_type FROM news WHERE id=1"
+        ).fetchone()
+    assert row == (None, None)
 
 
 def test_collect_stage_records_discussion_retry_failure_in_receipt(tmp_path) -> None:

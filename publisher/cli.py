@@ -191,16 +191,41 @@ def collect(source_name: str, date_value: str | None, concurrency: int, rerun: b
     )
 
 
+@main.command("capture-screenshots")
+@click.argument("source_name")
+@click.option("--date", "date_value", default=None, help="YYYY-MM-DD or YYYYMMDD")
+@click.option("--concurrency", default=3, type=click.IntRange(min=1))
+def capture_screenshots(source_name: str, date_value: str | None, concurrency: int) -> None:
+    """Capture optional page screenshots without reopening the collection stage."""
+    source, ctx = _load_date_source(source_name, date_value)
+    if source.name != "hackernews":
+        raise click.ClickException("capture-screenshots currently supports hackernews only")
+
+    from hn2md.screenshot_capture import capture_missing_screenshots
+    from publisher.pipeline.runner import _hn_runtime_context
+
+    result = capture_missing_screenshots(_hn_runtime_context(ctx), concurrency=concurrency)
+    click.echo(json_mod.dumps(result, ensure_ascii=False))
+
+
 @main.command()
 @click.argument("source_name")
 @click.option("--date", "date_value", default=None, help="YYYY-MM-DD or YYYYMMDD")
 @click.option("--json", "json_output", is_flag=True, help="Print structured audit JSON")
 @click.option("--approve", is_flag=True, help="Approve the current blocking audit snapshot")
+@click.option(
+    "--phase",
+    type=click.Choice(["pre-plan", "strict"], case_sensitive=False),
+    default="strict",
+    show_default=True,
+    help="Use pre-plan before manual summaries; strict validates final summaries.",
+)
 def audit(
     source_name: str,
     date_value: str | None,
     json_output: bool,
     approve: bool,
+    phase: str,
 ) -> None:
     source, ctx = _load_date_source(source_name, date_value)
     machine, _ = JobStateMachine.load_or_create(ctx.job_dir, ctx.period)
@@ -214,7 +239,8 @@ def audit(
 
     from publisher.pipeline.runner import _hn_runtime_context
 
-    report = run_audit(_hn_runtime_context(ctx))
+    report = run_audit(_hn_runtime_context(ctx), include_summaries=phase == "strict")
+    report["phase"] = phase
     machine.record_audit_report(report)
     if json_output:
         click.echo(json_mod.dumps(report, ensure_ascii=False, indent=2))

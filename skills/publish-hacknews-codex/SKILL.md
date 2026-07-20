@@ -12,6 +12,7 @@ Run every command from the repository root. `publisher` is the only publishing e
 ```powershell
 publisher fetch hackernews
 publisher collect hackernews --concurrency 3
+publisher capture-screenshots hackernews --concurrency 3
 ```
 
 Completion criterion: collection returns a `context_file`, DB rows exist for today, and content/discussion lengths have been checked:
@@ -42,7 +43,7 @@ When 用户说“补齐了”, refresh the collection receipt before planning:
 
 ```powershell
 publisher collect hackernews --rerun
-publisher audit hackernews --json
+publisher audit hackernews --phase pre-plan --json
 ```
 
 Use `filter-domain` to block future stories from a confirmed paywall or unusable domain while keeping today's story. Only use `skip-story --filter-domain` after the user confirms the current story should also be dropped.
@@ -113,7 +114,7 @@ publisher render hackernews --target wechat --rerun
 
 ## 4. Cover
 
-Pick a 10-15 Chinese-character target word from the lead story: “主体 + 事件”.
+Pick a 10-15 Chinese-character target word from the first item in the manual plan's `ordered_ids`: “主体 + 事件”. Do not select a lower-ranked story for visual appeal; the cover stage records that lead story in its receipt.
 
 ```powershell
 publisher cover hackernews "<markdown_file>" --mode ai --target-word "<短标题>"

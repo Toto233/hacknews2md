@@ -43,7 +43,7 @@ def run_release(
         if not rerun and machine.stage_completed_successfully(hn_stage):
             continue
         if stage_name in source.audit_required_stages:
-            _ensure_audit_ready(runtime_ctx, machine)
+            _ensure_audit_ready(runtime_ctx, machine, strict=stage_name == GenericStage.PUBLISHING)
         stage_factory = source.stages[stage_name]
         stage = stage_factory()
         kwargs: dict[str, object] = dict(
@@ -89,11 +89,15 @@ def _validate_stage_artifacts(stage_name: GenericStage, receipt: object, require
         raise RuntimeError(f"{stage_name.value} missing required artifacts: {joined}")
 
 
-def _ensure_audit_ready(runtime_ctx: RuntimeContext, machine: JobStateMachine) -> None:
+def _ensure_audit_ready(runtime_ctx: RuntimeContext, machine: JobStateMachine, *, strict: bool) -> None:
     from hn2md.stages.audit import require_audit_clear_or_exempt, run_audit
 
-    if machine.job.audit_report is None:
-        machine.record_audit_report(run_audit(runtime_ctx))
+    required_phase = "strict" if strict else "pre-plan"
+    previous_phase = (machine.job.audit_report or {}).get("phase") or required_phase
+    if machine.job.audit_report is None or previous_phase != required_phase:
+        report = run_audit(runtime_ctx, include_summaries=strict)
+        report["phase"] = required_phase
+        machine.record_audit_report(report)
     require_audit_clear_or_exempt(machine)
 
 

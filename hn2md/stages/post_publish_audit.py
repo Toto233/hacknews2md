@@ -220,7 +220,9 @@ def _content_warning_resolved_by_db(db_path: Path | None, warning: dict[str, Any
         return False
 
     if row is None:
-        return False
+        # A successful query with no current-day row means the story was
+        # intentionally skipped after collection rather than left unresolved.
+        return True
     return bool(str(row["article_content"] or "").strip() and str(row["content_source_url"] or "").strip())
 
 
@@ -405,6 +407,18 @@ def _read_existing_finding_keys(path: Path) -> tuple[set[str], list[int]]:
     return keys, malformed_lines
 
 
+def _receipt_warning_key(stage_name: str, warning_key: str, warning: Any) -> str:
+    """Identify the same operational warning across rerun receipts."""
+    if isinstance(warning, dict):
+        identity = {
+            key: warning.get(key)
+            for key in ("id", "url", "image_url", "reason", "action_required")
+            if warning.get(key) is not None
+        }
+        return json.dumps([stage_name, warning_key, identity], ensure_ascii=False, sort_keys=True)
+    return json.dumps([stage_name, warning_key, repr(warning)], ensure_ascii=False)
+
+
 def _check_stage_receipts(
     stages: dict[str, Any],
     date_str: str,
@@ -414,31 +428,33 @@ def _check_stage_receipts(
     """Surface run-time problems from stage receipts for post-run follow-up."""
     findings: list[dict[str, Any]] = []
     warning_keys = ("image_warnings", "content_warnings", "discussion_warnings")
+    highest_retry_by_stage: dict[str, tuple[int, Any]] = {}
+    seen_warning_keys: set[str] = set()
 
     for stage_name, receipt in _iter_stage_receipts(stages, receipt_history):
 
         if receipt.get("success") is False:
+            latest_receipt = stages.get(stage_name)
+            recovered = isinstance(latest_receipt, dict) and latest_receipt.get("success") is True
             findings.append(
                 _finding(
                     date_str,
                     "stage_failure",
-                    "blocking",
-                    f"{stage_name} failed during the run",
-                    {"stage": stage_name, "error": receipt.get("error")},
+                    "info" if recovered else "blocking",
+                    f"{stage_name} failed but later recovered" if recovered else f"{stage_name} failed during the run",
+                    {
+                        "stage": stage_name,
+                        "error": receipt.get("error"),
+                        "recovered": recovered,
+                    },
                 )
             )
 
         retry_count = int(receipt.get("retry_count") or 0)
         if retry_count > 0:
-            findings.append(
-                _finding(
-                    date_str,
-                    "stage_retry",
-                    "warning",
-                    f"{stage_name} retried {retry_count} time(s)",
-                    {"stage": stage_name, "retry_count": retry_count, "error": receipt.get("error")},
-                )
-            )
+            previous = highest_retry_by_stage.get(stage_name)
+            if previous is None or retry_count > previous[0]:
+                highest_retry_by_stage[stage_name] = (retry_count, receipt.get("error"))
 
         output_summary = receipt.get("output_summary") or {}
         if not isinstance(output_summary, dict):
@@ -446,6 +462,16 @@ def _check_stage_receipts(
 
         for key in warning_keys:
             warnings = output_summary.get(key) or []
+            if not warnings:
+                continue
+            unique_warnings: list[Any] = []
+            for warning in warnings:
+                warning_id = _receipt_warning_key(stage_name, key, warning)
+                if warning_id in seen_warning_keys:
+                    continue
+                seen_warning_keys.add(warning_id)
+                unique_warnings.append(warning)
+            warnings = unique_warnings
             if not warnings:
                 continue
 
@@ -504,6 +530,16 @@ def _check_stage_receipts(
                 )
             )
 
+    for stage_name, (retry_count, error) in highest_retry_by_stage.items():
+        findings.append(
+            _finding(
+                date_str,
+                "stage_retry",
+                "warning",
+                f"{stage_name} retried {retry_count} time(s)",
+                {"stage": stage_name, "retry_count": retry_count, "error": error},
+            )
+        )
     return findings
 
 

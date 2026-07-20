@@ -82,6 +82,58 @@ def test_clean_audit_does_not_need_exemption(tmp_path) -> None:
     assert require_audit_clear_or_exempt(machine) is False
 
 
+def test_pre_plan_audit_ignores_summaries_but_keeps_content_gates(tmp_path) -> None:
+    ctx = _ctx(tmp_path)
+    init_database(str(ctx.db_path))
+    article = "Readable article body. " * 10
+    with sqlite3.connect(ctx.db_path) as conn:
+        conn.execute(
+            """
+            INSERT INTO news (
+                id, title, news_url, article_content, discussion_content,
+                content_source_type, content_source_url, created_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, datetime('now', 'localtime'))
+            """,
+            (1, "Story", "https://example.com/story", article, "discussion", "full_text", "https://example.com/story"),
+        )
+
+    report = run_audit(ctx, include_summaries=False)
+
+    assert report["blocking_count"] == 0
+    assert not {"summary_missing", "discussion_summary_missing"} & {issue["code"] for issue in report["issues"]}
+
+
+def test_audit_blocks_paywall_shell_even_when_text_is_long(tmp_path) -> None:
+    ctx = _ctx(tmp_path)
+    init_database(str(ctx.db_path))
+    article = ("Navigation links and account options. " * 50) + "Subscribe to read"
+    with sqlite3.connect(ctx.db_path) as conn:
+        conn.execute(
+            """
+            INSERT INTO news (
+                id, title, news_url, article_content, discussion_content,
+                content_summary, discuss_summary, content_source_type,
+                content_source_url, created_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now', 'localtime'))
+            """,
+            (
+                1,
+                "Paywall",
+                "https://example.com/paywall",
+                article,
+                "discussion",
+                "summary",
+                "discussion summary",
+                "full_text",
+                "https://example.com/paywall",
+            ),
+        )
+
+    report = run_audit(ctx)
+
+    assert "paywall_or_shell_page" in {issue["code"] for issue in report["issues"]}
+
+
 def test_audit_blocks_fallback_source_until_human_review(tmp_path) -> None:
     ctx = _ctx(tmp_path)
     init_database(str(ctx.db_path))
@@ -252,6 +304,21 @@ def test_audit_blocks_short_article_with_javascript_marker(tmp_path) -> None:
 def test_audit_merges_collect_content_warnings_from_ledger(tmp_path) -> None:
     ctx = _ctx(tmp_path)
     init_database(str(ctx.db_path))
+    with sqlite3.connect(ctx.db_path) as conn:
+        conn.execute(
+            """
+            INSERT INTO news (
+                id, title, news_url, article_content, discussion_content,
+                content_summary, discuss_summary, content_source_type,
+                content_source_url, created_at
+            ) VALUES (
+                3838, 'Unresolved', 'https://pudding.cool/story',
+                'A complete article body that is deliberately longer than one hundred characters so it satisfies the normal content audit while this test isolates only the persisted collection warning behavior.',
+                'discussion', 'summary', 'discussion summary',
+                'full_text', 'https://pudding.cool/story', datetime('now', 'localtime')
+            )
+            """
+        )
     period = datetime.now().strftime("%Y%m%d")
     ctx.job_dir.mkdir(parents=True)
     (ctx.job_dir / f"publish_job_{period}.json").write_text(
@@ -273,7 +340,7 @@ def test_audit_merges_collect_content_warnings_from_ledger(tmp_path) -> None:
                                     "id": 3838,
                                     "url": "https://pudding.cool/story",
                                     "domain": "pudding.cool",
-                                    "reason": "content_missing",
+                                    "reason": "fallback_content_requires_review",
                                     "action_required": "human_input_or_handler",
                                     "failure_count": 2,
                                 }
@@ -291,3 +358,47 @@ def test_audit_merges_collect_content_warnings_from_ledger(tmp_path) -> None:
     assert report["blocking_count"] == 1
     assert report["issues"][0]["code"] == "collect_content_warning"
     assert report["issues"][0]["action_required"] == "human_input_or_handler"
+
+
+def test_audit_ignores_resolved_or_removed_collect_warnings(tmp_path) -> None:
+    ctx = _ctx(tmp_path)
+    init_database(str(ctx.db_path))
+    with sqlite3.connect(ctx.db_path) as conn:
+        conn.execute(
+            """
+            INSERT INTO news (
+                id, title, news_url, article_content, discussion_content,
+                content_summary, discuss_summary, content_source_type,
+                content_source_url, created_at
+            ) VALUES (
+                3838, 'Repaired', 'https://example.com/story',
+                'This human supplied article body is deliberately longer than one hundred characters so that the normal content length gate is satisfied by the test fixture.',
+                'discussion', 'summary', 'discussion summary',
+                'human_supplied', 'https://example.com/story', datetime('now', 'localtime')
+            )
+            """
+        )
+    period = datetime.now().strftime("%Y%m%d")
+    ctx.job_dir.mkdir(parents=True)
+    (ctx.job_dir / f"publish_job_{period}.json").write_text(
+        json.dumps(
+            {
+                "stages": {
+                    "COLLECTING": {
+                        "output_summary": {
+                            "content_warnings": [
+                                {"id": 3838, "reason": "article_content_missing"},
+                                {"id": 9999, "reason": "fallback_content_requires_review"},
+                            ]
+                        }
+                    }
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    report = run_audit(ctx)
+
+    assert report["blocking_count"] == 0
+    assert not any(issue["code"] == "collect_content_warning" for issue in report["issues"])

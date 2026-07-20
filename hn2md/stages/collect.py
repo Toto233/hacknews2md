@@ -48,12 +48,12 @@ async def _fetch_discussion_with_retries(
 
 async def _collect_item(row: sqlite3.Row, semaphore: asyncio.Semaphore, db_path: str | None = None) -> dict[str, Any]:
     """Collect missing context for one news row."""
+    from src.core.content_quality import is_paywall_or_shell_content
     from src.core.crawlers.scrapling_crawler import ScraplingCrawler
     from src.core.handlers.fediverse_handler import get_fediverse_content, is_fediverse_url
     from src.core.handlers.hunyuan_handler import get_hunyuan_blog_content, is_hunyuan_blog_url
     from src.core.handlers.image_handler import is_low_signal_article_image_url, save_article_image
     from src.core.handlers.pdf_handler import get_pdf_content, is_pdf_url
-    from src.core.handlers.screenshot_handler import save_page_screenshot
     from src.core.handlers.stackexchange_handler import build_public_summary_fallback, is_stackexchange_url
     from src.core.handlers.youtube_handler import get_youtube_content
     from src.utils.scraper_failures import extract_domain, record_scraper_failure
@@ -95,7 +95,8 @@ async def _collect_item(row: sqlite3.Row, semaphore: asyncio.Semaphore, db_path:
                     content, image_urls = await crawler.crawl_article(news_url)
                 finally:
                     await crawler.close()
-            if content and len(content.strip()) >= MIN_ARTICLE_CONTENT_CHARS:
+            unusable_content = bool(content and is_paywall_or_shell_content(content))
+            if content and len(content.strip()) >= MIN_ARTICLE_CONTENT_CHARS and not unusable_content:
                 article_content = content.strip()
                 content_source_type = collected_source_type
                 content_source_url = news_url
@@ -129,7 +130,7 @@ async def _collect_item(row: sqlite3.Row, semaphore: asyncio.Semaphore, db_path:
                         "title": row["title"] or "",
                         "url": news_url,
                         "domain": domain,
-                        "reason": "article_content_missing",
+                        "reason": "paywall_or_shell_page" if unusable_content else "article_content_missing",
                         "failure_count": failure_count,
                         "action_required": "human_input_or_handler",
                     }
@@ -188,9 +189,6 @@ async def _collect_item(row: sqlite3.Row, semaphore: asyncio.Semaphore, db_path:
                         **warning,
                     }
                 )
-
-        if news_url and not screenshot:
-            screenshot = await asyncio.to_thread(save_page_screenshot, news_url, row["title"] or "")
 
         return {
             "id": row["id"],

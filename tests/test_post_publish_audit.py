@@ -551,6 +551,115 @@ def test_post_publish_review_reads_historical_stage_receipts(tmp_path: Path) -> 
     assert history_findings[0]["details"]["warnings"] == old_collect["output_summary"]["content_warnings"]
 
 
+def test_post_publish_review_deduplicates_rerun_receipt_warnings(tmp_path: Path) -> None:
+    from datetime import datetime
+
+    from hn2md.stages.post_publish_audit import run_post_publish_audit
+
+    date_str = datetime.now().strftime("%Y%m%d")
+    job_dir = tmp_path / "jobs"
+    job_dir.mkdir()
+    db_path = tmp_path / "test.db"
+    output_dir = tmp_path / "output"
+    md_file = output_dir / "hacknews.md"
+    md_file.parent.mkdir(parents=True, exist_ok=True)
+    md_file.write_text("# Test\n", encoding="utf-8")
+    first_collect = {
+        "success": True,
+        "retry_count": 1,
+        "output_summary": {
+            "content_warnings": [
+                {"id": 42, "url": "https://example.com/story", "reason": "article_content_missing"}
+            ]
+        },
+    }
+    latest_collect = {
+        "success": True,
+        "retry_count": 2,
+        "output_summary": {
+            "content_warnings": [
+                {
+                    "id": 42,
+                    "url": "https://example.com/story",
+                    "reason": "article_content_missing",
+                    "failure_count": 2,
+                }
+            ]
+        },
+    }
+    ledger = {
+        "date": date_str,
+        "status": "DONE",
+        "stages": {
+            "COLLECTING": latest_collect,
+            "PUBLISHING": {"success": True, "output_summary": {"wechat_media_id": "wx1", "markdown_file": str(md_file)}},
+        },
+        "receipts": {"COLLECTING": [first_collect, latest_collect]},
+    }
+    (job_dir / f"publish_job_{date_str}.json").write_text(json.dumps(ledger), encoding="utf-8")
+
+    result = run_post_publish_audit(job_dir, db_path, output_dir, dry_run=False)
+
+    retries = [finding for finding in result["findings"] if finding["check"] == "stage_retry"]
+    warnings = [
+        finding
+        for finding in result["findings"]
+        if finding["check"] == "stage_warning" and finding["details"]["warning_key"] == "content_warnings"
+    ]
+    assert retries[0]["details"]["retry_count"] == 2
+    assert len(retries) == 1
+    assert len(warnings) == 1
+
+
+def test_post_publish_review_downgrades_skipped_warning_and_recovered_failure(tmp_path: Path) -> None:
+    from datetime import datetime
+
+    from hn2md.stages.post_publish_audit import run_post_publish_audit
+    from src.utils.db_utils import init_database
+
+    date_str = datetime.now().strftime("%Y%m%d")
+    job_dir = tmp_path / "jobs"
+    job_dir.mkdir()
+    db_path = tmp_path / "test.db"
+    output_dir = tmp_path / "output"
+    init_database(str(db_path))
+    md_file = output_dir / "hacknews.md"
+    md_file.parent.mkdir(parents=True, exist_ok=True)
+    md_file.write_text("# Test\n", encoding="utf-8")
+    failed_publish = {"success": False, "error": "temporary whitelist failure", "output_summary": {}}
+    completed_publish = {
+        "success": True,
+        "retry_count": 1,
+        "output_summary": {"wechat_media_id": "wx1", "markdown_file": str(md_file)},
+    }
+    ledger = {
+        "date": date_str,
+        "status": "DONE",
+        "stages": {
+            "COLLECTING": {
+                "success": True,
+                "output_summary": {
+                    "content_warnings": [
+                        {"id": 42, "url": "https://example.com/skipped", "reason": "fallback_content_requires_review"}
+                    ]
+                },
+            },
+            "PUBLISHING": completed_publish,
+        },
+        "receipts": {"PUBLISHING": [failed_publish, completed_publish]},
+    }
+    (job_dir / f"publish_job_{date_str}.json").write_text(json.dumps(ledger), encoding="utf-8")
+
+    result = run_post_publish_audit(job_dir, db_path, output_dir, dry_run=False)
+
+    skipped_warning = next(finding for finding in result["findings"] if finding["check"] == "stage_warning")
+    recovered_failure = next(finding for finding in result["findings"] if finding["check"] == "stage_failure")
+    assert skipped_warning["severity"] == "info"
+    assert recovered_failure["severity"] == "info"
+    assert recovered_failure["details"]["recovered"] is True
+    assert result["blocking_count"] == 0
+
+
 def test_post_publish_review_reads_historical_process_findings_once(tmp_path: Path) -> None:
     from datetime import datetime
 

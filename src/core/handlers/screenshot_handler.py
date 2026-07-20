@@ -21,6 +21,9 @@ from src.security.url_validator import SecurityError, validate_url
 logger = logging.getLogger(__name__)
 
 
+PAGE_LOAD_TIMEOUT_SECONDS = 20
+
+
 def save_page_screenshot(url: str, title: str) -> str | None:
     """Save a page screenshot to disk (landscape, WeChat-friendly).
 
@@ -77,6 +80,9 @@ def save_page_screenshot(url: str, title: str) -> str | None:
     try:
         logger.debug(f"[SCREENSHOT] init WebDriver | {url}")
         driver = webdriver.Chrome(options=options)
+        # A blocked or perpetually loading page must not hold the entire
+        # collection batch open; screenshots are optional publish assets.
+        driver.set_page_load_timeout(PAGE_LOAD_TIMEOUT_SECONDS)
         logger.debug(f"[SCREENSHOT] navigating | {url}")
         driver.get(url)
         logger.debug("[SCREENSHOT] waiting 10s for page load")

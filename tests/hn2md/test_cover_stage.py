@@ -1,4 +1,5 @@
 from pathlib import Path
+import json
 import sys
 import textwrap
 from unittest.mock import patch
@@ -66,6 +67,48 @@ def test_cover_external_requires_existing_image(tmp_path) -> None:
         assert "External cover image not found" in str(exc)
     else:
         raise AssertionError("expected RuntimeError")
+
+
+def test_cover_uses_first_ordered_story_when_target_is_omitted(tmp_path) -> None:
+    md = tmp_path / "a.md"
+    cover = tmp_path / "cover.png"
+    plan = tmp_path / "plan.json"
+    cover.write_bytes(b"png")
+    plan.write_text(
+        json.dumps(
+            {
+                "ordered_ids": [2, 1],
+                "items": [
+                    {"id": 1, "title_chs": "Second story"},
+                    {"id": 2, "title_chs": "Lead story"},
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+    machine = type(
+        "M",
+        (),
+        {
+            "job": type(
+                "J",
+                (),
+                {
+                    "stages": {
+                        Stage.RENDERING.value: {
+                            "output_summary": {"markdown_file": str(md), "plan_file": str(plan)}
+                        }
+                    }
+                },
+            )()
+        },
+    )()
+
+    result = CoverStage().execute(object(), machine, mode="external", cover_image=str(cover))
+
+    assert result["target_word"] == "Lead story"
+    assert result["lead_story_id"] == 2
+    assert result["lead_story_title"] == "Lead story"
 
 
 def test_cover_loads_project_script_when_project_root_not_on_sys_path(tmp_path, monkeypatch) -> None:
