@@ -3,12 +3,23 @@
 import json
 import logging
 import os
-import re
 from datetime import datetime
 
 import requests
+from bs4 import BeautifulSoup
 
 logger = logging.getLogger(__name__)
+
+
+def _local_image_sources(content: str) -> list[str]:
+    """Return ordered local image sources without parsing HTML paths as regex."""
+    soup = BeautifulSoup(content, "html.parser")
+    sources = [
+        str(image.get("src"))
+        for image in soup.find_all("img")
+        if image.get("src") and not str(image.get("src")).startswith(("http://", "https://", "//", "data:"))
+    ]
+    return list(dict.fromkeys(sources))
 
 
 class DraftManager:
@@ -122,15 +133,7 @@ class DraftManager:
             logger.info(f"Processing article {i + 1}: {article['title']}")
             processed_article = article.copy()
             processed_content = processed_article["content"]
-            patterns = [
-                r'<img[^>]+src=["\']([^"\']+\.(?:jpg|jpeg|png|gif|webp))["\'][^>]*>',
-                r"!\[.*?\]\(([^)]+\.(?:jpg|jpeg|png|gif|webp))\)",
-                r'src=["\']([^"\']+\.(?:jpg|jpeg|png|gif|webp))["\']',
-            ]
-            found: set = set()
-            for p in patterns:
-                found.update(re.findall(p, processed_content, re.IGNORECASE))
-            local_images = [img for img in found if not img.startswith(("http://", "https://", "//"))]
+            local_images = _local_image_sources(processed_content)
             if local_images:
                 logger.info(f"Found {len(local_images)} local image(s): {local_images}")
                 if i == 0:

@@ -4,6 +4,8 @@ import sys
 import textwrap
 from unittest.mock import patch
 
+from PIL import Image
+
 from hn2md.constants import Stage
 from hn2md.context import RuntimeContext
 from hn2md.stages.cover import CoverStage
@@ -34,7 +36,7 @@ def test_cover_pillow_calls_reusable_api(tmp_path) -> None:
 def test_cover_external_registers_existing_image(tmp_path) -> None:
     md = tmp_path / "a.md"
     cover = tmp_path / "cover.png"
-    cover.write_bytes(b"png")
+    Image.new("RGB", (2100, 900), "white").save(cover)
 
     result = CoverStage().execute(
         object(),
@@ -45,11 +47,15 @@ def test_cover_external_registers_existing_image(tmp_path) -> None:
         target_word="幽灵锁漏洞",
     )
 
-    assert result == {
-        "cover_image": str(cover),
-        "mode": "external",
-        "target_word": "幽灵锁漏洞",
-    }
+    assert result["cover_image"] == str(cover)
+    assert result["mode"] == "external"
+    assert result["target_word"] == "幽灵锁漏洞"
+    assert result["display_title"] == "幽灵锁漏洞"
+    assert result["share_preview_crop"] == "center_1x1"
+    assert result["cover_dimensions"] == {"width": 2100, "height": 900}
+    preview = Path(result["share_preview_image"])
+    assert preview.exists()
+    assert Image.open(preview).size == (900, 900)
 
 
 def test_cover_external_requires_existing_image(tmp_path) -> None:
@@ -107,6 +113,7 @@ def test_cover_uses_first_ordered_story_when_target_is_omitted(tmp_path) -> None
     result = CoverStage().execute(object(), machine, mode="external", cover_image=str(cover))
 
     assert result["target_word"] == "Lead story"
+    assert result["display_title"] == "Lead story"
     assert result["lead_story_id"] == 2
     assert result["lead_story_title"] == "Lead story"
 

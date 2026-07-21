@@ -194,7 +194,7 @@ def collect(source_name: str, date_value: str | None, concurrency: int, rerun: b
 @main.command("capture-screenshots")
 @click.argument("source_name")
 @click.option("--date", "date_value", default=None, help="YYYY-MM-DD or YYYYMMDD")
-@click.option("--concurrency", default=3, type=click.IntRange(min=1))
+@click.option("--concurrency", default=4, type=click.IntRange(min=1))
 def capture_screenshots(source_name: str, date_value: str | None, concurrency: int) -> None:
     """Capture optional page screenshots without reopening the collection stage."""
     source, ctx = _load_date_source(source_name, date_value)
@@ -482,7 +482,7 @@ def skip_story(
     with get_db(str(ctx.db_path)) as conn:
         conn.row_factory = sqlite3.Row
         row = conn.execute(
-            "SELECT news_url FROM news WHERE " + _date_where_clause(),
+            "SELECT title, news_url FROM news WHERE " + _date_where_clause(),
             (news_id, ctx.period),
         ).fetchone()
         if row is None:
@@ -498,6 +498,16 @@ def skip_story(
                 """,
                 (domain, reason),
             )
+    machine, _ = JobStateMachine.load_or_create(ctx.job_dir, ctx.period)
+    machine.record_skipped_story(
+        {
+            "id": news_id,
+            "title": row["title"],
+            "news_url": row["news_url"],
+            "reason": reason,
+            "skipped_at": datetime.now().isoformat(),
+        }
+    )
     suffix = f" and filtered {domain}" if filter_domain else ""
     click.echo(f"Skipped story {news_id}{suffix}")
 
@@ -585,6 +595,7 @@ def render(
 @click.option("--date", "date_value", default=None, help="YYYY-MM-DD or YYYYMMDD")
 @click.option("--mode", type=click.Choice(["ai", "pillow", "external"]), default="ai")
 @click.option("--target-word", default=None)
+@click.option("--display-title", default=None, help="Exact compressed title rendered on the cover")
 @click.option("--cover-image", default=None, type=click.Path(exists=True, dir_okay=False))
 @click.option("--rerun", is_flag=True)
 @click.option("--year", type=int, default=None)
@@ -595,24 +606,28 @@ def cover(
     date_value: str | None,
     mode: str,
     target_word: str | None,
+    display_title: str | None,
     cover_image: str | None,
     rerun: bool,
     year: int | None,
     month: int | None,
 ) -> None:
     source, ctx = _load_source_context(source_name, date_value, year, month)
+    cover_kwargs: dict[str, str | None] = {
+        "markdown_file": markdown_file,
+        "mode": mode,
+        "target_word": target_word,
+        "cover_image": cover_image,
+    }
+    if display_title is not None:
+        cover_kwargs["display_title"] = display_title
     result = run_release(
         ctx,
         source,
         stages=(GenericStage.COVERING,),
         rerun=rerun,
         stage_kwargs={
-            GenericStage.COVERING: {
-                "markdown_file": markdown_file,
-                "mode": mode,
-                "target_word": target_word,
-                "cover_image": cover_image,
-            }
+            GenericStage.COVERING: cover_kwargs
         },
     )
     click.echo(f"{GenericStage.COVERING.value} complete: {result}")

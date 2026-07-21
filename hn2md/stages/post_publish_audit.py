@@ -18,6 +18,7 @@ Each finding is one JSONL line with::
 from __future__ import annotations
 
 import json
+import os
 import sqlite3
 from datetime import datetime
 from pathlib import Path
@@ -192,15 +193,28 @@ def _check_astro_output(
     return findings
 
 
-def _content_warning_resolved_by_db(db_path: Path | None, warning: dict[str, Any]) -> bool:
-    """Return True when a stale collect content warning has been fixed in DB."""
+def _warning_matches_skipped_story(warning: dict[str, Any], skipped_stories: list[dict[str, Any]]) -> bool:
+    """Return whether a warning belongs to a story explicitly skipped from this run."""
+    warning_id = warning.get("id")
+    warning_url = str(warning.get("url") or "").strip()
+    return any(
+        (warning_id is not None and skipped.get("id") == warning_id)
+        or (warning_url and str(skipped.get("news_url") or "").strip() == warning_url)
+        for skipped in skipped_stories
+    )
+
+
+def _content_warning_resolution(
+    db_path: Path | None, warning: dict[str, Any], skipped_stories: list[dict[str, Any]]
+) -> str | None:
+    """Return how a stale collect content warning was resolved, if it was."""
     if db_path is None:
-        return False
+        return None
 
     warning_id = warning.get("id")
     warning_url = str(warning.get("url") or "").strip()
     if warning_id is None and not warning_url:
-        return False
+        return None
 
     try:
         with get_db(str(db_path)) as conn:
@@ -217,37 +231,44 @@ def _content_warning_resolved_by_db(db_path: Path | None, warning: dict[str, Any
                 (warning_id, warning_id, warning_url, warning_url),
             ).fetchone()
     except Exception:
-        return False
+        return None
 
     if row is None:
-        # A successful query with no current-day row means the story was
-        # intentionally skipped after collection rather than left unresolved.
-        return True
-    return bool(str(row["article_content"] or "").strip() and str(row["content_source_url"] or "").strip())
+        return "story_skipped" if _warning_matches_skipped_story(warning, skipped_stories) else None
+    if str(row["article_content"] or "").strip() and str(row["content_source_url"] or "").strip():
+        return "content_repaired"
+    return None
 
 
 def _split_resolved_content_warnings(
-    db_path: Path | None, warnings: list[Any]
-) -> tuple[list[Any], list[dict[str, Any]]]:
+    db_path: Path | None, warnings: list[Any], skipped_stories: list[dict[str, Any]]
+) -> tuple[list[Any], dict[str, list[dict[str, Any]]]]:
     active: list[Any] = []
-    resolved: list[dict[str, Any]] = []
+    resolved: dict[str, list[dict[str, Any]]] = {}
     for warning in warnings:
-        if isinstance(warning, dict) and _content_warning_resolved_by_db(db_path, warning):
-            resolved.append(warning)
+        resolution = (
+            _content_warning_resolution(db_path, warning, skipped_stories)
+            if isinstance(warning, dict)
+            else None
+        )
+        if resolution:
+            resolved.setdefault(resolution, []).append(warning)
         else:
             active.append(warning)
     return active, resolved
 
 
-def _discussion_warning_resolved_by_db(db_path: Path | None, warning: dict[str, Any]) -> bool:
-    """Return True when a stale collect discussion warning has been fixed in DB."""
+def _discussion_warning_resolution(
+    db_path: Path | None, warning: dict[str, Any], skipped_stories: list[dict[str, Any]]
+) -> str | None:
+    """Return how a stale collect discussion warning was resolved, if it was."""
     if db_path is None:
-        return False
+        return None
 
     warning_id = warning.get("id")
     warning_url = str(warning.get("url") or "").strip()
     if warning_id is None and not warning_url:
-        return False
+        return None
 
     try:
         with get_db(str(db_path)) as conn:
@@ -264,21 +285,28 @@ def _discussion_warning_resolved_by_db(db_path: Path | None, warning: dict[str, 
                 (warning_id, warning_id, warning_url, warning_url),
             ).fetchone()
     except Exception:
-        return False
+        return None
 
     if row is None:
-        return False
-    return bool(str(row["discussion_content"] or "").strip())
+        return "story_skipped" if _warning_matches_skipped_story(warning, skipped_stories) else None
+    if str(row["discussion_content"] or "").strip():
+        return "discussion_repaired"
+    return None
 
 
 def _split_resolved_discussion_warnings(
-    db_path: Path | None, warnings: list[Any]
-) -> tuple[list[Any], list[dict[str, Any]]]:
+    db_path: Path | None, warnings: list[Any], skipped_stories: list[dict[str, Any]]
+) -> tuple[list[Any], dict[str, list[dict[str, Any]]]]:
     active: list[Any] = []
-    resolved: list[dict[str, Any]] = []
+    resolved: dict[str, list[dict[str, Any]]] = {}
     for warning in warnings:
-        if isinstance(warning, dict) and _discussion_warning_resolved_by_db(db_path, warning):
-            resolved.append(warning)
+        resolution = (
+            _discussion_warning_resolution(db_path, warning, skipped_stories)
+            if isinstance(warning, dict)
+            else None
+        )
+        if resolution:
+            resolved.setdefault(resolution, []).append(warning)
         else:
             active.append(warning)
     return active, resolved
@@ -407,6 +435,33 @@ def _read_existing_finding_keys(path: Path) -> tuple[set[str], list[int]]:
     return keys, malformed_lines
 
 
+def _write_current_snapshot(
+    path: Path, date_str: str, findings: list[dict[str, Any]], blocking_count: int
+) -> bool:
+    """Replace the machine-readable current audit conclusion for one run."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    temporary_path = path.with_suffix(".tmp")
+    try:
+        temporary_path.write_text(
+            json.dumps(
+                {
+                    "generated_at": datetime.now().isoformat(),
+                    "date": date_str,
+                    "blocking_count": blocking_count,
+                    "findings": findings,
+                },
+                ensure_ascii=False,
+                indent=2,
+            ),
+            encoding="utf-8",
+        )
+        os.replace(temporary_path, path)
+    except OSError:
+        temporary_path.unlink(missing_ok=True)
+        return False
+    return True
+
+
 def _receipt_warning_key(stage_name: str, warning_key: str, warning: Any) -> str:
     """Identify the same operational warning across rerun receipts."""
     if isinstance(warning, dict):
@@ -424,12 +479,14 @@ def _check_stage_receipts(
     date_str: str,
     db_path: Path | None = None,
     receipt_history: dict[str, Any] | None = None,
+    skipped_stories: list[dict[str, Any]] | None = None,
 ) -> list[dict[str, Any]]:
     """Surface run-time problems from stage receipts for post-run follow-up."""
     findings: list[dict[str, Any]] = []
     warning_keys = ("image_warnings", "content_warnings", "discussion_warnings")
     highest_retry_by_stage: dict[str, tuple[int, Any]] = {}
     seen_warning_keys: set[str] = set()
+    skipped_stories = skipped_stories or []
 
     for stage_name, receipt in _iter_stage_receipts(stages, receipt_history):
 
@@ -439,13 +496,14 @@ def _check_stage_receipts(
             findings.append(
                 _finding(
                     date_str,
-                    "stage_failure",
+                    "resolution" if recovered else "stage_failure",
                     "info" if recovered else "blocking",
                     f"{stage_name} failed but later recovered" if recovered else f"{stage_name} failed during the run",
                     {
                         "stage": stage_name,
                         "error": receipt.get("error"),
                         "recovered": recovered,
+                        "resolution": "stage_recovered" if recovered else None,
                     },
                 )
             )
@@ -476,42 +534,48 @@ def _check_stage_receipts(
                 continue
 
             if key == "content_warnings":
-                warnings, resolved_warnings = _split_resolved_content_warnings(db_path, warnings)
+                warnings, resolved_warnings = _split_resolved_content_warnings(
+                    db_path, warnings, skipped_stories
+                )
                 if resolved_warnings:
-                    findings.append(
-                        _finding(
-                            date_str,
-                            "stage_warning",
-                            "info",
-                            f"{stage_name} reported {len(resolved_warnings)} resolved {key}",
-                            {
-                                "stage": stage_name,
-                                "warning_key": key,
-                                "resolved_by_db": True,
-                                "warnings": resolved_warnings[:20],
-                            },
+                    for resolution, resolved in resolved_warnings.items():
+                        findings.append(
+                            _finding(
+                                date_str,
+                                "resolution",
+                                "info",
+                                f"{stage_name} resolved {len(resolved)} {key}: {resolution}",
+                                {
+                                    "stage": stage_name,
+                                    "warning_key": key,
+                                    "resolution": resolution,
+                                    "warnings": resolved[:20],
+                                },
+                            )
                         )
-                    )
                 if not warnings:
                     continue
 
             if key == "discussion_warnings":
-                warnings, resolved_warnings = _split_resolved_discussion_warnings(db_path, warnings)
+                warnings, resolved_warnings = _split_resolved_discussion_warnings(
+                    db_path, warnings, skipped_stories
+                )
                 if resolved_warnings:
-                    findings.append(
-                        _finding(
-                            date_str,
-                            "stage_warning",
-                            "info",
-                            f"{stage_name} reported {len(resolved_warnings)} resolved {key}",
-                            {
-                                "stage": stage_name,
-                                "warning_key": key,
-                                "resolved_by_db": True,
-                                "warnings": resolved_warnings[:20],
-                            },
+                    for resolution, resolved in resolved_warnings.items():
+                        findings.append(
+                            _finding(
+                                date_str,
+                                "resolution",
+                                "info",
+                                f"{stage_name} resolved {len(resolved)} {key}: {resolution}",
+                                {
+                                    "stage": stage_name,
+                                    "warning_key": key,
+                                    "resolution": resolution,
+                                    "warnings": resolved[:20],
+                                },
+                            )
                         )
-                    )
                 if not warnings:
                     continue
 
@@ -555,9 +619,10 @@ def run_post_publish_audit(
 ) -> dict[str, Any]:
     """Run post-publish audit, append findings to JSONL, return summary.
 
-    By default only writes ``warning`` and ``blocking`` findings to the JSONL
-    file so that the trail stays compact and grep-friendly.  Pass
-    ``verbose=True`` to also persist ``info`` findings.
+    The append-only JSONL trail stores warnings, blocking findings, and
+    explicit resolutions. A separate latest-snapshot JSON always records the
+    full current conclusion. Pass ``verbose=True`` to also persist all other
+    info findings to JSONL.
 
     Returns::
 
@@ -565,6 +630,7 @@ def run_post_publish_audit(
     """
     date_str = datetime.now().strftime("%Y%m%d")
     jsonl_path = output_dir / "reviews" / f"run_review_{date_str}.jsonl"
+    snapshot_path = output_dir / "reviews" / f"run_review_latest_{date_str}.json"
 
     # Load the publish receipt from today's job ledger
     ledger_path = job_dir / f"publish_job_{date_str}.json"
@@ -572,6 +638,7 @@ def run_post_publish_audit(
     receipt_history: dict[str, Any] = {}
     receipt: dict[str, Any] = {}
     render_receipt: dict[str, Any] = {}
+    skipped_stories: list[dict[str, Any]] = []
     if ledger_path.exists():
         try:
             ledger = json.loads(ledger_path.read_text(encoding="utf-8"))
@@ -579,13 +646,18 @@ def run_post_publish_audit(
             receipt_history = ledger.get("receipts", {})
             receipt = stages.get("PUBLISHING", {}).get("output_summary", {})
             render_receipt = stages.get("RENDERING", {}).get("output_summary", {})
+            raw_skipped_stories = ledger.get("skipped_stories", [])
+            if isinstance(raw_skipped_stories, list):
+                skipped_stories = [story for story in raw_skipped_stories if isinstance(story, dict)]
         except (OSError, json.JSONDecodeError):
             pass
 
     all_findings: list[dict[str, Any]] = []
 
     # Run all checks
-    all_findings.extend(_check_stage_receipts(stages, date_str, db_path, receipt_history))
+    all_findings.extend(
+        _check_stage_receipts(stages, date_str, db_path, receipt_history, skipped_stories)
+    )
     all_findings.extend(_check_environment_compatibility(stages, date_str, receipt_history))
     all_findings.extend(_check_wechat_media_id(receipt, date_str, dry_run))
     for stage_name, historical_receipt in _iter_stage_receipts(stages, receipt_history):
@@ -613,9 +685,12 @@ def run_post_publish_audit(
             )
         )
         all_findings = _deduplicate_findings(all_findings)
+    blocking_count = sum(1 for f in all_findings if f.get("severity") == "blocking")
+    snapshot_written = _write_current_snapshot(snapshot_path, date_str, all_findings, blocking_count)
+
     written = 0
     for finding in all_findings:
-        if verbose or finding.get("severity") in ("warning", "blocking"):
+        if verbose or finding.get("severity") in ("warning", "blocking") or finding.get("check") == "resolution":
             finding_key = _finding_key(finding)
             if finding_key in existing_keys:
                 continue
@@ -623,10 +698,10 @@ def run_post_publish_audit(
             existing_keys.add(finding_key)
             written += 1
 
-    blocking_count = sum(1 for f in all_findings if f.get("severity") == "blocking")
     return {
         "findings": all_findings,
         "blocking_count": blocking_count,
         "jsonl_written": written,
         "jsonl_path": str(jsonl_path),
+        "snapshot_path": str(snapshot_path) if snapshot_written else None,
     }

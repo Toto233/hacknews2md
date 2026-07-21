@@ -114,13 +114,13 @@ publisher render hackernews --target wechat --rerun
 
 ## 4. Cover
 
-Pick a 10-15 Chinese-character target word from the first item in the manual plan's `ordered_ids`: “主体 + 事件”. Do not select a lower-ranked story for visual appeal; the cover stage records that lead story in its receipt.
+Pick a 10-15 Chinese-character display title from the first item in the manual plan's `ordered_ids`: “主体 + 事件”. Do not select a lower-ranked story for visual appeal; the cover receipt records both the article title and the exact display title.
 
 ```powershell
-publisher cover hackernews "<markdown_file>" --mode ai --target-word "<短标题>"
+publisher cover hackernews "<markdown_file>" --mode ai --display-title "<短标题>"
 ```
 
-Completion criterion: cover text is readable, meaning matches the article, and the layout is a 2.45:1 horizontal cover. If AI cover fails:
+Completion criterion: cover text is readable, meaning matches the article, the layout is a 2.45:1 horizontal cover, and the cover receipt contains the generated center `1:1` share preview. If AI cover fails:
 
 ```powershell
 publisher cover hackernews "<markdown_file>" --mode pillow --rerun
@@ -201,7 +201,7 @@ publisher review-run hackernews
 publisher review-run hackernews --json
 ```
 
-Completion criterion: findings are written to `output/reviews/run_review_{YYYYMMDD}.jsonl` and blocking findings are explained. `review-run` is not content audit; it reviews the publishing process.
+Completion criterion: the append-only history is written to `output/reviews/run_review_{YYYYMMDD}.jsonl`, the current conclusion is written to `output/reviews/run_review_latest_{YYYYMMDD}.json`, and blocking findings are explained. `review-run` is not content audit; it reviews the publishing process.
 
 Trace each finding to its stage and direct cause:
 
@@ -214,6 +214,7 @@ Trace each finding to its stage and direct cause:
 | `astro_output` | warning | verify Astro output exists |
 | `stage_retry` | warning | identify the retried stage and cause |
 | `stage_warning` | warning/blocking | inspect image/content/discussion warnings |
+| `resolution` | info | historical warning was repaired, intentionally skipped, or recovered |
 
 Trend checks:
 
@@ -222,6 +223,9 @@ Get-Content output/reviews/run_review_*.jsonl | Select-String '"blocking"'
 Get-Content output/reviews/run_review_*.jsonl |
   ForEach-Object { ($_ | ConvertFrom-Json).check } |
   Group-Object | Sort-Object Count -Descending
+Get-Content output/reviews/run_review_latest_*.json |
+  ConvertFrom-Json |
+  Select-Object date, blocking_count, generated_at
 ```
 
 ## 9. Improve

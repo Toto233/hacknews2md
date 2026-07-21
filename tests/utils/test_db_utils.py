@@ -77,6 +77,11 @@ class TestIllegalKeywords:
             keywords = mod.get_illegal_keywords()
             assert "badword" in keywords
 
+    def test_get_empty_when_keyword_table_is_not_initialized(self, tmp_path):
+        import src.utils.db_utils as mod
+
+        assert mod.get_illegal_keywords(str(tmp_path / "empty.db")) == []
+
     def test_add_duplicate(self, tmp_path):
         import src.utils.db_utils as mod
         db_path = str(tmp_path / "test.db")

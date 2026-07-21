@@ -253,6 +253,8 @@ def test_cover_command_can_register_external_cover(tmp_path, monkeypatch) -> Non
                 str(cover),
                 "--target-word",
                 "幽灵锁漏洞",
+                "--display-title",
+                "短标题",
             ],
         )
 
@@ -263,6 +265,7 @@ def test_cover_command_can_register_external_cover(tmp_path, monkeypatch) -> Non
         "markdown_file": "article.md",
         "mode": "external",
         "target_word": "幽灵锁漏洞",
+        "display_title": "短标题",
         "cover_image": str(cover),
     }
 
@@ -590,6 +593,16 @@ def test_skip_story_can_delete_and_add_domain_filter(tmp_path, monkeypatch) -> N
             "SELECT domain, reason FROM filtered_domains WHERE domain='marfapublicradio.org'"
         ).fetchone()
     assert filter_row == ("marfapublicradio.org", "403")
+    machine, _ = JobStateMachine.load_or_create(tmp_path / "output" / "jobs", "20260627")
+    assert machine.job.skipped_stories == [
+        {
+            "id": 3839,
+            "title": "403",
+            "news_url": "https://www.marfapublicradio.org/story",
+            "reason": "403",
+            "skipped_at": machine.job.skipped_stories[0]["skipped_at"],
+        }
+    ]
 
 
 def test_filter_domain_adds_hackernews_filter_without_deleting_story(tmp_path, monkeypatch) -> None:

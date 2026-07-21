@@ -1,5 +1,6 @@
 import json
 
+import src.db.connection as db_connection
 from hn2md.constants import Stage
 from hn2md.context import RuntimeContext
 from hn2md.state import JobStateMachine
@@ -87,7 +88,10 @@ def test_producthunt_fetch_stage_uses_period_for_year_and_month(tmp_path) -> Non
     assert [product.name for product in products] == ["July Product"]
 
 
-def test_producthunt_release_runs_fetch_render_cover_publish_dry_run(tmp_path) -> None:
+def test_producthunt_release_runs_fetch_render_cover_publish_dry_run(tmp_path, monkeypatch) -> None:
+    # A fresh installation has no shared keyword table yet. Do not accidentally
+    # depend on the developer's data/hacknews.db during this release test.
+    monkeypatch.setattr(db_connection, "_global_db", db_connection.Database(str(tmp_path / "empty-keywords.db")))
     html_file = tmp_path / "leaderboard.html"
     html_file.write_text(
         '<script id="__NEXT_DATA__" type="application/json">'

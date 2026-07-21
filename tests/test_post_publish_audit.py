@@ -647,17 +647,78 @@ def test_post_publish_review_downgrades_skipped_warning_and_recovered_failure(tm
             "PUBLISHING": completed_publish,
         },
         "receipts": {"PUBLISHING": [failed_publish, completed_publish]},
+        "skipped_stories": [
+            {
+                "id": 42,
+                "news_url": "https://example.com/skipped",
+                "reason": "human review",
+                "skipped_at": "2026-07-20T12:00:00",
+            }
+        ],
     }
     (job_dir / f"publish_job_{date_str}.json").write_text(json.dumps(ledger), encoding="utf-8")
 
     result = run_post_publish_audit(job_dir, db_path, output_dir, dry_run=False)
 
-    skipped_warning = next(finding for finding in result["findings"] if finding["check"] == "stage_warning")
-    recovered_failure = next(finding for finding in result["findings"] if finding["check"] == "stage_failure")
+    skipped_warning = next(
+        finding
+        for finding in result["findings"]
+        if finding["check"] == "resolution" and finding["details"].get("resolution") == "story_skipped"
+    )
+    recovered_failure = next(
+        finding
+        for finding in result["findings"]
+        if finding["check"] == "resolution" and finding["details"].get("resolution") == "stage_recovered"
+    )
     assert skipped_warning["severity"] == "info"
     assert recovered_failure["severity"] == "info"
     assert recovered_failure["details"]["recovered"] is True
     assert result["blocking_count"] == 0
+
+
+def test_post_publish_review_keeps_unrecorded_missing_story_blocking(tmp_path: Path) -> None:
+    from datetime import datetime
+
+    from hn2md.stages.post_publish_audit import run_post_publish_audit
+    from src.utils.db_utils import init_database
+
+    date_str = datetime.now().strftime("%Y%m%d")
+    job_dir = tmp_path / "jobs"
+    job_dir.mkdir()
+    db_path = tmp_path / "test.db"
+    output_dir = tmp_path / "output"
+    init_database(str(db_path))
+    md_file = output_dir / "hacknews.md"
+    md_file.parent.mkdir(parents=True, exist_ok=True)
+    md_file.write_text("# Test\n", encoding="utf-8")
+    ledger = {
+        "date": date_str,
+        "status": "DONE",
+        "stages": {
+            "COLLECTING": {
+                "success": True,
+                "output_summary": {
+                    "content_warnings": [
+                        {"id": 42, "url": "https://example.com/missing", "action_required": "human_input"}
+                    ]
+                },
+            },
+            "PUBLISHING": {
+                "success": True,
+                "output_summary": {"wechat_media_id": "wx1", "markdown_file": str(md_file)},
+            },
+        },
+    }
+    (job_dir / f"publish_job_{date_str}.json").write_text(json.dumps(ledger), encoding="utf-8")
+
+    result = run_post_publish_audit(job_dir, db_path, output_dir, dry_run=False)
+
+    assert result["blocking_count"] == 1
+    assert any(finding["check"] == "stage_warning" for finding in result["findings"])
+    assert not any(
+        finding["check"] == "resolution" and finding["details"].get("resolution") == "story_skipped"
+        for finding in result["findings"]
+    )
 
 
 def test_post_publish_review_reads_historical_process_findings_once(tmp_path: Path) -> None:
@@ -787,30 +848,14 @@ def test_post_publish_review_downgrades_resolved_content_warning(tmp_path: Path)
 
     result = run_post_publish_audit(job_dir, db_path, output_dir, dry_run=False)
 
-    stage_warnings = [f for f in result["findings"] if f["check"] == "stage_warning"]
-    assert stage_warnings == [
-        {
-            "date": date_str,
-            "check": "stage_warning",
-            "severity": "info",
-            "message": "COLLECTING reported 1 resolved content_warnings",
-            "details": {
-                "stage": "COLLECTING",
-                "warning_key": "content_warnings",
-                "resolved_by_db": True,
-                "warnings": [
-                    {
-                        "id": 42,
-                        "url": "https://hy.tencent.com/research/hy3",
-                        "domain": "hy.tencent.com",
-                        "reason": "article_content_missing",
-                        "action_required": "human_input_or_handler",
-                        "failure_count": 1,
-                    }
-                ],
-            },
-        }
-    ]
+    resolutions = [f for f in result["findings"] if f["check"] == "resolution"]
+    assert resolutions[0]["details"]["resolution"] == "content_repaired"
+    assert resolutions[0]["details"]["warnings"][0]["id"] == 42
+    snapshot = json.loads(Path(result["snapshot_path"]).read_text(encoding="utf-8"))
+    assert snapshot["blocking_count"] == 0
+    assert snapshot["findings"] == result["findings"]
+    jsonl_records = [json.loads(line) for line in Path(result["jsonl_path"]).read_text(encoding="utf-8").splitlines()]
+    assert any(record["check"] == "resolution" for record in jsonl_records)
     assert result["blocking_count"] == 0
 
 
@@ -878,30 +923,9 @@ def test_post_publish_review_downgrades_resolved_discussion_warning(tmp_path: Pa
 
     result = run_post_publish_audit(job_dir, db_path, output_dir, dry_run=False)
 
-    stage_warnings = [f for f in result["findings"] if f["check"] == "stage_warning"]
-    assert stage_warnings == [
-        {
-            "date": date_str,
-            "check": "stage_warning",
-            "severity": "info",
-            "message": "COLLECTING reported 1 resolved discussion_warnings",
-            "details": {
-                "stage": "COLLECTING",
-                "warning_key": "discussion_warnings",
-                "resolved_by_db": True,
-                "warnings": [
-                    {
-                        "id": 43,
-                        "title": "Running Train",
-                        "url": "https://news.ycombinator.com/item?id=48876505",
-                        "reason": "discussion_missing_after_retry",
-                        "action_required": "human_input_or_handler",
-                        "attempts": 2,
-                    }
-                ],
-            },
-        }
-    ]
+    resolutions = [f for f in result["findings"] if f["check"] == "resolution"]
+    assert resolutions[0]["details"]["resolution"] == "discussion_repaired"
+    assert resolutions[0]["details"]["warnings"][0]["id"] == 43
     assert result["blocking_count"] == 0
 
 

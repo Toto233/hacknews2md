@@ -218,9 +218,10 @@ def render(ctx_obj):
 @click.argument("markdown_file", required=False)
 @click.option("--mode", type=click.Choice(["ai", "pillow", "external"]), default="ai")
 @click.option("--target-word", default=None, help="Short cover headline override")
+@click.option("--display-title", default=None, help="Exact compressed title rendered on the cover")
 @click.option("--cover-image", default=None, type=click.Path(exists=True, dir_okay=False))
 @click.pass_context
-def cover(ctx_obj, markdown_file, mode, target_word, cover_image):
+def cover(ctx_obj, markdown_file, mode, target_word, display_title, cover_image):
     """Generate cover image."""
     rt = ctx_obj.obj["ctx"]
     date_str = datetime.now().strftime("%Y%m%d")
@@ -234,6 +235,8 @@ def cover(ctx_obj, markdown_file, mode, target_word, cover_image):
                 "mode": mode,
                 "target_word": target_word,
             }
+            if display_title is not None:
+                kwargs["display_title"] = display_title
             if cover_image is not None:
                 kwargs["cover_image"] = cover_image
             receipt = stage.run(

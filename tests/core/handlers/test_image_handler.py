@@ -1,8 +1,16 @@
-"""Tests for pure functions in image_handler.py."""
+"""Tests for article image handling."""
+
+from concurrent.futures import ThreadPoolExecutor
+from io import BytesIO
 
 import pytest
+from PIL import Image
 
-from src.core.handlers.image_handler import get_extension_from_content_type, is_low_signal_article_image_url
+from src.core.handlers.image_handler import (
+    get_extension_from_content_type,
+    is_low_signal_article_image_url,
+    save_article_image,
+)
 
 
 # ---------------------------------------------------------------------------
@@ -118,3 +126,48 @@ class TestIsLowSignalArticleImageUrl:
         assert not is_low_signal_article_image_url(
             "https://static.wixstatic.com/media/d3c6c2_real_chart.png/v1/fill/w_900,h_700,al_c,q_85,enc_avif,quality_auto/chart.png"
         )
+
+    def test_filters_known_runtime_noise_assets(self):
+        assert is_low_signal_article_image_url(
+            "https://pbs.twimg.com/profile_images/1234/avatar_normal.jpg"
+        )
+        assert is_low_signal_article_image_url("https://news.ycombinator.com/s.gif")
+        assert is_low_signal_article_image_url("https://static.example.com/images/grey-placeholder.png")
+
+
+class _ImageResponse:
+    status_code = 200
+    headers = {"Content-Type": "image/webp"}
+
+    def __init__(self, payload: bytes) -> None:
+        self.payload = payload
+
+    def iter_content(self, chunk_size: int):
+        yield self.payload
+
+
+def _png_payload() -> bytes:
+    output = BytesIO()
+    Image.new("RGB", (120, 120), "white").save(output, "PNG")
+    return output.getvalue()
+
+
+def test_save_article_image_converts_from_temp_file_and_keeps_unique_paths(monkeypatch, tmp_path) -> None:
+    from src.core.handlers import image_handler
+
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(image_handler, "validate_url", lambda _url: None)
+    monkeypatch.setattr(image_handler.requests, "get", lambda *args, **kwargs: _ImageResponse(_png_payload()))
+
+    with ThreadPoolExecutor(max_workers=3) as executor:
+        paths = list(
+            executor.map(
+                lambda _: save_article_image("https://example.com/article.webp", "https://example.com", "Same title"),
+                range(3),
+            )
+        )
+
+    assert all(paths)
+    assert len(set(paths)) == 3
+    assert all(path.endswith(".png") for path in paths)
+    assert not list((tmp_path / "output" / "images").rglob("*.part"))

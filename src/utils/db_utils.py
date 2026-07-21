@@ -178,13 +178,18 @@ def init_database(db_path: str | None = None) -> None:
     logger.info("数据库所有表结构已初始化/升级")
 
 
-def get_illegal_keywords():
+def get_illegal_keywords(db_path: str | None = None) -> list[str]:
     """获取所有违法关键字"""
-    with get_db() as conn:
-        cursor = conn.cursor()
-        cursor.execute("SELECT keyword FROM illegal_keywords")
-        keywords = [row[0] for row in cursor.fetchall()]
-    return keywords
+    try:
+        with get_db(db_path) as conn:
+            cursor = conn.cursor()
+            cursor.execute("SELECT keyword FROM illegal_keywords")
+            return [row[0] for row in cursor.fetchall()]
+    except sqlite3.OperationalError as exc:
+        if "no such table: illegal_keywords" not in str(exc).lower():
+            raise
+        logger.warning("Illegal-keyword table is not initialized; continuing without keyword rules")
+        return []
 
 
 def add_illegal_keyword(keyword):

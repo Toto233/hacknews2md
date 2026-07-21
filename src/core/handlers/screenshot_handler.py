@@ -21,7 +21,8 @@ from src.security.url_validator import SecurityError, validate_url
 logger = logging.getLogger(__name__)
 
 
-PAGE_LOAD_TIMEOUT_SECONDS = 20
+PAGE_LOAD_TIMEOUT_SECONDS = int(os.getenv("HN2MD_SCREENSHOT_PAGE_LOAD_TIMEOUT_SECONDS", "12"))
+RENDER_WAIT_SECONDS = float(os.getenv("HN2MD_SCREENSHOT_RENDER_WAIT_SECONDS", "3"))
 
 
 def save_page_screenshot(url: str, title: str) -> str | None:
@@ -62,6 +63,7 @@ def save_page_screenshot(url: str, title: str) -> str | None:
     options.add_argument("--no-sandbox")
     options.add_argument("--disable-dev-shm-usage")
     options.add_argument("--window-size=1920,1080")
+    options.page_load_strategy = "eager"
     options.add_argument(
         "user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
         "(KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
@@ -85,8 +87,8 @@ def save_page_screenshot(url: str, title: str) -> str | None:
         driver.set_page_load_timeout(PAGE_LOAD_TIMEOUT_SECONDS)
         logger.debug(f"[SCREENSHOT] navigating | {url}")
         driver.get(url)
-        logger.debug("[SCREENSHOT] waiting 10s for page load")
-        time.sleep(10)
+        logger.debug("[SCREENSHOT] waiting %.1fs for rendering", RENDER_WAIT_SECONDS)
+        time.sleep(RENDER_WAIT_SECONDS)
         driver.save_screenshot(image_save_path)
         saved_screenshot_path = os.path.abspath(image_save_path)
         logger.info(f"[SCREENSHOT] OK | {saved_screenshot_path}")

@@ -277,6 +277,30 @@ class TestJobStateMachine:
             rerun_receipt.__dict__,
         ]
 
+    def test_record_skipped_story_removes_active_story_and_persists_reason(self, job_dir):
+        job_dir.mkdir(parents=True)
+        machine, ledger_path = JobStateMachine.load_or_create(job_dir, "20260620")
+        machine.job.stories = [{"id": 1, "title": "Keep"}, {"id": 2, "title": "Skip"}]
+        machine.record_skipped_story(
+            {
+                "id": 2,
+                "news_url": "https://example.com/skip",
+                "reason": "paywall",
+                "skipped_at": "2026-06-20T12:00:00",
+            }
+        )
+
+        assert machine.job.stories == [{"id": 1, "title": "Keep"}]
+        assert machine.job.skipped_stories == [
+            {
+                "id": 2,
+                "news_url": "https://example.com/skip",
+                "reason": "paywall",
+                "skipped_at": "2026-06-20T12:00:00",
+            }
+        ]
+        assert PublishJob.from_json(ledger_path).skipped_stories == machine.job.skipped_stories
+
     def test_stage_completed_successfully(self, job_dir):
         """stage_completed_successfully should check receipt success."""
         job_dir.mkdir(parents=True)

@@ -82,6 +82,7 @@ class PublishJob:
     created_at: str = ""
     updated_at: str = ""
     stories: list[dict[str, Any]] = field(default_factory=list)
+    skipped_stories: list[dict[str, Any]] = field(default_factory=list)
     stages: dict[str, Any] = field(default_factory=dict)
     receipts: dict[str, Any] = field(default_factory=dict)
     lock_pid: int | None = None
@@ -207,6 +208,17 @@ class JobStateMachine:
         """Persist the latest audit result and invalidate stale approval."""
         self.job.audit_report = report
         self.job.audit_exemption = None
+        self.job.updated_at = datetime.now().isoformat()
+        self._save()
+
+    def record_skipped_story(self, story: dict[str, Any]) -> None:
+        """Persist an intentional manual exclusion and remove it from active stories."""
+        story_id = story["id"]
+        self.job.stories = [item for item in self.job.stories if item.get("id") != story_id]
+        self.job.skipped_stories = [
+            item for item in self.job.skipped_stories if item.get("id") != story_id
+        ]
+        self.job.skipped_stories.append(story)
         self.job.updated_at = datetime.now().isoformat()
         self._save()
 

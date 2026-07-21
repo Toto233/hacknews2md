@@ -76,7 +76,7 @@ def test_cover_forwards_all_options(tmp_path) -> None:
 
     result, stage, machine = _invoke(
         tmp_path,
-        ["cover", str(markdown), "--mode", "ai", "--target-word", "主体事件"],
+        ["cover", str(markdown), "--mode", "ai", "--target-word", "主体事件", "--display-title", "短标题"],
     )
 
     assert result.exit_code == 0, result.output
@@ -86,6 +86,7 @@ def test_cover_forwards_all_options(tmp_path) -> None:
         markdown_file=str(markdown),
         mode="ai",
         target_word="主体事件",
+        display_title="短标题",
     )
 
 

@@ -9,7 +9,7 @@ import hashlib
 import logging
 import os
 import re
-import time
+import uuid
 from datetime import datetime
 from urllib.parse import unquote, urlparse
 
@@ -88,6 +88,14 @@ def is_low_signal_article_image_url(image_url: str) -> bool:
 
     if path.endswith(".svg"):
         return True
+    if "placeholder" in path:
+        return True
+    if host.endswith("twimg.com") and "/profile_images/" in path and re.search(
+        r"_(?:normal|bigger|mini)\.[a-z0-9]+$", path
+    ):
+        return True
+    if host == "news.ycombinator.com" and path.endswith("/s.gif"):
+        return True
     if any(token in haystack for token in LOW_SIGNAL_IMAGE_TOKENS):
         return True
     dimension_match = re.search(r"(?:^|[/?_,])w_(\d+),h_(\d+)(?:[,_/?]|$)", haystack)
@@ -97,6 +105,27 @@ def is_low_signal_article_image_url(image_url: str) -> bool:
         if width < 100 or height < 100:
             return True
     return False
+
+
+def _reserve_image_path(date_dir: str, title: str | None, extension: str, image_url: str) -> str:
+    """Reserve a unique final filename before concurrent download work starts."""
+    if title:
+        stem = re.sub(r'[<>:"/\\|?*]', "", title).replace(" ", "_")
+        stem = re.sub(r"_{2,}", "_", stem)[:50] or "image"
+    else:
+        stem = hashlib.md5(image_url.encode()).hexdigest()
+
+    index = 1
+    while True:
+        suffix = "" if index == 1 else f"_{index}"
+        candidate = os.path.join(date_dir, f"{stem}{suffix}{extension}")
+        try:
+            descriptor = os.open(candidate, os.O_CREAT | os.O_EXCL | os.O_WRONLY)
+        except FileExistsError:
+            index += 1
+            continue
+        os.close(descriptor)
+        return candidate
 
 
 def save_article_image(
@@ -142,55 +171,45 @@ def save_article_image(
 
         today = datetime.now()
         date_dir = os.path.join("output/images", f"{today.year:04d}{today.month:02d}{today.day:02d}")
-        if not os.path.exists(date_dir):
-            os.makedirs(date_dir)
+        os.makedirs(date_dir, exist_ok=True)
 
-        if title:
-            clean_title = re.sub(r'[<>:"/\\|?*]', "", title)
-            clean_title = clean_title.replace(" ", "_")
-            clean_title = re.sub(r"_{2,}", "_", clean_title)
-            clean_title = clean_title[:50]
-            index = 1
-            while True:
-                filename = f"{clean_title}{ext}" if index == 1 else f"{clean_title}_{index}{ext}"
-                full_path = os.path.join(date_dir, filename)
-                if not os.path.exists(full_path):
-                    break
-                index += 1
-        else:
-            filename = hashlib.md5(image_url.encode()).hexdigest() + ext
-            full_path = os.path.join(date_dir, filename)
-
-        with open(full_path, "wb") as f:
-            for chunk in response.iter_content(chunk_size=8192):
-                if chunk:
-                    f.write(chunk)
-            f.flush()
-            os.fsync(f.fileno())
-
-        # Brief pause for Windows file-lock release
-        time.sleep(0.1)
-
+        final_extension = ".png" if ext in {".avif", ".webp"} else ext
+        final_path = _reserve_image_path(date_dir, title, final_extension, image_url)
+        temporary_path = os.path.join(date_dir, f".{uuid.uuid4().hex}{ext}.part")
+        converted_path: str | None = None
+        saved = False
         try:
-            with Image.open(full_path) as img:
-                width, height = img.size
+            with open(temporary_path, "wb") as image_file:
+                for chunk in response.iter_content(chunk_size=8192):
+                    if chunk:
+                        image_file.write(chunk)
+                image_file.flush()
+                os.fsync(image_file.fileno())
+
+            with Image.open(temporary_path) as image:
+                width, height = image.size
                 if width < 100 or height < 100:
-                    os.remove(full_path)
                     return None
+                if ext in {".avif", ".webp"}:
+                    converted_path = os.path.join(date_dir, f".{uuid.uuid4().hex}.png.part")
+                    image.save(converted_path, "PNG")
 
-                # Convert avif / webp to PNG for broader compatibility
-                if ext in [".avif", ".webp"]:
-                    png_path = full_path.replace(ext, ".png")
-                    img.save(png_path, "PNG")
-                    os.remove(full_path)
-                    logger.info(f"已将 {ext} 图片转换为 png: {png_path}")
-                    return os.path.abspath(png_path)
-
-                return os.path.abspath(full_path)
-        except Exception as e:
-            logger.error(f"处理图片时出错: {e}")
-            if os.path.exists(full_path):
-                os.remove(full_path)
+            os.replace(converted_path or temporary_path, final_path)
+            saved = True
+            logger.info("Saved article image: %s", final_path)
+            return os.path.abspath(final_path)
+        except Exception as exc:
+            logger.error("Failed to process article image: %s", exc)
             return None
+        finally:
+            cleanup_paths = (temporary_path, converted_path)
+            if not saved:
+                cleanup_paths += (final_path,)
+            for path in cleanup_paths:
+                if path and os.path.exists(path):
+                    try:
+                        os.remove(path)
+                    except OSError:
+                        logger.debug("Could not remove temporary image path: %s", path)
     except Exception:
         return None
