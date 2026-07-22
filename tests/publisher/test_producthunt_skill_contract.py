@@ -5,11 +5,11 @@ def test_producthunt_skill_exists_and_uses_publisher_entry_points() -> None:
     skill = Path("skills/publish-producthunt-monthly/SKILL.md").read_text(encoding="utf-8")
 
     for command in (
-        "publisher fetch producthunt",
-        "publisher release producthunt",
-        "publisher render producthunt",
-        "publisher cover producthunt",
-        "publisher publish producthunt",
+        ".\\scripts\\publisher.ps1 fetch producthunt",
+        ".\\scripts\\publisher.ps1 release producthunt",
+        ".\\scripts\\publisher.ps1 render producthunt",
+        ".\\scripts\\publisher.ps1 cover producthunt",
+        ".\\scripts\\publisher.ps1 publish producthunt",
     ):
         assert command in skill
     assert "--year" in skill

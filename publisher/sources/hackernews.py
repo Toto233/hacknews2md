@@ -7,6 +7,7 @@ from hn2md.stages.fetch import FetchStage
 from hn2md.stages.plan import PlanStage
 from hn2md.stages.publish import PublishStage
 from hn2md.stages.render import RenderStage
+from hn2md.stages.screenshot import CaptureScreenshotsStage
 from publisher.constants import GenericStage
 from publisher.sources.base import SourceDefinition
 
@@ -17,6 +18,7 @@ HACKERNEWS_SOURCE = SourceDefinition(
     stages={
         GenericStage.FETCHING: FetchStage,
         GenericStage.COLLECTING: CollectStage,
+        GenericStage.CAPTURING: CaptureScreenshotsStage,
         GenericStage.PLANNING: PlanStage,
         GenericStage.APPLYING: ApplyStage,
         GenericStage.RENDERING: RenderStage,
@@ -26,6 +28,7 @@ HACKERNEWS_SOURCE = SourceDefinition(
     stage_order=(
         GenericStage.FETCHING,
         GenericStage.COLLECTING,
+        GenericStage.CAPTURING,
         GenericStage.PLANNING,
         GenericStage.APPLYING,
         GenericStage.RENDERING,

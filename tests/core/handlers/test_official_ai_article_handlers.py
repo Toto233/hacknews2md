@@ -6,7 +6,9 @@ import asyncio
 from unittest.mock import AsyncMock, MagicMock, patch
 
 from src.core.handlers.anthropic_handler import get_anthropic_article_content, is_anthropic_article_url
-from src.core.handlers.browser_article_handler import ArticleExtraction, _render_browser_article, get_browser_article_content
+from src.core.handlers.article_extraction import ArticleExtraction
+from src.core.handlers.article_handler_registry import resolve_article_handler
+from src.core.handlers.browser_article_handler import _render_browser_article, get_browser_article_content
 from src.core.handlers.openai_handler import get_openai_article_content, is_openai_article_url
 from src.core.handlers.qwen_handler import extract_qwen_article_content, get_qwen_blog_content, is_qwen_blog_url
 
@@ -27,6 +29,14 @@ def test_official_ai_article_url_matchers_only_accept_article_urls() -> None:
     assert is_qwen_blog_url("https://qwen.ai/blog?id=qwen-image-3.0")
     assert not is_qwen_blog_url("https://qwen.ai/blog")
     assert not is_qwen_blog_url("https://example.com/blog?id=qwen-image-3.0")
+
+
+def test_article_handler_registry_resolves_only_supported_first_party_articles() -> None:
+    assert resolve_article_handler("https://hy.tencent.com/research/hy3").name == "hunyuan"
+    assert resolve_article_handler("https://openai.com/index/example/").name == "openai"
+    assert resolve_article_handler("https://www.anthropic.com/news/example").name == "anthropic"
+    assert resolve_article_handler("https://qwen.ai/blog?id=qwen-image-3.0").name == "qwen"
+    assert resolve_article_handler("https://openai.com/legal/terms/") is None
 
 
 def test_openai_and_anthropic_handlers_use_browser_article_extraction() -> None:

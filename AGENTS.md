@@ -2,43 +2,35 @@
 
 ## Project Overview
 
-**hn2md** is a Hacker News → Chinese summaries → WeChat Official Account publisher. It scrapes HN front page stories, generates Chinese titles/summaries/rankings/tags via LLM, and publishes to WeChat drafts. Optionally syncs to an Astro blog.
+**publisher** is the source-driven publishing application. Its HackerNews source scrapes HN front page stories, generates Chinese titles/summaries/rankings/tags via LLM, publishes WeChat drafts, and optionally syncs to Astro.
 
 ## Architecture
 
 ```
-hn2md/ (CLI orchestration) → src/ (business logic) → external services
+publisher/ (daily CLI orchestration) → hn2md/ + src/ (source implementation) → external services
 ```
 
-- **`hn2md/`**: Staged pipeline CLI (fetch → collect → plan → apply → render → cover → publish)
+- **`publisher/`**: Canonical source-driven CLI and stage orchestration
+- **`hn2md/`**: HackerNews state machine and stages, used internally by `publisher`
 - **`src/`**: Core library — fetchers, crawlers, handlers, LLM layer, integrations, utils
 - **`scripts/`**: Cover generators + WeChat publisher (used by hn2md stages)
 - **`skills/`**: Codex skill definition (legacy, being evaluated for archival)
 - **`tests/`**: pytest test suite
 
-**Canonical entry point**: `hn2md release` (not standalone scripts)
+**Canonical daily entry point**: `./scripts/publisher.ps1 <command> hackernews`.
+`hn2md` is a compatibility/internal CLI; do not add new daily workflow features to it.
 
 ## Key Commands
 
 ```bash
-hn2md release              # Full pipeline (auto-backup enabled by default)
-hn2md release --from-stage COLLECTING  # Resume from specific stage
-hn2md release --dry-run    # Preview without publishing to WeChat
-hn2md release --backup/--no-backup  # Toggle auto-backup before pipeline
-hn2md release --force      # Override stale daily lock
-hn2md doctor               # Environment health check
-hn2md doctor --json        # CI-ready JSON health report (exit code = pass/fail)
-hn2md backup               # Manual database backup with integrity check
-hn2md backup --dest PATH   # Backup to custom location
-hn2md audit                # Content quality check (supports --interactive, --llm)
-hn2md status               # Current job state and run ledger
-hn2md fetch                # Fetch HN front page
-hn2md collect              # Scrape article content and discussions
-hn2md plan                 # LLM generate summaries
-hn2md apply                # Write plan to database
-hn2md render               # Generate Markdown/HTML
-hn2md cover                # Generate cover image
-hn2md publish              # Publish to WeChat drafts
+.\scripts\publisher.ps1 release hackernews              # Full pipeline
+.\scripts\publisher.ps1 release hackernews --from-stage COLLECTING  # Resume from a stage
+.\scripts\publisher.ps1 release hackernews --dry-run    # Preview without WeChat publish
+.\scripts\publisher.ps1 status hackernews               # Current job state and run ledger
+.\scripts\publisher.ps1 collect hackernews              # Scrape article content and discussions
+.\scripts\publisher.ps1 capture-screenshots hackernews  # Mandatory visual fallback pass
+.\scripts\publisher.ps1 audit hackernews                # Content quality gate
+.\scripts\publisher.ps1 review-run hackernews           # Post-publish process review
 ```
 
 ## Development Rules
@@ -56,7 +48,7 @@ hn2md publish              # Publish to WeChat drafts
 
 ### Code Quality
 - **No dead code**: `summarize_news3/4/5.py` are archived — do not import or reference
-- **Single entry point**: Use `hn2md` CLI, not standalone scripts
+- **Single daily entry point**: Use the `publisher` PowerShell wrapper, not standalone scripts or `hn2md`
 - **Type hints**: All public functions must have return type annotations
 - **Structured logging**: Use `structlog.get_logger()`, never bare `print()` for operational output
 

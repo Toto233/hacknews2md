@@ -15,7 +15,29 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
+import structlog
+
 logger = logging.getLogger(__name__)
+_STANDARD_LOG_RECORD_KEYS = frozenset(logging.makeLogRecord({}).__dict__)
+
+
+def _configure_structlog() -> None:
+    """Route structlog events through the same handlers as stdlib logging."""
+    structlog.configure(
+        processors=[
+            structlog.stdlib.filter_by_level,
+            structlog.stdlib.add_logger_name,
+            structlog.stdlib.add_log_level,
+            structlog.stdlib.PositionalArgumentsFormatter(),
+            structlog.processors.TimeStamper(fmt="iso", utc=True),
+            structlog.processors.StackInfoRenderer(),
+            structlog.processors.format_exc_info,
+            structlog.stdlib.render_to_log_kwargs,
+        ],
+        logger_factory=structlog.stdlib.LoggerFactory(),
+        wrapper_class=structlog.stdlib.BoundLogger,
+        cache_logger_on_first_use=False,
+    )
 
 
 class JSONFormatter(logging.Formatter):
@@ -28,11 +50,15 @@ class JSONFormatter(logging.Formatter):
             "logger": record.name,
             "message": record.getMessage(),
         }
-        # Add extra fields from record
-        for key in ("stage", "news_id", "url", "duration_ms", "error_type"):
-            val = getattr(record, key, None)
-            if val is not None:
-                log_entry[key] = val
+        # Preserve stdlib ``extra`` fields and structlog context fields.
+        for key, value in record.__dict__.items():
+            if key in _STANDARD_LOG_RECORD_KEYS or key.startswith("_") or key in log_entry:
+                continue
+            try:
+                json.dumps(value, ensure_ascii=False)
+                log_entry[key] = value
+            except TypeError:
+                log_entry[key] = str(value)
         if record.exc_info and record.exc_info[0] is not None:
             log_entry["exception"] = self.formatException(record.exc_info)
         return json.dumps(log_entry, ensure_ascii=False)
@@ -56,6 +82,7 @@ def setup_logging(
     Returns:
         The daily log path when file logging is enabled, otherwise ``None``.
     """
+    _configure_structlog()
     root = logging.getLogger()
     root.setLevel(level)
 

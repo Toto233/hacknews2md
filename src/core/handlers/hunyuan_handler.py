@@ -12,6 +12,7 @@ from typing import Any
 from urllib.parse import urlparse
 
 from src.security.url_validator import SecurityError, validate_url
+from src.core.handlers.article_extraction import ArticleExtraction
 
 logger = logging.getLogger(__name__)
 
@@ -114,3 +115,12 @@ async def get_hunyuan_blog_content(url: str) -> str:
         logger.warning("[HUNYUAN] publicDetail returned non-success custom_url=%s", custom_url)
         return ""
     return extract_public_detail_content(data)
+
+
+async def get_hunyuan_article(url: str) -> ArticleExtraction:
+    """Adapt Hunyuan's public API response to the common article contract."""
+    content = await get_hunyuan_blog_content(url)
+    return ArticleExtraction(
+        content=content,
+        reason=None if content else "hunyuan_api_content_unavailable",
+    )

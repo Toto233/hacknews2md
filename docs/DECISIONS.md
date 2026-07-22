@@ -117,3 +117,23 @@ This file records durable project decisions that should not be changed back and 
 - Decision: `publisher audit` is reserved for pre-publish content quality gates. Post-publish log and receipt inspection uses a separate command named `publisher review-run`.
 - Failure mode of alternative: Reusing `audit` for every check makes the CLI ambiguous. Agents and humans cannot tell whether a command blocks content generation, validates external publishing side effects, or reviews logs for future optimization. That ambiguity encourages unrelated methods to accumulate under `publisher audit`.
 - Consequences: Skills and runbooks should call `publisher audit` before planning, and `publisher review-run` after publishing when looking for follow-up improvements.
+
+### 2026-07-22 - Publisher is the daily entry point
+
+- Status: Accepted
+- Issue: N/A
+- Supersedes: N/A
+- Context: The source-driven `publisher` workflow now owns daily release orchestration, but older documentation still presented `hn2md` as the primary CLI. Bare console commands also depend on virtual-environment activation.
+- Decision: Daily HackerNews operations use `./scripts/publisher.ps1 <command> hackernews`. `hn2md` remains the internal HackerNews implementation and compatibility CLI, not the place for new daily workflow behavior.
+- Failure mode of alternative: Two advertised entry points drift in supported options, receipts, and operational guidance. A fresh Windows device can also fail before reaching the workflow when its virtual environment is not activated.
+- Consequences: Skills, AGENTS instructions, and daily runbooks use the PowerShell wrapper. New source-level orchestration belongs in `publisher`.
+
+### 2026-07-22 - Capture screenshots as a mandatory non-blocking fallback
+
+- Status: Accepted
+- Issue: N/A
+- Supersedes: 2026-07-18 - Keep visual fallback work outside content readiness
+- Context: Screenshots are valuable fallback assets and must be attempted for every daily HackerNews release, but a slow or inaccessible page must not stop content collection or WeChat publication.
+- Decision: Add `CAPTURING` after `COLLECTING` in the HackerNews publisher stage order. Capture runs concurrently, retries each page once, and allows 120 seconds per attempt. Its receipt always records the attempt and warnings, while individual page failures remain non-blocking.
+- Failure mode of alternative: Making screenshot success a hard gate turns one broken page into a publishing outage. Making capture an optional manual command produces releases with no visual fallback.
+- Consequences: Normal and resumed releases before publishing work include `CAPTURING`; post-run review can inspect its receipt and warnings.

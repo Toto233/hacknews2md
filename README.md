@@ -204,7 +204,20 @@ output/markdown/hacknews_summary_*.html
 output/images/YYYYMMDD/
 ```
 
-## hn2md CLI
+## Publisher CLI
+
+Daily operations use the source-driven `publisher` interface. On Windows, use the repository wrapper so the virtual environment does not need to be activated first:
+
+```powershell
+.\scripts\publisher.ps1 release hackernews
+.\scripts\publisher.ps1 collect hackernews
+.\scripts\publisher.ps1 capture-screenshots hackernews
+.\scripts\publisher.ps1 review-run hackernews
+```
+
+`hn2md` remains an internal/compatibility CLI for the HackerNews implementation. New daily publishing workflow features belong in `publisher`.
+
+## Legacy hn2md CLI
 
 项目提供统一的 `hn2md` 命令行工具，支持全流程一键发布和断点续跑。
 

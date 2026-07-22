@@ -5,7 +5,13 @@ from pathlib import Path
 from unittest.mock import patch
 
 from hn2md.context import RuntimeContext
-from hn2md.screenshot_capture import SCREENSHOT_TIMEOUT_SECONDS, _capture_rows, capture_missing_screenshots
+from hn2md.screenshot_capture import (
+    SCREENSHOT_ATTEMPTS,
+    SCREENSHOT_TIMEOUT_SECONDS,
+    _capture_one_in_process,
+    _capture_rows,
+    capture_missing_screenshots,
+)
 from src.utils.db_utils import init_database
 
 
@@ -32,7 +38,7 @@ def _ctx(tmp_path: Path) -> RuntimeContext:
     )
 
 
-def test_capture_missing_screenshots_is_optional_and_updates_only_successes(tmp_path: Path) -> None:
+def test_capture_missing_screenshots_records_successes_without_blocking_failures(tmp_path: Path) -> None:
     ctx = _ctx(tmp_path)
 
     with patch(
@@ -77,4 +83,22 @@ def test_capture_rows_honors_the_concurrency_limit(monkeypatch) -> None:
 
 
 def test_screenshot_timeout_includes_windows_browser_startup_budget() -> None:
-    assert SCREENSHOT_TIMEOUT_SECONDS >= 60
+    assert SCREENSHOT_TIMEOUT_SECONDS >= 120
+    assert SCREENSHOT_ATTEMPTS == 2
+
+
+def test_capture_retries_once_before_returning_a_warning(monkeypatch) -> None:
+    attempts = []
+
+    def capture_once(row):
+        attempts.append(row["id"])
+        if len(attempts) == 1:
+            return {"id": row["id"], "screenshot": None, "reason": "screenshot_timeout"}
+        return {"id": row["id"], "screenshot": "shot.png"}
+
+    monkeypatch.setattr("hn2md.screenshot_capture._capture_one_attempt", capture_once)
+
+    result = _capture_one_in_process({"id": 1, "news_url": "https://example.com", "title": "Story"})
+
+    assert result["screenshot"] == "shot.png"
+    assert result["attempts"] == 2

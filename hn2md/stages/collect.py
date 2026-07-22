@@ -60,13 +60,10 @@ async def _crawl_article_with_scrapling(url: str) -> tuple[str, list[str]]:
 async def _collect_item(row: sqlite3.Row, semaphore: asyncio.Semaphore, db_path: str | None = None) -> dict[str, Any]:
     """Collect missing context for one news row."""
     from src.core.content_quality import is_paywall_or_shell_content
-    from src.core.handlers.anthropic_handler import get_anthropic_article_content, is_anthropic_article_url
+    from src.core.handlers.article_handler_registry import resolve_article_handler
     from src.core.handlers.fediverse_handler import get_fediverse_content, is_fediverse_url
-    from src.core.handlers.hunyuan_handler import get_hunyuan_blog_content, is_hunyuan_blog_url
     from src.core.handlers.image_handler import is_low_signal_article_image_url, save_article_image
-    from src.core.handlers.openai_handler import get_openai_article_content, is_openai_article_url
     from src.core.handlers.pdf_handler import get_pdf_content, is_pdf_url
-    from src.core.handlers.qwen_handler import get_qwen_blog_content, is_qwen_blog_url
     from src.core.handlers.stackexchange_handler import build_public_summary_fallback, is_stackexchange_url
     from src.core.handlers.youtube_handler import get_youtube_content
     from src.utils.scraper_failures import extract_domain, record_scraper_failure
@@ -101,26 +98,11 @@ async def _collect_item(row: sqlite3.Row, semaphore: asyncio.Semaphore, db_path:
                 content, fediverse_source_type = await get_fediverse_content(news_url)
                 collected_source_type = fediverse_source_type or "full_text"
                 image_urls = []
-            elif is_hunyuan_blog_url(news_url):
-                content = await get_hunyuan_blog_content(news_url)
-                image_urls = []
-            elif is_openai_article_url(news_url):
-                extraction = await get_openai_article_content(news_url)
+            elif article_handler := resolve_article_handler(news_url):
+                extraction = await article_handler.extract(news_url)
                 content = extraction.content
                 image_urls = list(extraction.image_urls)
-                official_handler = "openai"
-                official_handler_reason = extraction.reason
-            elif is_anthropic_article_url(news_url):
-                extraction = await get_anthropic_article_content(news_url)
-                content = extraction.content
-                image_urls = list(extraction.image_urls)
-                official_handler = "anthropic"
-                official_handler_reason = extraction.reason
-            elif is_qwen_blog_url(news_url):
-                extraction = await get_qwen_blog_content(news_url)
-                content = extraction.content
-                image_urls = list(extraction.image_urls)
-                official_handler = "qwen"
+                official_handler = article_handler.name
                 official_handler_reason = extraction.reason
             else:
                 content, image_urls = await _crawl_article_with_scrapling(news_url)

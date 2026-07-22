@@ -3,6 +3,7 @@ from unittest.mock import AsyncMock, patch
 
 from src.core.handlers.hunyuan_handler import (
     extract_public_detail_content,
+    get_hunyuan_article,
     get_hunyuan_blog_content,
     is_hunyuan_blog_url,
 )
@@ -49,3 +50,14 @@ def test_get_hunyuan_blog_content_uses_public_detail_api() -> None:
     post.assert_awaited_once_with("hy3")
     assert content.startswith("Introducing Hy3")
     assert "Full article body" in content
+
+
+def test_get_hunyuan_article_adapts_text_to_the_shared_contract() -> None:
+    with patch(
+        "src.core.handlers.hunyuan_handler.get_hunyuan_blog_content",
+        new=AsyncMock(return_value="Hunyuan article body"),
+    ):
+        result = asyncio.run(get_hunyuan_article("https://hy.tencent.com/research/hy3"))
+
+    assert result.content == "Hunyuan article body"
+    assert result.reason is None

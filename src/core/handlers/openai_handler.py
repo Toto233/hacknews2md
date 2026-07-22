@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from src.core.handlers.browser_article_handler import ArticleExtraction
+from src.core.handlers.article_extraction import ArticleExtraction
 from src.core.handlers.official_browser_handler import get_official_browser_article, is_official_publication_url
 
 SUPPORTED_HOSTS = {"openai.com", "www.openai.com"}

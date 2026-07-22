@@ -8,7 +8,7 @@ from urllib.parse import parse_qs, urljoin, urlparse
 import structlog
 from bs4 import BeautifulSoup
 
-from src.core.handlers.browser_article_handler import ArticleExtraction
+from src.core.handlers.article_extraction import ArticleExtraction
 from src.security.url_validator import SecurityError, validate_url
 
 logger = structlog.get_logger(__name__)

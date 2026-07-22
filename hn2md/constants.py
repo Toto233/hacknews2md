@@ -7,6 +7,7 @@ class Stage(str, Enum):
     IDLE = "IDLE"
     FETCHING = "FETCHING"
     COLLECTING = "COLLECTING"
+    CAPTURING = "CAPTURING"
     PLANNING = "PLANNING"
     APPLYING = "APPLYING"
     RENDERING = "RENDERING"
@@ -19,6 +20,7 @@ class Stage(str, Enum):
 STAGE_ORDER = [
     Stage.FETCHING,
     Stage.COLLECTING,
+    Stage.CAPTURING,
     Stage.PLANNING,
     Stage.APPLYING,
     Stage.RENDERING,
@@ -29,6 +31,7 @@ STAGE_ORDER = [
 RETRY_BUDGETS = {
     Stage.FETCHING: 3,
     Stage.COLLECTING: 2,
+    Stage.CAPTURING: 0,
     Stage.PLANNING: 2,
     Stage.APPLYING: 1,
     Stage.RENDERING: 1,

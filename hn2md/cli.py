@@ -17,6 +17,7 @@ from src.utils.logging_setup import setup_logging
 STAGE_CLASSES = {
     Stage.FETCHING: "hn2md.stages.fetch.FetchStage",
     Stage.COLLECTING: "hn2md.stages.collect.CollectStage",
+    Stage.CAPTURING: "hn2md.stages.screenshot.CaptureScreenshotsStage",
     Stage.PLANNING: "hn2md.stages.plan.PlanStage",
     Stage.APPLYING: "hn2md.stages.apply.ApplyStage",
     Stage.RENDERING: "hn2md.stages.render.RenderStage",
@@ -131,7 +132,7 @@ def fetch(ctx_obj):
 @click.option("--concurrency", default=3, type=int)
 @click.pass_context
 def collect(ctx_obj, concurrency):
-    """Scrape article content, discussions, screenshots."""
+    """Scrape article content and discussions."""
     rt = ctx_obj.obj["ctx"]
     date_str = datetime.now().strftime("%Y%m%d")
     machine, _ = JobStateMachine.load_or_create(rt.job_dir, date_str)
@@ -286,7 +287,7 @@ def publish(ctx_obj, markdown_file, cover_image):
 @click.option("--force", is_flag=True, help="Override stale daily lock")
 @click.pass_context
 def release(ctx_obj, date_str, from_stage, skip_cover, skip_publish, dry_run, backup, force):
-    """Full pipeline: fetch -> collect -> plan -> apply -> render -> cover -> publish."""
+    """Full pipeline: fetch -> collect -> capture -> plan -> apply -> render -> cover -> publish."""
     rt = ctx_obj.obj["ctx"]
     if not date_str:
         date_str = datetime.now().strftime("%Y%m%d")

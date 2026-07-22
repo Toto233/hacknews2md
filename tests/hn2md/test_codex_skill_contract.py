@@ -4,14 +4,14 @@ from pathlib import Path
 def test_codex_skill_uses_publisher_project_entry_points() -> None:
     skill = Path("skills/publish-hacknews-codex/SKILL.md").read_text(encoding="utf-8")
     for command in (
-        "publisher fetch hackernews",
-        "publisher collect hackernews",
-        "publisher audit hackernews",
-        "publisher plan hackernews",
-        "publisher apply hackernews",
-        "publisher render hackernews",
-        "publisher cover hackernews",
-        "publisher publish hackernews",
+        ".\\scripts\\publisher.ps1 fetch hackernews",
+        ".\\scripts\\publisher.ps1 collect hackernews",
+        ".\\scripts\\publisher.ps1 audit hackernews",
+        ".\\scripts\\publisher.ps1 plan hackernews",
+        ".\\scripts\\publisher.ps1 apply hackernews",
+        ".\\scripts\\publisher.ps1 render hackernews",
+        ".\\scripts\\publisher.ps1 cover hackernews",
+        ".\\scripts\\publisher.ps1 publish hackernews",
     ):
         assert command in skill
     assert "hn2md " not in skill
@@ -34,16 +34,16 @@ def test_codex_skill_explicitly_forbids_external_llm_in_manual_mode() -> None:
 
 def test_codex_skill_runs_audit_before_manual_plan() -> None:
     skill = Path("skills/publish-hacknews-codex/SKILL.md").read_text(encoding="utf-8")
-    assert skill.index("publisher audit hackernews") < skill.index("publisher plan hackernews")
+    assert skill.index(".\\scripts\\publisher.ps1 audit hackernews") < skill.index(".\\scripts\\publisher.ps1 plan hackernews")
     assert "--approve" in skill
     assert "blocking" in skill
 
 
 def test_codex_skill_prefers_compact_draft_plan_material() -> None:
     skill = Path("skills/publish-hacknews-codex/SKILL.md").read_text(encoding="utf-8")
-    assert "publisher draft-plan hackernews" in skill
+    assert ".\\scripts\\publisher.ps1 draft-plan hackernews" in skill
     assert "context_file" in skill
-    assert skill.index("publisher audit hackernews") < skill.index("publisher draft-plan hackernews")
+    assert skill.index(".\\scripts\\publisher.ps1 audit hackernews") < skill.index(".\\scripts\\publisher.ps1 draft-plan hackernews")
 
 
 def test_codex_skill_defaults_to_wechat_and_astro_publish() -> None:
@@ -63,8 +63,8 @@ def test_codex_skill_forbids_guessing_missing_article_content() -> None:
 def test_codex_skill_refreshes_collect_receipt_after_human_backfill() -> None:
     skill = Path("skills/publish-hacknews-codex/SKILL.md").read_text(encoding="utf-8")
     assert "用户说“补齐了”" in skill
-    assert "publisher collect hackernews --rerun" in skill
-    assert skill.index("publisher collect hackernews --rerun") < skill.index("publisher audit hackernews --json")
+    assert ".\\scripts\\publisher.ps1 collect hackernews --rerun" in skill
+    assert skill.index(".\\scripts\\publisher.ps1 collect hackernews --rerun") < skill.index(".\\scripts\\publisher.ps1 audit hackernews --json")
 
 
 def test_codex_skill_keyword_gate_requires_sentence_review_for_neutral_or_negative_context() -> None:
@@ -103,8 +103,8 @@ def test_codex_skill_handles_existing_astro_staged_changes_without_deleting_file
 
 def test_codex_skill_post_run_review_uses_dedicated_publisher_command() -> None:
     skill = Path("skills/publish-hacknews-codex/SKILL.md").read_text(encoding="utf-8")
-    assert "publisher review-run hackernews" in skill
-    assert "publisher review-run hackernews --json" in skill
+    assert ".\\scripts\\publisher.ps1 review-run hackernews" in skill
+    assert ".\\scripts\\publisher.ps1 review-run hackernews --json" in skill
     assert "output/reviews/run_review_" in skill
     assert "publisher audit hackernews --post-publish" not in skill
 
@@ -112,4 +112,4 @@ def test_codex_skill_post_run_review_uses_dedicated_publisher_command() -> None:
 def test_codex_skill_uses_publisher_for_future_domain_filters() -> None:
     skill = Path("skills/publish-hacknews-codex/SKILL.md").read_text(encoding="utf-8")
 
-    assert "publisher filter-domain hackernews" in skill
+    assert ".\\scripts\\publisher.ps1 filter-domain hackernews" in skill

@@ -102,7 +102,17 @@ def test_graph_prints_hackernews_stage_order() -> None:
 
     assert result.exit_code == 0, result.output
     assert "Source: hackernews" in result.output
-    assert "FETCHING -> COLLECTING -> PLANNING -> APPLYING -> RENDERING -> COVERING -> PUBLISHING" in result.output
+    assert "FETCHING -> COLLECTING -> CAPTURING -> PLANNING -> APPLYING -> RENDERING -> COVERING -> PUBLISHING" in result.output
+
+
+def test_release_resuming_after_collection_includes_visual_fallback(tmp_path, monkeypatch) -> None:
+    monkeypatch.chdir(tmp_path)
+
+    with patch("publisher.cli.run_release", return_value={"completed_stages": ["CAPTURING", "PLANNING"]}) as run:
+        result = CliRunner().invoke(main, ["release", "hackernews", "--from-stage", "PLANNING", "--dry-run"])
+
+    assert result.exit_code == 0, result.output
+    assert [stage.value for stage in run.call_args.kwargs["stages"]] == ["CAPTURING", "PLANNING", "APPLYING", "RENDERING", "COVERING", "PUBLISHING"]
 
 
 def test_collect_command_runs_collect_stage_with_concurrency(tmp_path, monkeypatch) -> None:

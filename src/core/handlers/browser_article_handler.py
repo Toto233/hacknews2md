@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
 from multiprocessing import get_context
 from queue import Empty
 import time
@@ -11,6 +10,7 @@ from typing import Any
 import structlog
 from selenium import webdriver
 
+from src.core.handlers.article_extraction import ArticleExtraction
 from src.core.handlers.browser_support import build_headless_chrome_options
 from src.security.url_validator import SecurityError, validate_url
 
@@ -21,16 +21,6 @@ RENDER_WAIT_SECONDS = 3.0
 BROWSER_ARTICLE_TIMEOUT_SECONDS = 75
 PROCESS_RESULT_WAIT_SECONDS = 2
 PROCESS_TERMINATE_WAIT_SECONDS = 5
-
-
-@dataclass(frozen=True)
-class ArticleExtraction:
-    """Article text, images, and a machine-readable reason when extraction failed."""
-
-    content: str = ""
-    image_urls: tuple[str, ...] = field(default_factory=tuple)
-    reason: str | None = None
-    error: str | None = None
 
 
 def _render_browser_article(url: str) -> ArticleExtraction:

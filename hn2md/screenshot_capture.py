@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 from multiprocessing import get_context
+import os
 from queue import Empty
 import sqlite3
 import time
@@ -16,7 +17,8 @@ from src.db.connection import get_db
 # Chrome startup regularly takes 25+ seconds on Windows. The page handler has
 # its own navigation timeout, so this outer budget must also cover process and
 # browser startup rather than cutting every valid capture short.
-SCREENSHOT_TIMEOUT_SECONDS = 75
+SCREENSHOT_TIMEOUT_SECONDS = int(os.getenv("HN2MD_SCREENSHOT_TIMEOUT_SECONDS", "120"))
+SCREENSHOT_ATTEMPTS = 2
 PROCESS_RESULT_WAIT_SECONDS = 2
 
 
@@ -30,8 +32,8 @@ def _save_screenshot_in_child(url: str, title: str, result_queue: Any) -> None:
         result_queue.put({"screenshot": None, "reason": "screenshot_error", "error": str(exc)})
 
 
-def _capture_one_in_process(row: sqlite3.Row) -> dict[str, Any]:
-    """Capture one screenshot with a process lifetime that can be terminated."""
+def _capture_one_attempt(row: sqlite3.Row) -> dict[str, Any]:
+    """Capture one screenshot attempt with a process lifetime that can be terminated."""
     started_at = time.monotonic()
     process_context = get_context("spawn")
     result_queue = process_context.Queue()
@@ -63,6 +65,17 @@ def _capture_one_in_process(row: sqlite3.Row) -> dict[str, Any]:
     result["duration_ms"] = round((time.monotonic() - started_at) * 1000)
     if not result.get("screenshot") and "reason" not in result:
         result["reason"] = "screenshot_unavailable"
+    return result
+
+
+def _capture_one_in_process(row: sqlite3.Row) -> dict[str, Any]:
+    """Retry a missing screenshot once before recording a non-blocking warning."""
+    result: dict[str, Any] = {"id": row["id"], "screenshot": None, "reason": "screenshot_unavailable"}
+    for attempt in range(1, SCREENSHOT_ATTEMPTS + 1):
+        result = _capture_one_attempt(row)
+        result["attempts"] = attempt
+        if result.get("screenshot"):
+            return result
     return result
 
 
@@ -132,6 +145,7 @@ def capture_missing_screenshots(ctx: RuntimeContext, concurrency: int = 4) -> di
         "requested": len(rows),
         "captured": captured,
         "timed_out": sum(result.get("reason") == "screenshot_timeout" for result in results),
+        "attempts": SCREENSHOT_ATTEMPTS,
         "concurrency": max(1, concurrency),
         "batch_duration_ms": batch_duration_ms,
         "p50_duration_ms": _percentile_duration_ms(durations, 0.50),

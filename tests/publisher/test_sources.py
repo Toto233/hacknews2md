@@ -14,6 +14,7 @@ def test_hackernews_source_maps_existing_stages() -> None:
     assert source.name == "hackernews"
     assert source.period_kind == "date"
     assert GenericStage.FETCHING in source.stages
+    assert GenericStage.CAPTURING in source.stages
     assert GenericStage.PUBLISHING in source.stages
 
 
@@ -23,6 +24,7 @@ def test_hackernews_source_declares_canonical_stage_order() -> None:
     assert source.stage_order == (
         GenericStage.FETCHING,
         GenericStage.COLLECTING,
+        GenericStage.CAPTURING,
         GenericStage.PLANNING,
         GenericStage.APPLYING,
         GenericStage.RENDERING,

@@ -6,7 +6,8 @@ import asyncio
 from collections.abc import Collection
 from urllib.parse import urlparse
 
-from src.core.handlers.browser_article_handler import ArticleExtraction, get_browser_article_content
+from src.core.handlers.article_extraction import ArticleExtraction
+from src.core.handlers.browser_article_handler import get_browser_article_content
 
 
 def is_official_publication_url(

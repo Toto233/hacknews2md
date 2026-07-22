@@ -196,16 +196,16 @@ def collect(source_name: str, date_value: str | None, concurrency: int, rerun: b
 @click.option("--date", "date_value", default=None, help="YYYY-MM-DD or YYYYMMDD")
 @click.option("--concurrency", default=4, type=click.IntRange(min=1))
 def capture_screenshots(source_name: str, date_value: str | None, concurrency: int) -> None:
-    """Capture optional page screenshots without reopening the collection stage."""
-    source, ctx = _load_date_source(source_name, date_value)
+    """Run the mandatory, non-blocking visual fallback stage."""
+    source, _ctx = _load_date_source(source_name, date_value)
     if source.name != "hackernews":
         raise click.ClickException("capture-screenshots currently supports hackernews only")
-
-    from hn2md.screenshot_capture import capture_missing_screenshots
-    from publisher.pipeline.runner import _hn_runtime_context
-
-    result = capture_missing_screenshots(_hn_runtime_context(ctx), concurrency=concurrency)
-    click.echo(json_mod.dumps(result, ensure_ascii=False))
+    _run_single_stage(
+        source_name,
+        date_value,
+        GenericStage.CAPTURING,
+        kwargs={"concurrency": concurrency},
+    )
 
 
 @main.command()
@@ -694,6 +694,21 @@ def release(
         except (ValueError, IndexError):
             raise click.ClickException(f"unknown stage for {source.name}: {from_stage}") from None
         stages = stages[start_index:]
+    if (
+        source.name == "hackernews"
+        and GenericStage.CAPTURING not in stages
+        and any(
+            stage in stages
+            for stage in (
+                GenericStage.PLANNING,
+                GenericStage.APPLYING,
+                GenericStage.RENDERING,
+                GenericStage.COVERING,
+            )
+        )
+    ):
+        # Resuming after collection still needs the required visual fallback.
+        stages = (GenericStage.CAPTURING, *stages)
     effective_targets = targets or source.default_publish_targets
     result = run_release(
         ctx,

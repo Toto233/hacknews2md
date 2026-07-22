@@ -6,6 +6,7 @@ import logging
 from datetime import datetime
 
 import pytest
+import structlog
 
 from src.utils.logging_setup import (
     safe_print,
@@ -202,6 +203,17 @@ class TestSetupLogging:
         assert log_path == tmp_path / f"hn2md-{datetime.now():%Y%m%d}.log"
         assert log_path is not None
         assert "中文日志" in log_path.read_text(encoding="utf-8")
+
+    def test_structlog_events_share_the_configured_log_file(self, tmp_path):
+        log_path = setup_logging(json_mode=True, log_dir=tmp_path, console=False)
+        structlog.get_logger("test.structlog").warning("official_handler_failed", site="qwen")
+        for handler in logging.getLogger().handlers:
+            handler.flush()
+
+        assert log_path is not None
+        entries = [json.loads(line) for line in log_path.read_text(encoding="utf-8").splitlines()]
+        assert entries[-1]["message"] == "official_handler_failed"
+        assert entries[-1]["site"] == "qwen"
 
     def test_console_logs_use_stderr(self, tmp_path, capsys):
         """Console logs should not contaminate stdout."""

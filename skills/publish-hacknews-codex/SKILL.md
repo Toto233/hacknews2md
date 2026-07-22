@@ -5,14 +5,16 @@ description: Use when publishing the daily HackNews Chinese recap with publisher
 
 # Publish HackNews with Codex
 
+For every command below, use the repository wrapper `./scripts/publisher.ps1`; do not depend on a globally activated virtual environment.
+
 Run every command from the repository root. `publisher` is the only publishing entry point; Codex is the manual-plan content model. 导入 manual plan 时不得调用 Gemini/Grok/Moonshot。默认完整发布必须同时完成 WeChat 和 Astro；只有用户明确要求“只发微信”“不要 Astro”“重发微信草稿”时，才使用 `--target wechat`。
 
 ## 1. Collect
 
 ```powershell
-publisher fetch hackernews
-publisher collect hackernews --concurrency 3
-publisher capture-screenshots hackernews --concurrency 3
+.\scripts\publisher.ps1 fetch hackernews
+.\scripts\publisher.ps1 collect hackernews --concurrency 3
+.\scripts\publisher.ps1 capture-screenshots hackernews --concurrency 3
 ```
 
 Completion criterion: collection returns a `context_file`, DB rows exist for today, and content/discussion lengths have been checked:
@@ -32,18 +34,18 @@ Collect triage:
 Manual repair uses publisher commands, not handwritten SQL:
 
 ```powershell
-publisher review-missing hackernews
-publisher set-content hackernews <id> --file ".\path\to\body.txt" --source-type human_supplied --source-url "<url>"
-publisher mark-source hackernews <id> --type human_supplied --url "<url>"
-publisher filter-domain hackernews <domain-or-url> --reason "paywall"
-publisher skip-story hackernews <id> --filter-domain --reason "403"
+.\scripts\publisher.ps1 review-missing hackernews
+.\scripts\publisher.ps1 set-content hackernews <id> --file ".\path\to\body.txt" --source-type human_supplied --source-url "<url>"
+.\scripts\publisher.ps1 mark-source hackernews <id> --type human_supplied --url "<url>"
+.\scripts\publisher.ps1 filter-domain hackernews <domain-or-url> --reason "paywall"
+.\scripts\publisher.ps1 skip-story hackernews <id> --filter-domain --reason "403"
 ```
 
 When 用户说“补齐了”, refresh the collection receipt before planning:
 
 ```powershell
-publisher collect hackernews --rerun
-publisher audit hackernews --phase pre-plan --json
+.\scripts\publisher.ps1 collect hackernews --rerun
+.\scripts\publisher.ps1 audit hackernews --phase pre-plan --json
 ```
 
 Use `filter-domain` to block future stories from a confirmed paywall or unusable domain while keeping today's story. Only use `skip-story --filter-domain` after the user confirms the current story should also be dropped.
@@ -53,19 +55,19 @@ Use `filter-domain` to block future stories from a confirmed paywall or unusable
 First run the gate:
 
 ```powershell
-publisher audit hackernews --json
+.\scripts\publisher.ps1 audit hackernews --json
 ```
 
 If `blocking_count > 0`, summarize the blocking issues and wait for user confirmation. If the user accepts the risk, record the exemption:
 
 ```powershell
-publisher audit hackernews --approve
+.\scripts\publisher.ps1 audit hackernews --approve
 ```
 
 Then export compact plan material to save context:
 
 ```powershell
-publisher draft-plan hackernews
+.\scripts\publisher.ps1 draft-plan hackernews
 ```
 
 `draft-plan` writes `output/codex/hacknews_plan_draft_YYYYMMDD_HHMMSS.json` with titles, URLs, source fields, existing summaries, total content lengths, and short article/discussion excerpts. Use it first. Read the full `context_file` or DB content only when excerpts are insufficient, content looks missing, source provenance needs verification, or the user asks for deep reading.
@@ -99,9 +101,9 @@ Plan contract:
 ## 3. Render
 
 ```powershell
-publisher plan hackernews --manual-plan ".\output\codex\hacknews_plan_YYYYMMDD_HHMMSS.json"
-publisher apply hackernews
-publisher render hackernews
+.\scripts\publisher.ps1 plan hackernews --manual-plan ".\output\codex\hacknews_plan_YYYYMMDD_HHMMSS.json"
+.\scripts\publisher.ps1 apply hackernews
+.\scripts\publisher.ps1 render hackernews
 ```
 
 Completion criterion: command output records `markdown_file`, `html_file`, and, for a normal full publish, a non-empty `astro_file`. Rendering must preserve Codex `ordered_ids` and four tags.
@@ -109,7 +111,7 @@ Completion criterion: command output records `markdown_file`, `html_file`, and, 
 For a WeChat-only rerun:
 
 ```powershell
-publisher render hackernews --target wechat --rerun
+.\scripts\publisher.ps1 render hackernews --target wechat --rerun
 ```
 
 ## 4. Cover
@@ -117,13 +119,13 @@ publisher render hackernews --target wechat --rerun
 Pick a 10-15 Chinese-character display title from the first item in the manual plan's `ordered_ids`: “主体 + 事件”. Do not select a lower-ranked story for visual appeal; the cover receipt records both the article title and the exact display title.
 
 ```powershell
-publisher cover hackernews "<markdown_file>" --mode ai --display-title "<短标题>"
+.\scripts\publisher.ps1 cover hackernews "<markdown_file>" --mode ai --display-title "<短标题>"
 ```
 
 Completion criterion: cover text is readable, meaning matches the article, the layout is a 2.45:1 horizontal cover, and the cover receipt contains the generated center `1:1` share preview. If AI cover fails:
 
 ```powershell
-publisher cover hackernews "<markdown_file>" --mode pillow --rerun
+.\scripts\publisher.ps1 cover hackernews "<markdown_file>" --mode pillow --rerun
 ```
 
 If both fail, publish without `--cover-image` so the publisher falls back to the first story image.
@@ -131,13 +133,13 @@ If both fail, publish without `--cover-image` so the publisher falls back to the
 ## 5. Publish WeChat
 
 ```powershell
-publisher publish hackernews "<markdown_file>" --cover-image "<cover_image>" --target wechat
+.\scripts\publisher.ps1 publish hackernews "<markdown_file>" --cover-image "<cover_image>" --target wechat
 ```
 
 Dry-run:
 
 ```powershell
-publisher publish hackernews "<markdown_file>" --cover-image "<cover_image>" --target wechat --dry-run --rerun
+.\scripts\publisher.ps1 publish hackernews "<markdown_file>" --cover-image "<cover_image>" --target wechat --dry-run --rerun
 ```
 
 Completion criterion: report the draft Media ID and any oversized-image skip list.
@@ -153,7 +155,7 @@ Keyword review:
 To republish today's WeChat draft without writing another Astro article:
 
 ```powershell
-publisher release hackernews --from-stage PUBLISHING --target wechat --rerun
+.\scripts\publisher.ps1 release hackernews --from-stage PUBLISHING --target wechat --rerun
 ```
 
 ## 6. Publish Astro
@@ -175,7 +177,7 @@ If `publisher render hackernews` reports Astro 仓库已有 staged changes:
 
 ```powershell
 git -C "<astro仓库>" restore --staged -- "<旧文章相对路径>"
-publisher render hackernews
+.\scripts\publisher.ps1 render hackernews
 ```
 
 - After render succeeds, stage only user-confirmed old articles and the new article.
@@ -197,8 +199,8 @@ Start-Process explorer.exe -ArgumentList $imgDir
 Always run post-run review after publishing:
 
 ```powershell
-publisher review-run hackernews
-publisher review-run hackernews --json
+.\scripts\publisher.ps1 review-run hackernews
+.\scripts\publisher.ps1 review-run hackernews --json
 ```
 
 Completion criterion: the append-only history is written to `output/reviews/run_review_{YYYYMMDD}.jsonl`, the current conclusion is written to `output/reviews/run_review_latest_{YYYYMMDD}.json`, and blocking findings are explained. `review-run` is not content audit; it reviews the publishing process.

@@ -14,21 +14,21 @@ Default target: 默认只发布 WeChat. Do not publish to Astro unless a future 
 Fetch or refresh the month:
 
 ```powershell
-publisher fetch producthunt --year <YYYY> --month <MM>
+.\scripts\publisher.ps1 fetch producthunt --year <YYYY> --month <MM>
 ```
 
 Generate or rerun the monthly release:
 
 ```powershell
-publisher release producthunt --year <YYYY> --month <MM>
+.\scripts\publisher.ps1 release producthunt --year <YYYY> --month <MM>
 ```
 
 For manual stage control, use:
 
 ```powershell
-publisher render producthunt --year <YYYY> --month <MM>
-publisher cover producthunt --year <YYYY> --month <MM>
-publisher publish producthunt --year <YYYY> --month <MM>
+.\scripts\publisher.ps1 render producthunt --year <YYYY> --month <MM>
+.\scripts\publisher.ps1 cover producthunt --year <YYYY> --month <MM>
+.\scripts\publisher.ps1 publish producthunt --year <YYYY> --month <MM>
 ```
 
 Before publishing, inspect warnings and missing fields in `data/producthunt.db`. If content needs user input, report the product name, URL, and missing field instead of inventing facts.
