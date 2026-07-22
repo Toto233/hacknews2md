@@ -46,14 +46,27 @@ async def _fetch_discussion_with_retries(
     }
 
 
+async def _crawl_article_with_scrapling(url: str) -> tuple[str, list[str]]:
+    """Use the generic crawler as the fallback for a failed specialist handler."""
+    from src.core.crawlers.scrapling_crawler import ScraplingCrawler
+
+    crawler = ScraplingCrawler()
+    try:
+        return await crawler.crawl_article(url)
+    finally:
+        await crawler.close()
+
+
 async def _collect_item(row: sqlite3.Row, semaphore: asyncio.Semaphore, db_path: str | None = None) -> dict[str, Any]:
     """Collect missing context for one news row."""
     from src.core.content_quality import is_paywall_or_shell_content
-    from src.core.crawlers.scrapling_crawler import ScraplingCrawler
+    from src.core.handlers.anthropic_handler import get_anthropic_article_content, is_anthropic_article_url
     from src.core.handlers.fediverse_handler import get_fediverse_content, is_fediverse_url
     from src.core.handlers.hunyuan_handler import get_hunyuan_blog_content, is_hunyuan_blog_url
     from src.core.handlers.image_handler import is_low_signal_article_image_url, save_article_image
+    from src.core.handlers.openai_handler import get_openai_article_content, is_openai_article_url
     from src.core.handlers.pdf_handler import get_pdf_content, is_pdf_url
+    from src.core.handlers.qwen_handler import get_qwen_blog_content, is_qwen_blog_url
     from src.core.handlers.stackexchange_handler import build_public_summary_fallback, is_stackexchange_url
     from src.core.handlers.youtube_handler import get_youtube_content
     from src.utils.scraper_failures import extract_domain, record_scraper_failure
@@ -74,6 +87,8 @@ async def _collect_item(row: sqlite3.Row, semaphore: asyncio.Semaphore, db_path:
         news_url = row["news_url"] or ""
         if news_url and len(article_content) < MIN_ARTICLE_CONTENT_CHARS:
             collected_source_type = "full_text"
+            official_handler = ""
+            official_handler_reason: str | None = None
             if _is_youtube_url(news_url):
                 content, saved_images, _ = await get_youtube_content(news_url, row["title"] or "")
                 image_urls = []
@@ -89,12 +104,33 @@ async def _collect_item(row: sqlite3.Row, semaphore: asyncio.Semaphore, db_path:
             elif is_hunyuan_blog_url(news_url):
                 content = await get_hunyuan_blog_content(news_url)
                 image_urls = []
+            elif is_openai_article_url(news_url):
+                extraction = await get_openai_article_content(news_url)
+                content = extraction.content
+                image_urls = list(extraction.image_urls)
+                official_handler = "openai"
+                official_handler_reason = extraction.reason
+            elif is_anthropic_article_url(news_url):
+                extraction = await get_anthropic_article_content(news_url)
+                content = extraction.content
+                image_urls = list(extraction.image_urls)
+                official_handler = "anthropic"
+                official_handler_reason = extraction.reason
+            elif is_qwen_blog_url(news_url):
+                extraction = await get_qwen_blog_content(news_url)
+                content = extraction.content
+                image_urls = list(extraction.image_urls)
+                official_handler = "qwen"
+                official_handler_reason = extraction.reason
             else:
-                crawler = ScraplingCrawler()
-                try:
-                    content, image_urls = await crawler.crawl_article(news_url)
-                finally:
-                    await crawler.close()
+                content, image_urls = await _crawl_article_with_scrapling(news_url)
+
+            if official_handler and (
+                not content
+                or len(content.strip()) < MIN_ARTICLE_CONTENT_CHARS
+                or is_paywall_or_shell_content(content)
+            ):
+                content, image_urls = await _crawl_article_with_scrapling(news_url)
             unusable_content = bool(content and is_paywall_or_shell_content(content))
             if content and len(content.strip()) >= MIN_ARTICLE_CONTENT_CHARS and not unusable_content:
                 article_content = content.strip()
@@ -124,17 +160,20 @@ async def _collect_item(row: sqlite3.Row, semaphore: asyncio.Semaphore, db_path:
             elif news_url:
                 domain = extract_domain(news_url)
                 failure_count = record_scraper_failure(domain, news_url, db_path)
-                content_warnings.append(
-                    {
-                        "id": row["id"],
-                        "title": row["title"] or "",
-                        "url": news_url,
-                        "domain": domain,
-                        "reason": "paywall_or_shell_page" if unusable_content else "article_content_missing",
-                        "failure_count": failure_count,
-                        "action_required": "human_input_or_handler",
-                    }
-                )
+                warning = {
+                    "id": row["id"],
+                    "title": row["title"] or "",
+                    "url": news_url,
+                    "domain": domain,
+                    "reason": "paywall_or_shell_page" if unusable_content else "article_content_missing",
+                    "failure_count": failure_count,
+                    "action_required": "human_input_or_handler",
+                }
+                if official_handler:
+                    warning["official_handler"] = official_handler
+                    warning["official_handler_reason"] = official_handler_reason or "content_unusable"
+                    warning["fallback"] = "scrapling"
+                content_warnings.append(warning)
             if image_urls:
                 saved_images = []
                 candidate_image_urls = [

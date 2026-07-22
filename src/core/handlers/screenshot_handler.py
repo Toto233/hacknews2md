@@ -13,8 +13,7 @@ import time
 from datetime import datetime
 
 from selenium import webdriver
-from selenium.webdriver.chrome.options import Options as ChromeOptions
-
+from src.core.handlers.browser_support import build_headless_chrome_options
 from src.llm.llm_business import generate_summary_from_image
 from src.security.url_validator import SecurityError, validate_url
 
@@ -57,17 +56,7 @@ def save_page_screenshot(url: str, title: str) -> str | None:
 
     logger.info(f"[SCREENSHOT] preparing | '{title[:40]}...' | path:{image_save_path}")
 
-    options = ChromeOptions()
-    options.add_argument("--headless")
-    options.add_argument("--disable-gpu")
-    options.add_argument("--no-sandbox")
-    options.add_argument("--disable-dev-shm-usage")
-    options.add_argument("--window-size=1920,1080")
-    options.page_load_strategy = "eager"
-    options.add_argument(
-        "user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
-        "(KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
-    )
+    options = build_headless_chrome_options()
 
     driver = None
     saved_screenshot_path = None

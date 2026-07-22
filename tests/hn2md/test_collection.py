@@ -288,6 +288,129 @@ def test_collect_stage_routes_hunyuan_urls_to_hunyuan_handler(tmp_path) -> None:
     )
 
 
+def test_collect_stage_routes_openai_urls_to_official_handler(tmp_path) -> None:
+    from src.core.handlers.browser_article_handler import ArticleExtraction
+
+    ctx = _ctx(tmp_path)
+    url = "https://openai.com/index/example/"
+    _set_news_url(ctx, url)
+
+    with (
+        patch(
+            "src.core.handlers.openai_handler.get_openai_article_content",
+            new=AsyncMock(
+                return_value=ArticleExtraction(
+                    content="OpenAI article body " * 10,
+                    image_urls=("https://cdn.openai.com/hero.jpg",),
+                )
+            ),
+        ) as handler,
+        patch("src.core.crawlers.scrapling_crawler.ScraplingCrawler") as crawler_cls,
+        patch("src.core.handlers.discussion_handler.get_discussion_content_async", new=AsyncMock(return_value="HN discussion")),
+        patch("src.core.handlers.image_handler.save_article_image", return_value="openai-hero.jpg") as save_image,
+    ):
+        result = CollectStage().execute(ctx, object(), concurrency=1)
+
+    handler.assert_awaited_once_with(url)
+    crawler_cls.assert_not_called()
+    save_image.assert_called_once_with("https://cdn.openai.com/hero.jpg", url, "Story_1")
+    assert result["collected"] == 1
+
+
+def test_collect_stage_routes_anthropic_and_qwen_urls_to_official_handlers(tmp_path) -> None:
+    from src.core.handlers.browser_article_handler import ArticleExtraction
+
+    ctx = _ctx(tmp_path)
+    anthropic_url = "https://www.anthropic.com/news/example"
+    _set_news_url(ctx, anthropic_url)
+
+    with (
+        patch(
+            "src.core.handlers.anthropic_handler.get_anthropic_article_content",
+            new=AsyncMock(return_value=ArticleExtraction(content="Anthropic article body " * 10)),
+        ) as anthropic_handler,
+        patch("src.core.crawlers.scrapling_crawler.ScraplingCrawler") as crawler_cls,
+        patch("src.core.handlers.discussion_handler.get_discussion_content_async", new=AsyncMock(return_value="HN discussion")),
+    ):
+        first_result = CollectStage().execute(ctx, object(), concurrency=1)
+
+    anthropic_handler.assert_awaited_once_with(anthropic_url)
+    crawler_cls.assert_not_called()
+    assert first_result["collected"] == 1
+
+    qwen_url = "https://qwen.ai/blog?id=qwen-image-3.0"
+    _set_news_url(ctx, qwen_url)
+    with sqlite3.connect(ctx.db_path) as conn:
+        conn.execute("UPDATE news SET article_content=NULL, content_source_type=NULL, content_source_url=NULL WHERE id=1")
+
+    with (
+        patch(
+            "src.core.handlers.qwen_handler.get_qwen_blog_content",
+            new=AsyncMock(return_value=ArticleExtraction(content="Qwen article body " * 10)),
+        ) as qwen_handler,
+        patch("src.core.crawlers.scrapling_crawler.ScraplingCrawler") as crawler_cls,
+        patch("src.core.handlers.discussion_handler.get_discussion_content_async", new=AsyncMock(return_value="HN discussion")),
+    ):
+        second_result = CollectStage().execute(ctx, object(), concurrency=1)
+
+    qwen_handler.assert_awaited_once_with(qwen_url)
+    crawler_cls.assert_not_called()
+    assert second_result["collected"] == 1
+
+
+def test_collect_stage_falls_back_after_official_handler_failure(tmp_path) -> None:
+    from src.core.handlers.browser_article_handler import ArticleExtraction
+
+    ctx = _ctx(tmp_path)
+    url = "https://qwen.ai/blog?id=qwen-image-3.0"
+    _set_news_url(ctx, url)
+    crawler = MagicMock()
+    crawler.crawl_article = AsyncMock(return_value=("Fallback article body " * 10, ["https://cdn.qwen.ai/hero.jpg"]))
+    crawler.close = AsyncMock()
+
+    with (
+        patch(
+            "src.core.handlers.qwen_handler.get_qwen_blog_content",
+            new=AsyncMock(return_value=ArticleExtraction(reason="qwen_api_content_unavailable")),
+        ) as handler,
+        patch("src.core.crawlers.scrapling_crawler.ScraplingCrawler", return_value=crawler),
+        patch("src.core.handlers.discussion_handler.get_discussion_content_async", new=AsyncMock(return_value="HN discussion")),
+        patch("src.core.handlers.image_handler.save_article_image", return_value="qwen-hero.jpg"),
+    ):
+        result = CollectStage().execute(ctx, object(), concurrency=1)
+
+    handler.assert_awaited_once_with(url)
+    crawler.crawl_article.assert_awaited_once_with(url)
+    crawler.close.assert_awaited_once()
+    assert result["collected"] == 1
+    assert result["content_warnings"] == []
+
+
+def test_collect_stage_records_official_handler_reason_after_fallback_failure(tmp_path) -> None:
+    from src.core.handlers.browser_article_handler import ArticleExtraction
+
+    ctx = _ctx(tmp_path)
+    url = "https://openai.com/index/example/"
+    _set_news_url(ctx, url)
+    crawler = MagicMock()
+    crawler.crawl_article = AsyncMock(return_value=("", []))
+    crawler.close = AsyncMock()
+
+    with (
+        patch(
+            "src.core.handlers.openai_handler.get_openai_article_content",
+            new=AsyncMock(return_value=ArticleExtraction(reason="browser_article_timeout")),
+        ),
+        patch("src.core.crawlers.scrapling_crawler.ScraplingCrawler", return_value=crawler),
+        patch("src.core.handlers.discussion_handler.get_discussion_content_async", new=AsyncMock(return_value="HN discussion")),
+    ):
+        result = CollectStage().execute(ctx, object(), concurrency=1)
+
+    assert result["content_warnings"][0]["official_handler"] == "openai"
+    assert result["content_warnings"][0]["official_handler_reason"] == "browser_article_timeout"
+    assert result["content_warnings"][0]["fallback"] == "scrapling"
+
+
 def test_collect_stage_records_stackexchange_fallback_source_metadata(tmp_path) -> None:
     ctx = _ctx(tmp_path)
     _set_news_url(ctx, "https://physics.stackexchange.com/questions/535/example")
