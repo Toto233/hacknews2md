@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+from collections import Counter
 from multiprocessing import get_context
 import os
 from queue import Empty
@@ -24,10 +25,16 @@ PROCESS_RESULT_WAIT_SECONDS = 2
 
 def _save_screenshot_in_child(url: str, title: str, result_queue: Any) -> None:
     """Run Selenium in a killable process so its browser cannot hold the batch."""
-    from src.core.handlers.screenshot_handler import save_page_screenshot
+    from src.core.handlers.screenshot_handler import capture_page_screenshot
 
     try:
-        result_queue.put({"screenshot": save_page_screenshot(url, title)})
+        capture = capture_page_screenshot(url, title)
+        result_queue.put(
+            {
+                "screenshot": capture.path,
+                "page_preparation": {"action": capture.page_preparation_action},
+            }
+        )
     except Exception as exc:
         result_queue.put({"screenshot": None, "reason": "screenshot_error", "error": str(exc)})
 
@@ -132,12 +139,23 @@ def capture_missing_screenshots(ctx: RuntimeContext, concurrency: int = 4) -> di
                 warnings.append({key: value for key, value in result.items() if key != "screenshot"})
 
     durations = [result["duration_ms"] for result in results if isinstance(result.get("duration_ms"), int)]
+    page_preparation_actions = Counter(
+        action
+        for result in results
+        if isinstance(result.get("page_preparation"), dict)
+        if isinstance((action := result["page_preparation"].get("action")), str) and action
+    )
     items = [
         {
             "id": result["id"],
             "captured": bool(result.get("screenshot")),
             "reason": result.get("reason"),
             "duration_ms": result.get("duration_ms"),
+            "page_preparation_action": (
+                result.get("page_preparation", {}).get("action")
+                if isinstance(result.get("page_preparation"), dict)
+                else None
+            ),
         }
         for result in results
     ]
@@ -150,6 +168,7 @@ def capture_missing_screenshots(ctx: RuntimeContext, concurrency: int = 4) -> di
         "batch_duration_ms": batch_duration_ms,
         "p50_duration_ms": _percentile_duration_ms(durations, 0.50),
         "p95_duration_ms": _percentile_duration_ms(durations, 0.95),
+        "page_preparation_actions": dict(page_preparation_actions),
         "items": items,
         "warnings": warnings,
     }

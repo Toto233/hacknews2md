@@ -2,6 +2,7 @@
 
 import logging
 import re
+import sqlite3
 from pathlib import Path
 from typing import Any
 
@@ -10,6 +11,7 @@ from hn2md.context import RuntimeContext
 from hn2md.state import JobStateMachine
 from hn2md.stages.base import BaseStage, NonRetryableStageError
 from hn2md.stages.script_loader import load_project_function
+from src.db.connection import get_db
 
 logger = logging.getLogger(__name__)
 
@@ -36,6 +38,32 @@ _LOCAL_IMAGE_PATTERNS = [
 ]
 _WECHAT_IMAGE_LIMIT_BYTES = 1024 * 1024
 _WECHAT_SUPPORTED_IMAGE_SUFFIXES = {".jpg", ".jpeg", ".png", ".webp"}
+
+
+def _require_screenshots_for_publish(ctx: RuntimeContext) -> None:
+    """Stop before WeChat work when the mandatory visual fallback is incomplete."""
+    with get_db(str(ctx.db_path)) as conn:
+        conn.row_factory = sqlite3.Row
+        has_news_table = conn.execute(
+            "SELECT 1 FROM sqlite_master WHERE type='table' AND name='news'"
+        ).fetchone()
+        if has_news_table is None:
+            return
+        missing = conn.execute(
+            """
+            SELECT id, news_url
+            FROM news
+            WHERE date(created_at)=date('now','localtime')
+              AND coalesce(news_url, '') != ''
+              AND coalesce(screenshot, '') = ''
+            ORDER BY id
+            """
+        ).fetchall()
+    if missing:
+        details = "; ".join(f"{row['id']}: {row['news_url']}" for row in missing)
+        raise NonRetryableStageError(
+            f"Mandatory screenshot fallback is incomplete. Rerun capture-screenshots for: {details}"
+        )
 
 
 def _sentence_for_keyword(line: str, keyword: str) -> str:
@@ -212,6 +240,9 @@ class PublishStage(BaseStage):
         )
         if not md_file:
             raise RuntimeError("No markdown file")
+
+        if isinstance(ctx, RuntimeContext):
+            _require_screenshots_for_publish(ctx)
 
         # --- Content safety gate ---
         # Check markdown content for illegal keywords before publishing

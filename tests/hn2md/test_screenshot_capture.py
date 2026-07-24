@@ -2,6 +2,7 @@ import sqlite3
 import threading
 import time
 from pathlib import Path
+from queue import Queue
 from unittest.mock import patch
 
 from hn2md.context import RuntimeContext
@@ -10,8 +11,10 @@ from hn2md.screenshot_capture import (
     SCREENSHOT_TIMEOUT_SECONDS,
     _capture_one_in_process,
     _capture_rows,
+    _save_screenshot_in_child,
     capture_missing_screenshots,
 )
+from src.core.handlers.screenshot_handler import ScreenshotCapture
 from src.utils.db_utils import init_database
 
 
@@ -43,7 +46,12 @@ def test_capture_missing_screenshots_records_successes_without_blocking_failures
 
     with patch(
         "hn2md.screenshot_capture._capture_one_in_process",
-        return_value={"id": 1, "screenshot": "shot.png", "duration_ms": 120},
+        return_value={
+            "id": 1,
+            "screenshot": "shot.png",
+            "duration_ms": 120,
+            "page_preparation": {"action": "rejected"},
+        },
     ):
         result = capture_missing_screenshots(ctx, concurrency=1)
 
@@ -53,7 +61,16 @@ def test_capture_missing_screenshots_records_successes_without_blocking_failures
     assert result["concurrency"] == 1
     assert result["p50_duration_ms"] == 120
     assert result["p95_duration_ms"] == 120
-    assert result["items"] == [{"id": 1, "captured": True, "reason": None, "duration_ms": 120}]
+    assert result["items"] == [
+        {
+            "id": 1,
+            "captured": True,
+            "reason": None,
+            "duration_ms": 120,
+            "page_preparation_action": "rejected",
+        }
+    ]
+    assert result["page_preparation_actions"] == {"rejected": 1}
     assert result["warnings"] == []
     with sqlite3.connect(ctx.db_path) as conn:
         assert conn.execute("SELECT screenshot FROM news WHERE id=1").fetchone() == ("shot.png",)
@@ -102,3 +119,17 @@ def test_capture_retries_once_before_returning_a_warning(monkeypatch) -> None:
 
     assert result["screenshot"] == "shot.png"
     assert result["attempts"] == 2
+
+
+def test_screenshot_child_preserves_the_page_preparation_action() -> None:
+    result_queue = Queue()
+    with patch(
+        "src.core.handlers.screenshot_handler.capture_page_screenshot",
+        return_value=ScreenshotCapture(path="shot.png", page_preparation_action="rejected"),
+    ):
+        _save_screenshot_in_child("https://example.com/story", "Story", result_queue)
+
+    assert result_queue.get_nowait() == {
+        "screenshot": "shot.png",
+        "page_preparation": {"action": "rejected"},
+    }

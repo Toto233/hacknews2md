@@ -5,7 +5,7 @@ import time
 
 import pytest
 
-from hn2md.lock import LockError, _pid_alive, daily_lock
+from hn2md.lock import LockError, _pid_alive, daily_lock, release_daily_lock
 
 
 def test_lock_creates_file(tmp_path):
@@ -103,3 +103,20 @@ def test_lock_malformed_content_recovery(tmp_path):
         content = lock_path.read_text(encoding="utf-8").strip()
         pid_str, ts_str = content.split("|", 1)
         assert int(pid_str) == os.getpid()
+
+
+def test_release_daily_lock_removes_dead_owner(tmp_path):
+    lock_path = tmp_path / ".lock"
+    lock_path.write_text(f"0|{time.time():.0f}", encoding="utf-8")
+
+    assert release_daily_lock(lock_path) == "stale_lock_removed"
+    assert not lock_path.exists()
+
+
+def test_release_daily_lock_refuses_to_remove_live_owner(tmp_path):
+    lock_path = tmp_path / ".lock"
+    lock_path.write_text(f"{os.getpid()}|{time.time():.0f}", encoding="utf-8")
+
+    with pytest.raises(LockError, match="--terminate"):
+        release_daily_lock(lock_path)
+    assert lock_path.exists()

@@ -139,6 +139,32 @@ def test_collect_command_supports_rerun(tmp_path, monkeypatch) -> None:
     assert kwargs["rerun"] is True
 
 
+def test_capture_screenshots_supports_rerun(tmp_path, monkeypatch) -> None:
+    monkeypatch.chdir(tmp_path)
+
+    with patch("publisher.cli.run_release", return_value={"completed_stages": ["CAPTURING"]}) as run:
+        result = CliRunner().invoke(
+            main,
+            ["capture-screenshots", "hackernews", "--date", "2026-06-27", "--rerun"],
+        )
+
+    assert result.exit_code == 0, result.output
+    _, kwargs = run.call_args
+    assert [stage.value for stage in kwargs["stages"]] == ["CAPTURING"]
+    assert kwargs["rerun"] is True
+
+
+def test_unlock_command_reports_lock_recovery(tmp_path, monkeypatch) -> None:
+    monkeypatch.chdir(tmp_path)
+
+    with patch("publisher.cli.release_daily_lock", return_value="stale_lock_removed") as release_lock:
+        result = CliRunner().invoke(main, ["unlock", "hackernews", "--date", "2026-06-27"])
+
+    assert result.exit_code == 0, result.output
+    assert "Unlock result: stale_lock_removed" in result.output
+    assert release_lock.call_args.kwargs["terminate"] is False
+
+
 def test_hackernews_fetch_does_not_pass_producthunt_options(tmp_path, monkeypatch) -> None:
     monkeypatch.chdir(tmp_path)
 

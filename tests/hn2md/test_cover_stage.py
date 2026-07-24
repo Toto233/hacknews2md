@@ -24,6 +24,16 @@ def test_cover_ai_calls_reusable_api(tmp_path) -> None:
     assert result["cover_image"] == "ai.png"
 
 
+def test_cover_defaults_to_deterministic_fallback(tmp_path) -> None:
+    md = tmp_path / "a.md"
+    ctx = object()
+    with patch("hn2md.stages.cover.load_project_function", return_value=lambda *_: "pillow.png") as load:
+        result = CoverStage().execute(ctx, _machine(md))
+
+    load.assert_called_once_with(ctx, "scripts.generate_wechat_cover", "generate_cover")
+    assert result["cover_image"] == "pillow.png"
+
+
 def test_cover_pillow_calls_reusable_api(tmp_path) -> None:
     md = tmp_path / "a.md"
     ctx = object()

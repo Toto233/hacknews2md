@@ -60,6 +60,7 @@ class BaseStage(ABC):
             started_at=started.isoformat(),
             finished_at="",
             success=False,
+            run_id=machine.job.run_id or None,
         )
 
         last_error = None

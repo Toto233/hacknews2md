@@ -492,6 +492,43 @@ def test_post_publish_review_surfaces_stage_retries_and_warnings(tmp_path: Path)
     ]
 
 
+def test_post_publish_review_reports_cookie_dismissals_as_info(tmp_path: Path) -> None:
+    from datetime import datetime
+
+    from hn2md.stages.post_publish_audit import run_post_publish_audit
+
+    date_str = datetime.now().strftime("%Y%m%d")
+    job_dir = tmp_path / "jobs"
+    job_dir.mkdir()
+    db_path = tmp_path / "test.db"
+    output_dir = tmp_path / "output"
+    ledger = {
+        "date": date_str,
+        "status": "DONE",
+        "stages": {
+            "CAPTURING": {
+                "success": True,
+                "output_summary": {"page_preparation_actions": {"rejected": 2}},
+            },
+            "PUBLISHING": {
+                "success": True,
+                "output_summary": {"wechat_media_id": "wx1"},
+            },
+        },
+    }
+    (job_dir / f"publish_job_{date_str}.json").write_text(json.dumps(ledger), encoding="utf-8")
+
+    result = run_post_publish_audit(job_dir, db_path, output_dir, dry_run=False)
+
+    assert {
+        "date": date_str,
+        "check": "page_preparation",
+        "severity": "info",
+        "message": "Rejected optional cookies on 2 page(s)",
+        "details": {"stage": "CAPTURING", "actions": {"rejected": 2}},
+    } in result["findings"]
+
+
 def test_post_publish_review_reads_historical_stage_receipts(tmp_path: Path) -> None:
     from datetime import datetime
 

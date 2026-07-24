@@ -1,5 +1,6 @@
 from pathlib import Path
 import importlib
+import sqlite3
 import sys
 import textwrap
 from unittest.mock import call, patch
@@ -11,6 +12,7 @@ from hn2md.constants import Stage
 from hn2md.context import RuntimeContext
 from hn2md.stages.base import NonRetryableStageError
 from hn2md.stages.publish import PublishStage
+from src.utils.db_utils import init_database
 
 
 def test_publish_calls_reusable_api_with_explicit_paths(tmp_path) -> None:
@@ -58,6 +60,31 @@ def test_publish_preflight_whitelist_error_fails_before_upload(tmp_path) -> None
         pytest.raises(NonRetryableStageError, match="188.253.120.170"),
     ):
         PublishStage().execute(ctx, machine, markdown_file=str(md))
+
+
+def test_publish_blocks_when_a_story_has_no_screenshot(tmp_path) -> None:
+    db_path = tmp_path / "data" / "hacknews.db"
+    init_database(str(db_path))
+    with sqlite3.connect(db_path) as conn:
+        conn.execute(
+            "INSERT INTO news (id, title, news_url, created_at) VALUES (1, 'Story', 'https://example.com/story', datetime('now', 'localtime'))"
+        )
+    md = tmp_path / "article.md"
+    md.write_text("# safe", encoding="utf-8")
+    ctx = RuntimeContext(
+        project_root=tmp_path,
+        db_path=db_path,
+        output_dir=tmp_path / "output",
+        job_dir=tmp_path / "output" / "jobs",
+        markdown_dir=tmp_path / "output" / "markdown",
+        images_dir=tmp_path / "output" / "images",
+        codex_dir=tmp_path / "output" / "codex",
+        config_path=tmp_path / "config" / "config.json",
+    )
+    machine = type("M", (), {"job": type("J", (), {"stages": {}})()})()
+
+    with pytest.raises(NonRetryableStageError, match="Mandatory screenshot fallback.*https://example.com/story"):
+        PublishStage().execute(ctx, machine, markdown_file=str(md), dry_run=True)
 
 
 def test_publish_fails_when_wechat_returns_no_media_id(tmp_path) -> None:

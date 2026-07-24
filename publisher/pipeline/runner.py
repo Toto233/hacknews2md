@@ -2,7 +2,10 @@ from __future__ import annotations
 
 from typing import Iterable
 
+import click
+
 from hn2md.context import RuntimeContext
+from hn2md.lock import LockError, daily_lock
 from hn2md.state import JobStateMachine
 from publisher.constants import GenericStage
 from publisher.context import PublisherContext
@@ -31,6 +34,24 @@ def run_release(
     rerun: bool = False,
     stage_kwargs: dict[GenericStage | str, dict[str, object]] | None = None,
 ) -> dict[str, object]:
+    lock_path = ctx.job_dir / f".lock_{ctx.period}"
+    try:
+        with daily_lock(lock_path):
+            return _run_release_locked(ctx, source, stages, dry_run, targets, rerun, stage_kwargs)
+    except LockError as exc:
+        raise click.ClickException(str(exc)) from exc
+
+
+def _run_release_locked(
+    ctx: PublisherContext,
+    source: SourceDefinition,
+    stages: Iterable[GenericStage],
+    dry_run: bool,
+    targets: tuple[str, ...] | None,
+    rerun: bool,
+    stage_kwargs: dict[GenericStage | str, dict[str, object]] | None,
+) -> dict[str, object]:
+    """Run stages while holding the daily ledger lock."""
     machine, _ = JobStateMachine.load_or_create(ctx.job_dir, ctx.period)
     runtime_ctx = _hn_runtime_context(ctx)
     completed: list[str] = []
@@ -41,6 +62,12 @@ def run_release(
     for stage_name in stage_sequence:
         hn_stage = _to_hn_stage(stage_name)
         if not rerun and machine.stage_completed_successfully(hn_stage):
+            # A previous rerun may have moved the ledger back to an earlier
+            # stage while this stage's successful artifact remains reusable.
+            # Keep the state machine aligned with the receipt before the next
+            # stage transitions forward.
+            if machine.job.status != hn_stage.value:
+                machine.transition(hn_stage)
             continue
         if stage_name in source.audit_required_stages:
             _ensure_audit_ready(runtime_ctx, machine, strict=stage_name == GenericStage.PUBLISHING)
@@ -68,6 +95,7 @@ def run_release(
     return {
         "source": source.name,
         "period": ctx.period,
+        "run_id": machine.job.run_id,
         "dry_run": dry_run,
         "targets": publish_targets,
         "completed_stages": completed,

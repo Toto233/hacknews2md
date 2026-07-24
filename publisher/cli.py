@@ -12,6 +12,7 @@ import click
 from src.utils.console_encoding import configure_utf8_stdio
 from hn2md.state import JobStateMachine
 from hn2md.state import StageReceipt
+from hn2md.lock import LockError, release_daily_lock
 from hn2md.stages.audit import VALID_SOURCE_TYPES, run_audit
 from publisher.constants import GenericStage
 from publisher.context import PublisherContext, parse_date_period, parse_month_period
@@ -147,6 +148,28 @@ def status(source_name: str, date_value: str | None, year: int | None, month: in
     click.echo(f"Status: {machine.job.status}")
 
 
+@main.command("unlock")
+@click.argument("source_name")
+@click.option("--date", "date_value", default=None, help="YYYY-MM-DD or YYYYMMDD")
+@click.option("--year", type=int, default=None)
+@click.option("--month", type=int, default=None)
+@click.option("--terminate", is_flag=True, help="Terminate the active locked run before releasing it")
+def unlock(
+    source_name: str,
+    date_value: str | None,
+    year: int | None,
+    month: int | None,
+    terminate: bool,
+) -> None:
+    """Recover a stale daily lock without allowing concurrent ledger writers."""
+    _source, ctx = _load_source_context(source_name, date_value, year, month)
+    try:
+        result = release_daily_lock(ctx.job_dir / f".lock_{ctx.period}", terminate=terminate)
+    except LockError as exc:
+        raise click.ClickException(str(exc)) from exc
+    click.echo(f"Unlock result: {result}")
+
+
 @main.command()
 @click.argument("source_name")
 @click.option("--date", "date_value", default=None, help="YYYY-MM-DD or YYYYMMDD")
@@ -195,7 +218,8 @@ def collect(source_name: str, date_value: str | None, concurrency: int, rerun: b
 @click.argument("source_name")
 @click.option("--date", "date_value", default=None, help="YYYY-MM-DD or YYYYMMDD")
 @click.option("--concurrency", default=4, type=click.IntRange(min=1))
-def capture_screenshots(source_name: str, date_value: str | None, concurrency: int) -> None:
+@click.option("--rerun", is_flag=True, help="Retry screenshots missing from a completed capture stage")
+def capture_screenshots(source_name: str, date_value: str | None, concurrency: int, rerun: bool) -> None:
     """Run the mandatory, non-blocking visual fallback stage."""
     source, _ctx = _load_date_source(source_name, date_value)
     if source.name != "hackernews":
@@ -204,6 +228,7 @@ def capture_screenshots(source_name: str, date_value: str | None, concurrency: i
         source_name,
         date_value,
         GenericStage.CAPTURING,
+        rerun=rerun,
         kwargs={"concurrency": concurrency},
     )
 
@@ -593,7 +618,7 @@ def render(
 @click.argument("source_name")
 @click.argument("markdown_file", required=False)
 @click.option("--date", "date_value", default=None, help="YYYY-MM-DD or YYYYMMDD")
-@click.option("--mode", type=click.Choice(["ai", "pillow", "external"]), default="ai")
+@click.option("--mode", type=click.Choice(["ai", "pillow", "external"]), default="pillow")
 @click.option("--target-word", default=None)
 @click.option("--display-title", default=None, help="Exact compressed title rendered on the cover")
 @click.option("--cover-image", default=None, type=click.Path(exists=True, dir_okay=False))

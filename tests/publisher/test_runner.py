@@ -1,5 +1,8 @@
 from unittest.mock import MagicMock
+import os
+import time
 
+import click
 import pytest
 
 from hn2md.constants import Stage as HnStage
@@ -27,6 +30,10 @@ class FakeRenderStage(FakeStage):
     stage_name = HnStage.RENDERING
 
 
+class FakeCaptureStage(FakeStage):
+    stage_name = HnStage.CAPTURING
+
+
 def test_run_release_invokes_source_stages_in_order(tmp_path) -> None:
     fake_stage = FakeStage()
     source = SourceDefinition(
@@ -40,9 +47,44 @@ def test_run_release_invokes_source_stages_in_order(tmp_path) -> None:
 
     assert result["source"] == "hackernews"
     assert result["period"] == "20260627"
+    assert result["run_id"]
     assert result["dry_run"] is True
     assert result["completed_stages"] == ["FETCHING"]
     fake_stage.run.assert_called_once()
+
+
+def test_run_release_rejects_an_active_daily_run(tmp_path) -> None:
+    source = SourceDefinition(name="hackernews", period_kind="date")
+    ctx = PublisherContext.create(tmp_path, source="hackernews", period="20260627")
+    ctx.job_dir.mkdir(parents=True)
+    (ctx.job_dir / ".lock_20260627").write_text(
+        f"{os.getpid()}|{time.time():.0f}", encoding="utf-8"
+    )
+
+    with pytest.raises(click.ClickException, match="active|daily lock"):
+        run_release(ctx, source, stages=[])
+
+
+def test_run_release_aligns_state_when_reusing_completed_stage(tmp_path) -> None:
+    fake_stage = FakeCaptureStage()
+    source = SourceDefinition(
+        name="hackernews",
+        period_kind="date",
+        stages={GenericStage.CAPTURING: lambda: fake_stage},
+    )
+    ctx = PublisherContext.create(tmp_path, source="hackernews", period="20260627")
+    machine, _ = JobStateMachine.load_or_create(ctx.job_dir, ctx.period)
+    machine.transition(HnStage.FETCHING)
+    machine.transition(HnStage.COLLECTING)
+    machine.job.stages[HnStage.CAPTURING.value] = {"success": True}
+    machine._save()
+
+    result = run_release(ctx, source, stages=[GenericStage.CAPTURING])
+
+    assert result["completed_stages"] == []
+    reloaded, _ = JobStateMachine.load_or_create(ctx.job_dir, ctx.period)
+    assert reloaded.job.status == HnStage.CAPTURING.value
+    fake_stage.run.assert_not_called()
 
 
 def test_run_release_rejects_stage_missing_required_artifact(tmp_path) -> None:

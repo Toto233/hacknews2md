@@ -6,6 +6,7 @@ import json
 import logging
 import os
 import time
+import uuid
 from dataclasses import asdict, dataclass, field
 from datetime import datetime
 from pathlib import Path
@@ -35,6 +36,9 @@ VALID_TRANSITIONS: set[tuple[Stage, Stage]] = {
     (Stage.FETCHING, Stage.FAILED),
     (Stage.COLLECTING, Stage.CAPTURING),
     (Stage.COLLECTING, Stage.FAILED),
+    # A manual content repair can require collection to rerun after the visual
+    # fallback has started or been interrupted.
+    (Stage.CAPTURING, Stage.COLLECTING),
     (Stage.CAPTURING, Stage.PLANNING),
     (Stage.CAPTURING, Stage.FAILED),
     (Stage.PLANNING, Stage.APPLYING),
@@ -74,6 +78,7 @@ class StageReceipt:
     error: str | None = None
     retry_count: int = 0
     artifacts: list[str] = field(default_factory=list)
+    run_id: str | None = None
 
 
 @dataclass
@@ -92,6 +97,7 @@ class PublishJob:
     error: str | None = None
     audit_report: dict[str, Any] | None = None
     audit_exemption: dict[str, Any] | None = None
+    run_id: str = ""
 
     def to_json(self, path: Path) -> None:
         """Atomically write job state to JSON.
@@ -245,8 +251,12 @@ class JobStateMachine:
         ledger_path = job_dir / f"publish_job_{date_str}.json"
         if ledger_path.exists():
             job = PublishJob.from_json(ledger_path)
+            if not job.run_id:
+                job.run_id = uuid.uuid4().hex
+                job.updated_at = datetime.now().isoformat()
+                job.to_json(ledger_path)
         else:
             now = datetime.now().isoformat()
-            job = PublishJob(date=date_str, created_at=now, updated_at=now)
+            job = PublishJob(date=date_str, created_at=now, updated_at=now, run_id=uuid.uuid4().hex)
             job.to_json(ledger_path)
         return cls(job, ledger_path), ledger_path

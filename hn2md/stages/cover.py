@@ -64,7 +64,7 @@ class CoverStage(BaseStage):
         ctx: RuntimeContext,
         machine: JobStateMachine,
         markdown_file: str | None = None,
-        mode: str = "ai",
+        mode: str = "pillow",
         target_word: str | None = None,
         display_title: str | None = None,
         cover_image: str | None = None,

@@ -377,6 +377,36 @@ def _check_environment_compatibility(
     ]
 
 
+def _check_page_preparation(stages: dict[str, Any], date_str: str) -> list[dict[str, Any]]:
+    """Report the latest screenshot page-preparation actions without treating them as warnings."""
+    receipt = stages.get("CAPTURING")
+    if not isinstance(receipt, dict):
+        return []
+    summary = receipt.get("output_summary")
+    if not isinstance(summary, dict):
+        return []
+    raw_actions = summary.get("page_preparation_actions")
+    if not isinstance(raw_actions, dict):
+        return []
+    actions = {
+        str(action): int(count)
+        for action, count in raw_actions.items()
+        if isinstance(count, int) and not isinstance(count, bool) and count > 0
+    }
+    rejected = actions.get("rejected", 0)
+    if not rejected:
+        return []
+    return [
+        _finding(
+            date_str,
+            "page_preparation",
+            "info",
+            f"Rejected optional cookies on {rejected} page(s)",
+            {"stage": "CAPTURING", "actions": actions},
+        )
+    ]
+
+
 def _iter_stage_receipts(
     stages: dict[str, Any], receipt_history: dict[str, Any] | None
 ) -> list[tuple[str, dict[str, Any]]]:
@@ -658,6 +688,7 @@ def run_post_publish_audit(
     all_findings.extend(
         _check_stage_receipts(stages, date_str, db_path, receipt_history, skipped_stories)
     )
+    all_findings.extend(_check_page_preparation(stages, date_str))
     all_findings.extend(_check_environment_compatibility(stages, date_str, receipt_history))
     all_findings.extend(_check_wechat_media_id(receipt, date_str, dry_run))
     for stage_name, historical_receipt in _iter_stage_receipts(stages, receipt_history):

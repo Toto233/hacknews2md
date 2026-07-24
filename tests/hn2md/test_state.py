@@ -171,6 +171,16 @@ class TestJobStateMachine:
         machine.transition(Stage.FETCHING)
         assert machine.job.status == Stage.FETCHING.value
 
+    def test_capture_can_return_to_collection_after_manual_content_repair(self, job_dir):
+        """A repaired story may need collection to refresh after capture began."""
+        job_dir.mkdir(parents=True)
+        machine, _ = JobStateMachine.load_or_create(job_dir, "20260620")
+        machine.transition(Stage.FETCHING)
+        machine.transition(Stage.COLLECTING)
+        machine.transition(Stage.CAPTURING)
+
+        assert machine.can_transition(Stage.COLLECTING)
+
     def test_transition_persists(self, job_dir):
         """transition should persist to disk."""
         job_dir.mkdir(parents=True)

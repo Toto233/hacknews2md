@@ -11,6 +11,7 @@ import structlog
 from selenium import webdriver
 
 from src.core.handlers.article_extraction import ArticleExtraction
+from src.core.handlers.browser_page_prep import dismiss_cookie_consent
 from src.core.handlers.browser_support import build_headless_chrome_options
 from src.security.url_validator import SecurityError, validate_url
 
@@ -30,6 +31,7 @@ def _render_browser_article(url: str) -> ArticleExtraction:
         driver = webdriver.Chrome(options=build_headless_chrome_options())
         driver.set_page_load_timeout(PAGE_LOAD_TIMEOUT_SECONDS)
         driver.get(url)
+        dismiss_cookie_consent(driver, url)
         time.sleep(RENDER_WAIT_SECONDS)
         result = driver.execute_script(
             "const candidates = [...document.querySelectorAll('article, main, [role=main]')];"

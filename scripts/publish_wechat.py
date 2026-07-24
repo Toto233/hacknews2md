@@ -19,7 +19,7 @@ sys.path.insert(0, project_root)
 from src.integrations.markdown_to_html_converter import convert_markdown_to_html
 from src.utils.config import Config
 from src.integrations.wechat_access_token import WeChatAccessToken
-from scripts.generate_wechat_cover_ai import generate_cover_ai
+from scripts.generate_wechat_cover import generate_cover
 
 
 def preflight_wechat_access_token() -> str:
@@ -284,11 +284,11 @@ def publish_to_wechat(
     generated_cover = None
     if not cover_image and auto_cover:
         try:
-            generated_cover = generate_cover_ai(md_file_path)
+            generated_cover = generate_cover(md_file_path)
             cover_image = generated_cover
-            print(f"AI 自动生成微信题图: {cover_image}")
+            print(f"Generated fallback WeChat cover: {cover_image}")
         except Exception as e:
-            print(f"[WARN] AI 题图生成失败，将回退到第一篇新闻图片: {e}")
+            print(f"[WARN] Fallback cover generation failed; using the first news image: {e}")
 
     if cover_image:
         cover_image = smart_path_convert(cover_image)

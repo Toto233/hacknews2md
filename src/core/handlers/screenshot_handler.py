@@ -10,9 +10,11 @@ import logging
 import os
 import re
 import time
+from dataclasses import dataclass
 from datetime import datetime
 
 from selenium import webdriver
+from src.core.handlers.browser_page_prep import dismiss_cookie_consent
 from src.core.handlers.browser_support import build_headless_chrome_options
 from src.llm.llm_business import generate_summary_from_image
 from src.security.url_validator import SecurityError, validate_url
@@ -24,15 +26,23 @@ PAGE_LOAD_TIMEOUT_SECONDS = int(os.getenv("HN2MD_SCREENSHOT_PAGE_LOAD_TIMEOUT_SE
 RENDER_WAIT_SECONDS = float(os.getenv("HN2MD_SCREENSHOT_RENDER_WAIT_SECONDS", "3"))
 
 
-def save_page_screenshot(url: str, title: str) -> str | None:
-    """Save a page screenshot to disk (landscape, WeChat-friendly).
+@dataclass(frozen=True)
+class ScreenshotCapture:
+    """Saved screenshot and the non-blocking preparation action before capture."""
+
+    path: str | None
+    page_preparation_action: str
+
+
+def capture_page_screenshot(url: str, title: str) -> ScreenshotCapture:
+    """Save a page screenshot and retain the page-preparation outcome.
 
     Args:
         url:   Web page URL.
         title: Page title, used to generate the filename.
 
     Returns:
-        Absolute path to the saved screenshot, or ``None`` on failure.
+        Screenshot metadata, including an optional absolute image path.
     """
     today = datetime.now()
     date_dir = os.path.join("output/images", f"{today.year:04d}{today.month:02d}{today.day:02d}")
@@ -60,13 +70,14 @@ def save_page_screenshot(url: str, title: str) -> str | None:
 
     driver = None
     saved_screenshot_path = None
+    page_preparation_action = "not_attempted"
 
     # SSRF protection: validate URL before passing to Selenium
     try:
         validate_url(url)
     except (SecurityError, ValueError) as e:
         logger.warning(f"[SCREENSHOT] URL validation failed | {e} | url={url[:80]}")
-        return None
+        return ScreenshotCapture(path=None, page_preparation_action=page_preparation_action)
 
     try:
         logger.debug(f"[SCREENSHOT] init WebDriver | {url}")
@@ -76,6 +87,9 @@ def save_page_screenshot(url: str, title: str) -> str | None:
         driver.set_page_load_timeout(PAGE_LOAD_TIMEOUT_SECONDS)
         logger.debug(f"[SCREENSHOT] navigating | {url}")
         driver.get(url)
+        consent = dismiss_cookie_consent(driver, url)
+        page_preparation_action = consent.action
+        logger.info("[SCREENSHOT] consent=%s | %s", consent.action, url[:80])
         logger.debug("[SCREENSHOT] waiting %.1fs for rendering", RENDER_WAIT_SECONDS)
         time.sleep(RENDER_WAIT_SECONDS)
         driver.save_screenshot(image_save_path)
@@ -89,7 +103,15 @@ def save_page_screenshot(url: str, title: str) -> str | None:
             logger.debug("[SCREENSHOT] closing WebDriver")
             driver.quit()
 
-    return saved_screenshot_path
+    return ScreenshotCapture(
+        path=saved_screenshot_path,
+        page_preparation_action=page_preparation_action,
+    )
+
+
+def save_page_screenshot(url: str, title: str) -> str | None:
+    """Save a page screenshot to disk (landscape, WeChat-friendly)."""
+    return capture_page_screenshot(url, title).path
 
 
 def get_summary_from_screenshot(

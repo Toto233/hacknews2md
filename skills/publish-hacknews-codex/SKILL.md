@@ -9,6 +9,23 @@ For every command below, use the repository wrapper `./scripts/publisher.ps1`; d
 
 Run every command from the repository root. `publisher` is the only publishing entry point; Codex is the manual-plan content model. 导入 manual plan 时不得调用 Gemini/Grok/Moonshot。默认完整发布必须同时完成 WeChat 和 Astro；只有用户明确要求“只发微信”“不要 Astro”“重发微信草稿”时，才使用 `--target wechat`。
 
+## Run Safety
+
+- `publisher` serializes each source/period with an atomic daily lock. Do not start a second daily command while another is running; retain the returned `run_id` when reporting or auditing a run.
+- A dead process or lock older than one hour is recovered automatically by the next command. For explicit recovery, run:
+
+```powershell
+.\scripts\publisher.ps1 unlock hackernews
+```
+
+- If the lock holder is still alive, do not delete the lock file. Confirm that the run is stuck, then terminate its process tree and release the lock explicitly:
+
+```powershell
+.\scripts\publisher.ps1 unlock hackernews --terminate
+```
+
+- Never force-delete a lock file. It can make two runs overwrite the same ledger and Astro artifact.
+
 ## 1. Collect
 
 ```powershell
@@ -16,6 +33,14 @@ Run every command from the repository root. `publisher` is the only publishing e
 .\scripts\publisher.ps1 collect hackernews --concurrency 3
 .\scripts\publisher.ps1 capture-screenshots hackernews --concurrency 3
 ```
+
+Every story with a source URL must have a saved screenshot before WeChat publication. Capture remains concurrent and does not block collection; if publishing reports missing screenshots, retry just the missing rows:
+
+```powershell
+.\scripts\publisher.ps1 capture-screenshots hackernews --rerun --concurrency 4
+```
+
+If retries still fail, report each story ID and URL to the user. Do not create the WeChat draft until screenshots are present or the source is deliberately resolved.
 
 Completion criterion: collection returns a `context_file`, DB rows exist for today, and content/discussion lengths have been checked:
 
@@ -118,17 +143,19 @@ For a WeChat-only rerun:
 
 Pick a 10-15 Chinese-character display title from the first item in the manual plan's `ordered_ids`: “主体 + 事件”. Do not select a lower-ranked story for visual appeal; the cover receipt records both the article title and the exact display title.
 
+Use the `wechat-cover-imagegen` skill and native ImageGen/Image2 to create the cover directly. Save the accepted 21:9 bitmap under `output/images/YYYYMMDD/`, then register that exact file with `publisher`:
+
 ```powershell
-.\scripts\publisher.ps1 cover hackernews "<markdown_file>" --mode ai --display-title "<短标题>"
+.\scripts\publisher.ps1 cover hackernews "<markdown_file>" --mode external --cover-image "<cover_image>" --display-title "<short-title>" --rerun
 ```
 
-Completion criterion: cover text is readable, meaning matches the article, the layout is a 2.45:1 horizontal cover, and the cover receipt contains the generated center `1:1` share preview. If AI cover fails:
+The display title must describe the first `ordered_ids` item, remain in the central 1:1 crop, and contain no subtitle or small text. Do not call `--mode ai` in the daily workflow: it is only a legacy wrapper compatibility mode. If native ImageGen is unavailable, use the deterministic fallback:
 
 ```powershell
 .\scripts\publisher.ps1 cover hackernews "<markdown_file>" --mode pillow --rerun
 ```
 
-If both fail, publish without `--cover-image` so the publisher falls back to the first story image.
+Completion criterion: the cover is readable, matches the first article, has a 2.45:1 layout, and its receipt contains the center `1:1` share preview.
 
 ## 5. Publish WeChat
 
@@ -143,6 +170,8 @@ Dry-run:
 ```
 
 Completion criterion: report the draft Media ID and any oversized-image skip list.
+
+The publish stage checks screenshots before it requests a WeChat token or uploads anything. A missing screenshot is a hard stop, not a warning; use the capture retry command above and rerun publish only after it is clean.
 
 Keyword review:
 
@@ -249,6 +278,6 @@ Issue templates:
 
 ## Safety
 
-- Single stages may be rerun: `publisher collect`, `publisher render`, `publisher cover`, `publisher publish`.
+- Single stages may be rerun: `publisher collect`, `publisher capture-screenshots --rerun`, `publisher render`, `publisher cover`, `publisher publish`.
 - Confirm before deleting files, rewriting Git history, force pushing, or reverting user changes.
 - Do not commit config, databases, output artifacts, or unrelated worktree changes.
