@@ -492,6 +492,71 @@ def test_post_publish_review_surfaces_stage_retries_and_warnings(tmp_path: Path)
     ]
 
 
+def test_post_publish_review_downgrades_empty_capture_rerun_to_info(tmp_path: Path) -> None:
+    from datetime import datetime
+
+    from hn2md.stages.post_publish_audit import run_post_publish_audit
+
+    date_str = datetime.now().strftime("%Y%m%d")
+    job_dir = tmp_path / "jobs"
+    job_dir.mkdir()
+    db_path = tmp_path / "test.db"
+    output_dir = tmp_path / "output"
+    ledger = {
+        "date": date_str,
+        "status": "DONE",
+        "stages": {
+            "CAPTURING": {
+                "success": True,
+                "retry_count": 1,
+                "error": None,
+                "output_summary": {
+                    "requested": 0,
+                    "captured": 0,
+                    "warnings": [],
+                },
+            }
+        },
+    }
+    (job_dir / f"publish_job_{date_str}.json").write_text(
+        json.dumps(ledger), encoding="utf-8"
+    )
+
+    result = run_post_publish_audit(job_dir, db_path, output_dir, dry_run=False)
+
+    finding = next(item for item in result["findings"] if item["check"] == "stage_retry")
+    assert finding["severity"] == "info"
+    assert finding["message"] == "CAPTURING rerun found no pending work"
+    assert finding["details"]["resolution"] == "no_pending_work"
+
+
+def test_image_download_warning_is_resolved_when_screenshot_exists(tmp_path: Path) -> None:
+    import sqlite3
+
+    from hn2md.stages.post_publish_audit import _split_resolved_image_warnings
+    from src.utils.db_utils import init_database
+
+    db_path = tmp_path / "test.db"
+    init_database(str(db_path))
+    with sqlite3.connect(db_path) as conn:
+        conn.execute(
+            "INSERT INTO news (id, title, news_url, screenshot, created_at) VALUES (?, ?, ?, ?, datetime('now', 'localtime'))",
+            (1, "Story", "https://example.com/story", "C:/shots/story.png"),
+        )
+
+    active, resolved = _split_resolved_image_warnings(
+        db_path,
+        [{"id": 1, "image_url": "https://example.com/image.png", "reason": "save_failed"}],
+    )
+
+    assert active == []
+    assert resolved == {
+        "screenshot_fallback_captured": [
+            {"id": 1, "image_url": "https://example.com/image.png", "reason": "save_failed"}
+        ]
+    }
+
+
 def test_post_publish_review_reports_cookie_dismissals_as_info(tmp_path: Path) -> None:
     from datetime import datetime
 
@@ -964,6 +1029,82 @@ def test_post_publish_review_downgrades_resolved_discussion_warning(tmp_path: Pa
     assert resolutions[0]["details"]["resolution"] == "discussion_repaired"
     assert resolutions[0]["details"]["warnings"][0]["id"] == 43
     assert result["blocking_count"] == 0
+
+
+def test_post_publish_review_accepts_sourced_external_discussion_summary(tmp_path: Path) -> None:
+    import sqlite3
+    from datetime import datetime
+
+    from hn2md.stages.post_publish_audit import run_post_publish_audit
+    from src.utils.db_utils import init_database
+
+    date_str = datetime.now().strftime("%Y%m%d")
+    job_dir = tmp_path / "jobs"
+    job_dir.mkdir()
+    db_path = tmp_path / "test.db"
+    output_dir = tmp_path / "output"
+    init_database(str(db_path))
+
+    discuss_url = "https://news.ycombinator.com/item?id=49022355"
+    with sqlite3.connect(db_path) as conn:
+        conn.execute(
+            """
+            INSERT INTO news (
+                id, title, news_url, discuss_url, discussion_content,
+                discuss_summary, discuss_summary_source_type,
+                discuss_summary_source_url, created_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, datetime('now', 'localtime'))
+            """,
+            (
+                44,
+                "Pentaton LP",
+                "https://pentaton.app/blog/introducing-pentaton-lp/",
+                discuss_url,
+                "",
+                "A sourced summary of the Hacker News discussion.",
+                "external_hn_snippet",
+                discuss_url,
+            ),
+        )
+
+    md_file = output_dir / "hacknews.md"
+    md_file.parent.mkdir(parents=True, exist_ok=True)
+    md_file.write_text(f"{discuss_url}\n", encoding="utf-8")
+    ledger = {
+        "date": date_str,
+        "status": "DONE",
+        "stages": {
+            "COLLECTING": {
+                "success": True,
+                "retry_count": 0,
+                "output_summary": {
+                    "discussion_warnings": [
+                        {
+                            "id": 44,
+                            "title": "Pentaton LP",
+                            "url": discuss_url,
+                            "reason": "discussion_missing_after_retry",
+                            "attempts": 2,
+                        }
+                    ]
+                },
+            },
+            "PUBLISHING": {
+                "success": True,
+                "retry_count": 0,
+                "output_summary": {"wechat_media_id": "wx1", "markdown_file": str(md_file)},
+            },
+        },
+    }
+    (job_dir / f"publish_job_{date_str}.json").write_text(
+        json.dumps(ledger), encoding="utf-8"
+    )
+
+    result = run_post_publish_audit(job_dir, db_path, output_dir, dry_run=False)
+
+    resolutions = [f for f in result["findings"] if f["check"] == "resolution"]
+    assert resolutions[0]["details"]["resolution"] == "discussion_summary_sourced"
+    assert not any(f["check"] == "stage_warning" for f in result["findings"])
 
 
 def test_post_publish_review_flags_environment_compatibility_errors(tmp_path: Path) -> None:

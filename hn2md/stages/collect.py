@@ -16,6 +16,24 @@ from hn2md.stages.base import BaseStage
 from src.db.connection import get_db
 
 MIN_ARTICLE_CONTENT_CHARS = 100
+HN_DISCUSSION_CONCURRENCY = 1
+HN_DISCUSSION_RETRY_DELAY_SECONDS = 8.0
+
+
+_discussion_semaphore: asyncio.Semaphore | None = None
+
+
+def _get_discussion_semaphore() -> asyncio.Semaphore:
+    """Return the per-event-loop limiter for Hacker News discussion requests."""
+    global _discussion_semaphore
+    if _discussion_semaphore is None:
+        _discussion_semaphore = asyncio.Semaphore(HN_DISCUSSION_CONCURRENCY)
+    return _discussion_semaphore
+
+
+def _is_show_hn_title(title: str) -> bool:
+    """Return whether an HN title identifies an author-submitted Show HN post."""
+    return title.strip().casefold().startswith("show hn:")
 
 
 def _is_youtube_url(url: str) -> bool:
@@ -27,18 +45,19 @@ def _is_youtube_url(url: str) -> bool:
 async def _fetch_discussion_with_retries(
     discuss_url: str,
     attempts: int = 2,
-    delay_seconds: float = 5.0,
+    delay_seconds: float = HN_DISCUSSION_RETRY_DELAY_SECONDS,
 ) -> tuple[str, dict[str, Any] | None]:
-    """Fetch HN discussion content with one lightweight retry on empty result."""
+    """Fetch HN discussion content serially with backoff after a failed attempt."""
     from src.core.handlers.discussion_handler import get_discussion_content_async
 
     attempts = max(1, attempts)
-    for attempt in range(1, attempts + 1):
-        discussion = await get_discussion_content_async(discuss_url)
-        if discussion and discussion.strip():
-            return discussion.strip(), None
-        if attempt < attempts and delay_seconds > 0:
-            await asyncio.sleep(delay_seconds)
+    async with _get_discussion_semaphore():
+        for attempt in range(1, attempts + 1):
+            discussion = await get_discussion_content_async(discuss_url)
+            if discussion and discussion.strip():
+                return discussion.strip(), None
+            if attempt < attempts and delay_seconds > 0:
+                await asyncio.sleep(delay_seconds)
     return "", {
         "url": discuss_url,
         "reason": "discussion_missing_after_retry",
@@ -210,6 +229,26 @@ async def _collect_item(row: sqlite3.Row, semaphore: asyncio.Semaphore, db_path:
                         **warning,
                     }
                 )
+
+        if (
+            len(article_content) < MIN_ARTICLE_CONTENT_CHARS
+            and _is_show_hn_title(row["title"] or "")
+            and discussion_content
+        ):
+            from src.core.handlers.discussion_handler import extract_hn_submission_text
+
+            submission = extract_hn_submission_text(discussion_content)
+            if len(submission) >= MIN_ARTICLE_CONTENT_CHARS:
+                article_content = submission
+                content_source_type = "hn_submission"
+                content_source_url = discuss_url
+                content_source_doi = None
+                content_warnings = [
+                    warning
+                    for warning in content_warnings
+                    if warning.get("reason") not in {"article_content_missing", "paywall_or_shell_page"}
+                ]
+                collected = True
 
         return {
             "id": row["id"],

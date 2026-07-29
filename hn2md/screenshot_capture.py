@@ -162,6 +162,7 @@ def capture_missing_screenshots(ctx: RuntimeContext, concurrency: int = 4) -> di
     return {
         "requested": len(rows),
         "captured": captured,
+        "status": "no_pending_work" if not rows else "completed",
         "timed_out": sum(result.get("reason") == "screenshot_timeout" for result in results),
         "attempts": SCREENSHOT_ATTEMPTS,
         "concurrency": max(1, concurrency),

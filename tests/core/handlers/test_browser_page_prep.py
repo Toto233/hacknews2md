@@ -80,6 +80,60 @@ def test_dismiss_cookie_consent_refuses_an_unapproved_candidate_before_clicking(
     accept_button.click.assert_not_called()
 
 
+def test_dismiss_cookie_consent_rejects_france24_continue_without_agreeing() -> None:
+    driver = MagicMock()
+    reject_button = MagicMock()
+    driver.execute_script.side_effect = [
+        {
+            "action": "candidates",
+            "candidates": [
+                {
+                    "element": reject_button,
+                    "label": "Continue without agreeing",
+                    "consentContext": True,
+                    "modalContext": True,
+                }
+            ],
+        },
+        {"action": "no_consent_banner"},
+    ]
+
+    with patch("src.core.handlers.browser_page_prep.WebDriverWait") as wait:
+        wait.return_value.until.side_effect = lambda condition: condition(driver)
+        result = dismiss_cookie_consent(
+            driver,
+            "https://www.france24.com/en/live-news/example",
+        )
+
+    assert result.action == "rejected"
+    assert result.label == "Continue without agreeing"
+    reject_button.click.assert_called_once()
+
+
+def test_dismiss_cookie_consent_refuses_france24_accept_action() -> None:
+    driver = MagicMock()
+    accept_button = MagicMock()
+    driver.execute_script.return_value = {
+        "action": "candidates",
+        "candidates": [
+            {
+                "element": accept_button,
+                "label": "I agree",
+                "consentContext": True,
+                "modalContext": True,
+            }
+        ],
+    }
+
+    result = dismiss_cookie_consent(
+        driver,
+        "https://www.france24.com/en/live-news/example",
+    )
+
+    assert result.action == "no_safe_consent_action"
+    accept_button.click.assert_not_called()
+
+
 def test_dismiss_cookie_consent_does_not_block_when_browser_script_fails() -> None:
     driver = MagicMock()
     driver.execute_script.side_effect = RuntimeError("browser closed")

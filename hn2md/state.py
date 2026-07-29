@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import hashlib
 import logging
 import os
 import time
@@ -15,6 +16,36 @@ from typing import Any
 from hn2md.constants import RETRY_BUDGETS, Stage
 
 logger = logging.getLogger(__name__)
+
+
+def _audit_issue_fingerprint(report: dict[str, Any]) -> str:
+    """Return a stable fingerprint for the actionable issues in an audit report."""
+    issues = report.get("issues", [])
+    if not isinstance(issues, list):
+        issues = []
+    material = [
+        {
+            "news_id": issue.get("news_id"),
+            "code": issue.get("code"),
+            "message": issue.get("message"),
+            "news_url": issue.get("news_url"),
+            "action_required": issue.get("action_required"),
+            "failure_count": issue.get("failure_count"),
+        }
+        for issue in issues
+        if isinstance(issue, dict) and issue.get("severity", "blocking") == "blocking"
+    ]
+    encoded = json.dumps(material, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+    return hashlib.sha256(encoded.encode("utf-8")).hexdigest()
+
+
+def _audit_exemption_matches(exemption: dict[str, Any] | None, report: dict[str, Any]) -> bool:
+    """Return whether an approval covers exactly the current blocking issue set."""
+    return bool(
+        exemption
+        and exemption.get("issue_fingerprint")
+        and exemption["issue_fingerprint"] == _audit_issue_fingerprint(report)
+    )
 
 
 def _replace_with_retry(src: Path, dst: Path, attempts: int = 3, delay: float = 0.05) -> None:
@@ -49,10 +80,16 @@ VALID_TRANSITIONS: set[tuple[Stage, Stage]] = {
     (Stage.RENDERING, Stage.FAILED),
     (Stage.COVERING, Stage.PUBLISHING),
     (Stage.COVERING, Stage.FAILED),
+    # A publish failure may reveal invalid rendered metadata (for example a
+    # provider field-length limit), so allow the artifact to be regenerated.
+    (Stage.PUBLISHING, Stage.RENDERING),
     (Stage.PUBLISHING, Stage.DONE),
     (Stage.PUBLISHING, Stage.FAILED),
     # Re-publish an existing completed run to a new WeChat draft without re-rendering.
     (Stage.DONE, Stage.PUBLISHING),
+    (Stage.DONE, Stage.RENDERING),
+    # A completed draft can receive a replacement cover before an intentional re-publish.
+    (Stage.DONE, Stage.COVERING),
     (Stage.FAILED, Stage.IDLE),
     # --from-stage resume
     (Stage.IDLE, Stage.COLLECTING),
@@ -214,8 +251,17 @@ class JobStateMachine:
         return receipt is not None and receipt.get("success", False)
 
     def record_audit_report(self, report: dict[str, Any]) -> None:
-        """Persist the latest audit result and invalidate stale approval."""
+        """Persist the latest audit result and retain approval for identical issues."""
+        previous_exemption = self.job.audit_exemption
         self.job.audit_report = report
+        if not _audit_exemption_matches(previous_exemption, report):
+            self.job.audit_exemption = None
+        self.job.updated_at = datetime.now().isoformat()
+        self._save()
+
+    def invalidate_audit(self) -> None:
+        """Clear audit state after publishable content changes."""
+        self.job.audit_report = None
         self.job.audit_exemption = None
         self.job.updated_at = datetime.now().isoformat()
         self._save()
@@ -239,6 +285,7 @@ class JobStateMachine:
         self.job.audit_exemption = {
             "approved_at": datetime.now().isoformat(),
             "issue_snapshot": report.get("issues", []),
+            "issue_fingerprint": _audit_issue_fingerprint(report),
         }
         self.job.updated_at = datetime.now().isoformat()
         self._save()

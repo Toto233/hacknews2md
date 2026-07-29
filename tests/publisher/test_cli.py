@@ -115,6 +115,48 @@ def test_release_resuming_after_collection_includes_visual_fallback(tmp_path, mo
     assert [stage.value for stage in run.call_args.kwargs["stages"]] == ["CAPTURING", "PLANNING", "APPLYING", "RENDERING", "COVERING", "PUBLISHING"]
 
 
+def test_release_resume_does_not_repeat_completed_visual_fallback(tmp_path, monkeypatch) -> None:
+    monkeypatch.chdir(tmp_path)
+    job_dir = tmp_path / "output" / "jobs"
+    machine, _ = JobStateMachine.load_or_create(job_dir, "20260627")
+    machine.transition(Stage.FETCHING)
+    machine.transition(Stage.COLLECTING)
+    machine.transition(Stage.CAPTURING)
+    machine.record_receipt(
+        StageReceipt(
+            stage=Stage.CAPTURING.value,
+            started_at="2026-06-27T10:00:00",
+            finished_at="2026-06-27T10:01:00",
+            success=True,
+        )
+    )
+    machine.transition(Stage.PLANNING)
+    machine.transition(Stage.APPLYING)
+
+    with patch("publisher.cli.run_release", return_value={"completed_stages": ["APPLYING"]}) as run:
+        result = CliRunner().invoke(
+            main,
+            [
+                "release",
+                "hackernews",
+                "--date",
+                "2026-06-27",
+                "--from-stage",
+                "APPLYING",
+                "--dry-run",
+                "--rerun",
+            ],
+        )
+
+    assert result.exit_code == 0, result.output
+    assert [stage.value for stage in run.call_args.kwargs["stages"]] == [
+        "APPLYING",
+        "RENDERING",
+        "COVERING",
+        "PUBLISHING",
+    ]
+
+
 def test_collect_command_runs_collect_stage_with_concurrency(tmp_path, monkeypatch) -> None:
     monkeypatch.chdir(tmp_path)
 

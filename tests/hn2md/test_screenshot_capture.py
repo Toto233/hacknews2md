@@ -57,6 +57,7 @@ def test_capture_missing_screenshots_records_successes_without_blocking_failures
 
     assert result["requested"] == 1
     assert result["captured"] == 1
+    assert result["status"] == "completed"
     assert result["timed_out"] == 0
     assert result["concurrency"] == 1
     assert result["p50_duration_ms"] == 120

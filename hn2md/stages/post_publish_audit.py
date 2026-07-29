@@ -275,7 +275,7 @@ def _discussion_warning_resolution(
             conn.row_factory = sqlite3.Row
             row = conn.execute(
                 """
-                SELECT discussion_content
+                SELECT *
                 FROM news
                 WHERE (? IS NOT NULL AND id=?)
                    OR (? != '' AND discuss_url=?)
@@ -291,6 +291,20 @@ def _discussion_warning_resolution(
         return "story_skipped" if _warning_matches_skipped_story(warning, skipped_stories) else None
     if str(row["discussion_content"] or "").strip():
         return "discussion_repaired"
+    columns = set(row.keys())
+    if {
+        "discuss_summary",
+        "discuss_summary_source_type",
+        "discuss_summary_source_url",
+    } <= columns and all(
+        str(row[field] or "").strip()
+        for field in (
+            "discuss_summary",
+            "discuss_summary_source_type",
+            "discuss_summary_source_url",
+        )
+    ):
+        return "discussion_summary_sourced"
     return None
 
 
@@ -305,6 +319,34 @@ def _split_resolved_discussion_warnings(
             if isinstance(warning, dict)
             else None
         )
+        if resolution:
+            resolved.setdefault(resolution, []).append(warning)
+        else:
+            active.append(warning)
+    return active, resolved
+
+
+def _image_warning_resolution(db_path: Path | None, warning: dict[str, Any]) -> str | None:
+    """Return the visual fallback that makes an image-download warning non-actionable."""
+    if db_path is None or warning.get("id") is None:
+        return None
+    try:
+        with get_db(str(db_path)) as conn:
+            row = conn.execute(
+                "SELECT screenshot FROM news WHERE id=?", (warning["id"],)
+            ).fetchone()
+    except Exception:
+        return None
+    return "screenshot_fallback_captured" if row and str(row[0] or "").strip() else None
+
+
+def _split_resolved_image_warnings(
+    db_path: Path | None, warnings: list[Any]
+) -> tuple[list[Any], dict[str, list[dict[str, Any]]]]:
+    active: list[Any] = []
+    resolved: dict[str, list[dict[str, Any]]] = {}
+    for warning in warnings:
+        resolution = _image_warning_resolution(db_path, warning) if isinstance(warning, dict) else None
         if resolution:
             resolved.setdefault(resolution, []).append(warning)
         else:
@@ -514,7 +556,7 @@ def _check_stage_receipts(
     """Surface run-time problems from stage receipts for post-run follow-up."""
     findings: list[dict[str, Any]] = []
     warning_keys = ("image_warnings", "content_warnings", "discussion_warnings")
-    highest_retry_by_stage: dict[str, tuple[int, Any]] = {}
+    highest_retry_by_stage: dict[str, tuple[int, Any, dict[str, Any]]] = {}
     seen_warning_keys: set[str] = set()
     skipped_stories = skipped_stories or []
 
@@ -542,7 +584,12 @@ def _check_stage_receipts(
         if retry_count > 0:
             previous = highest_retry_by_stage.get(stage_name)
             if previous is None or retry_count > previous[0]:
-                highest_retry_by_stage[stage_name] = (retry_count, receipt.get("error"))
+                output = receipt.get("output_summary")
+                highest_retry_by_stage[stage_name] = (
+                    retry_count,
+                    receipt.get("error"),
+                    output if isinstance(output, dict) else {},
+                )
 
         output_summary = receipt.get("output_summary") or {}
         if not isinstance(output_summary, dict):
@@ -562,6 +609,26 @@ def _check_stage_receipts(
             warnings = unique_warnings
             if not warnings:
                 continue
+
+            if key == "image_warnings":
+                warnings, resolved_warnings = _split_resolved_image_warnings(db_path, warnings)
+                for resolution, resolved in resolved_warnings.items():
+                    findings.append(
+                        _finding(
+                            date_str,
+                            "resolution",
+                            "info",
+                            f"{stage_name} resolved {len(resolved)} {key}: {resolution}",
+                            {
+                                "stage": stage_name,
+                                "warning_key": key,
+                                "resolution": resolution,
+                                "warnings": resolved[:20],
+                            },
+                        )
+                    )
+                if not warnings:
+                    continue
 
             if key == "content_warnings":
                 warnings, resolved_warnings = _split_resolved_content_warnings(
@@ -624,14 +691,37 @@ def _check_stage_receipts(
                 )
             )
 
-    for stage_name, (retry_count, error) in highest_retry_by_stage.items():
+    for stage_name, (retry_count, error, output_summary) in highest_retry_by_stage.items():
+        no_op_capture = (
+            stage_name == "CAPTURING"
+            and output_summary.get("requested") == 0
+            and output_summary.get("captured") == 0
+            and not output_summary.get("warnings")
+        )
         findings.append(
             _finding(
                 date_str,
                 "stage_retry",
-                "warning",
-                f"{stage_name} retried {retry_count} time(s)",
-                {"stage": stage_name, "retry_count": retry_count, "error": error},
+                "info" if no_op_capture else "warning",
+                (
+                    f"{stage_name} rerun found no pending work"
+                    if no_op_capture
+                    else f"{stage_name} retried {retry_count} time(s)"
+                ),
+                (
+                    {
+                        "stage": stage_name,
+                        "retry_count": retry_count,
+                        "error": error,
+                        "resolution": "no_pending_work",
+                    }
+                    if no_op_capture
+                    else {
+                        "stage": stage_name,
+                        "retry_count": retry_count,
+                        "error": error,
+                    }
+                ),
             )
         )
     return findings

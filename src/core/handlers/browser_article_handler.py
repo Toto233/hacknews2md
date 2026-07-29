@@ -12,7 +12,7 @@ from selenium import webdriver
 
 from src.core.handlers.article_extraction import ArticleExtraction
 from src.core.handlers.browser_page_prep import dismiss_cookie_consent
-from src.core.handlers.browser_support import build_headless_chrome_options
+from src.core.handlers.browser_support import create_headless_browser
 from src.security.url_validator import SecurityError, validate_url
 
 logger = structlog.get_logger(__name__)
@@ -28,7 +28,7 @@ def _render_browser_article(url: str) -> ArticleExtraction:
     """Render one page in the child process and return its main article region."""
     driver = None
     try:
-        driver = webdriver.Chrome(options=build_headless_chrome_options())
+        driver = create_headless_browser()
         driver.set_page_load_timeout(PAGE_LOAD_TIMEOUT_SECONDS)
         driver.get(url)
         dismiss_cookie_consent(driver, url)

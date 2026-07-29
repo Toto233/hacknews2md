@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from typing import Any
+from urllib.parse import urlparse
 
 import structlog
 from selenium.webdriver.support.ui import WebDriverWait
@@ -23,6 +24,9 @@ REJECT_ALL_LABELS = (
     "\u5168\u90e8\u62d2\u7edd",
     "\u4ec5\u4f7f\u7528\u5fc5\u8981 cookie",
     "\u53ea\u63a5\u53d7\u5fc5\u8981 cookie",
+)
+FRANCE24_REJECT_LABELS = (
+    "continue without agreeing",
 )
 
 
@@ -98,7 +102,7 @@ def dismiss_cookie_consent(driver: Any, url: str) -> CookieConsentResult:
     """
     try:
         browser_result = driver.execute_script(_consent_script())
-        candidate = _first_safe_consent_candidate(browser_result)
+        candidate = _first_safe_consent_candidate(browser_result, url=url)
         if candidate is None:
             action = "no_safe_consent_action" if _has_consent_candidates(browser_result) else "no_consent_banner"
             return CookieConsentResult(action=action)
@@ -108,7 +112,7 @@ def dismiss_cookie_consent(driver: Any, url: str) -> CookieConsentResult:
         label = candidate["label"]
         candidate["element"].click()
         WebDriverWait(driver, CONSENT_DISMISS_WAIT_SECONDS).until(
-            lambda active_driver: _consent_banner_is_gone(active_driver)
+            lambda active_driver: _consent_banner_is_gone(active_driver, url=url)
         )
         logger.info("cookie_consent_rejected", url=url[:120], label=label)
         return CookieConsentResult(action="rejected", label=label)
@@ -117,12 +121,12 @@ def dismiss_cookie_consent(driver: Any, url: str) -> CookieConsentResult:
         return CookieConsentResult(action="unavailable")
 
 
-def _consent_banner_is_gone(driver: Any) -> bool:
+def _consent_banner_is_gone(driver: Any, *, url: str) -> bool:
     """Return whether the conservative probe can no longer find a reject control."""
-    return _first_safe_consent_candidate(driver.execute_script(_consent_script())) is None
+    return _first_safe_consent_candidate(driver.execute_script(_consent_script()), url=url) is None
 
 
-def _first_safe_consent_candidate(result: object) -> dict[str, Any] | None:
+def _first_safe_consent_candidate(result: object, *, url: str) -> dict[str, Any] | None:
     """Return the first policy-approved candidate reported by the browser."""
     if not isinstance(result, dict) or result.get("action") != "candidates":
         return None
@@ -135,13 +139,34 @@ def _first_safe_consent_candidate(result: object) -> dict[str, Any] | None:
         label = candidate.get("label")
         if not isinstance(label, str):
             continue
-        if is_allowed_consent_rejection(
-            label,
-            consent_context=candidate.get("consentContext") is True,
-            modal_context=candidate.get("modalContext") is True,
-        ):
+        if _is_allowed_candidate(label, candidate, url=url):
             return candidate
     return None
+
+
+def _is_allowed_candidate(candidate_label: str, candidate: dict[str, Any], *, url: str) -> bool:
+    """Return whether a consent candidate is safe for its source domain."""
+    consent_context = candidate.get("consentContext") is True
+    modal_context = candidate.get("modalContext") is True
+    if is_allowed_consent_rejection(
+        candidate_label,
+        consent_context=consent_context,
+        modal_context=modal_context,
+    ):
+        return True
+    return (
+        _is_france24_url(url)
+        and consent_context
+        and modal_context
+        and " ".join(candidate_label.split()).casefold()
+        in {label.casefold() for label in FRANCE24_REJECT_LABELS}
+    )
+
+
+def _is_france24_url(url: str) -> bool:
+    """Return whether a URL belongs to France24 or one of its subdomains."""
+    hostname = urlparse(url).hostname or ""
+    return hostname.casefold() == "france24.com" or hostname.casefold().endswith(".france24.com")
 
 
 def _has_consent_candidates(result: object) -> bool:

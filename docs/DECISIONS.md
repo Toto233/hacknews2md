@@ -26,6 +26,16 @@ This file records durable project decisions that should not be changed back and 
 
 ## Accepted decisions
 
+### 2026-07-28 - Keep HN recovery bounded and provenance-specific
+
+- Status: Accepted
+- Issue: N/A (approved publishing workflow improvement with focused regression tests)
+- Supersedes: N/A
+- Context: Concurrent HN discussion collection repeatedly triggered rate limits. Interactive Show HN pages can have no extractable article body even though the author's submitted HN post contains a usable project description. Re-running collection also discarded an approval for an unchanged, already-reviewed content exception.
+- Decision: Serialize HN discussion fetches and use a longer retry backoff. For `Show HN` only, use the author's submitted post body as `hn_submission` content when the linked article is unavailable; never use comments as article content. Preserve an audit approval only when a fingerprint of every blocking issue is unchanged. Continue filtering tracking and low-signal image candidates, and retain WebP/AVIF conversion before image storage.
+- Failure mode of alternative: Unbounded concurrent retries worsen rate limiting; treating all HN discussion text as article content would let community comments masquerade as source material; broad daily approvals could silently approve new blockers; downloading tracking pixels and badges creates noisy image failures without improving the published article.
+- Consequences: A repeated, identical issue remains explicitly auditable without another confirmation, but any new or altered blocker requires fresh approval. Show HN fallback provenance remains visible in the database and audit output.
+
 ### 2026-07-18 - Keep visual fallback work outside content readiness
 
 - Status: Accepted

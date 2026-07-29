@@ -24,6 +24,25 @@ from src.security.url_validator import SecurityError, validate_url
 logger = logging.getLogger(__name__)
 
 
+def extract_hn_submission_text(discussion_content: str) -> str:
+    """Return the submitted HN post body without comments when present.
+
+    The discussion collector deliberately prefixes a submission with title and
+    link metadata.  A Show HN fallback may use only the author's submitted
+    text, never the subsequent community comments.
+    """
+    body_marker = "\n\n正文: "
+    comment_marker = "\n\n评论 ("
+    body_start = discussion_content.find(body_marker)
+    if body_start < 0:
+        return ""
+    body = discussion_content[body_start + len(body_marker) :]
+    comment_start = body.find(comment_marker)
+    if comment_start >= 0:
+        body = body[:comment_start]
+    return body.strip()
+
+
 # ---------------------------------------------------------------------------
 # Selenium fallback (sync, meant for asyncio.to_thread)
 # ---------------------------------------------------------------------------

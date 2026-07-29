@@ -75,6 +75,40 @@ def test_gate_blocks_until_audit_is_clean_or_approved(tmp_path) -> None:
     assert require_audit_clear_or_exempt(machine) is True
 
 
+def test_identical_audit_report_preserves_its_approval(tmp_path) -> None:
+    machine = _machine(tmp_path)
+    report = {
+        "issues": [{"news_id": 1, "code": "content_short", "message": "内容过短（81 字符）"}],
+        "blocking_count": 1,
+    }
+    machine.record_audit_report(report)
+    machine.approve_audit()
+
+    machine.record_audit_report(report)
+
+    assert require_audit_clear_or_exempt(machine) is True
+
+
+def test_new_audit_issue_invalidates_previous_approval(tmp_path) -> None:
+    machine = _machine(tmp_path)
+    machine.record_audit_report(
+        {"issues": [{"news_id": 1, "code": "content_short", "message": "内容过短（81 字符）"}], "blocking_count": 1}
+    )
+    machine.approve_audit()
+    machine.record_audit_report(
+        {
+            "issues": [
+                {"news_id": 1, "code": "content_short", "message": "内容过短（81 字符）"},
+                {"news_id": 2, "code": "discussion_summary_source_missing", "message": "讨论来源缺失"},
+            ],
+            "blocking_count": 2,
+        }
+    )
+
+    with pytest.raises(RuntimeError, match="audit blocked"):
+        require_audit_clear_or_exempt(machine)
+
+
 def test_clean_audit_does_not_need_exemption(tmp_path) -> None:
     machine = _machine(tmp_path)
     machine.record_audit_report({"issues": [], "blocking_count": 0})
@@ -270,7 +304,7 @@ def test_audit_does_not_block_long_article_with_javascript_marker(tmp_path) -> N
 
     codes = {issue["code"] for issue in report["issues"]}
     assert "error_page" not in codes
-    assert "error_page_suspected" in codes
+    assert "error_page_suspected" not in codes
     assert report["blocking_count"] == 0
 
 
@@ -397,6 +431,36 @@ def test_audit_ignores_resolved_or_removed_collect_warnings(tmp_path) -> None:
         ),
         encoding="utf-8",
     )
+
+    report = run_audit(ctx)
+
+    assert report["blocking_count"] == 0
+
+
+def test_audit_accepts_hn_submission_content_source(tmp_path) -> None:
+    ctx = _ctx(tmp_path)
+    init_database(str(ctx.db_path))
+    with sqlite3.connect(ctx.db_path) as conn:
+        conn.execute(
+            """
+            INSERT INTO news (
+                id, title, news_url, article_content, discussion_content,
+                content_summary, discuss_summary, content_source_type,
+                content_source_url, created_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now', 'localtime'))
+            """,
+            (
+                1,
+                "Show HN: Demo",
+                "https://example.com/demo",
+                "Author-submitted project description. " * 5,
+                "HN discussion",
+                "摘要",
+                "讨论摘要",
+                "hn_submission",
+                "https://news.ycombinator.com/item?id=1",
+            ),
+        )
 
     report = run_audit(ctx)
 

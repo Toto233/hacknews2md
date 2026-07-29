@@ -66,12 +66,22 @@ class ScraplingCrawler:
         # --- image URLs ------------------------------------------------------
         images: list[str] = []
         try:
+            # Prefer the publisher-selected sharing image as a fallback. Many
+            # sites lazy-load article images or protect their CDN URLs, while
+            # ``og:image`` is explicitly intended for external consumers.
+            for meta in page.css("meta[property='og:image'], meta[name='og:image']"):
+                source = meta.attrib.get("content")
+                if not source:
+                    continue
+                source = self._resolve_url(url, source)
+                if source.startswith("http") and source not in images:
+                    images.append(source)
             for img in page.css("img")[:10]:
                 src = img.attrib.get("src") or img.attrib.get("data-src")
                 if not src:
                     continue
                 src = self._resolve_url(url, src)
-                if src.startswith("http"):
+                if src.startswith("http") and src not in images:
                     images.append(src)
         except Exception as exc:
             logger.warning("[SCRAPLING] Image extraction failed: %s", exc)

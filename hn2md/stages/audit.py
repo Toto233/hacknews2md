@@ -4,12 +4,14 @@ from __future__ import annotations
 
 import logging
 import json
+import re
 import sqlite3
 from datetime import datetime
 from typing import Any
+from urllib.parse import urlparse
 
 from hn2md.context import RuntimeContext
-from hn2md.state import JobStateMachine
+from hn2md.state import JobStateMachine, _audit_exemption_matches
 from src.core.content_quality import is_paywall_or_shell_content
 from src.db.connection import get_db
 from src.security.content_sanitizer import contains_hallucination_markers
@@ -24,12 +26,22 @@ VALID_SOURCE_TYPES = {
     "human_supplied",
     "metadata_only",
     "discussion_only",
+    "hn_submission",
 }
 VALID_DISCUSSION_SUMMARY_SOURCE_TYPES = {
     "hn_discussion",
     "external_hn_snippet",
     "human_supplied",
 }
+SHELL_CONTENT_MARKERS = ("enable javascript", "access denied", "sign in to continue")
+
+
+def _has_substantive_body_beyond_shell_marker(article: str) -> bool:
+    """Avoid flagging an otherwise readable article for one footer/browser hint."""
+    pattern = "|".join(re.escape(marker) for marker in SHELL_CONTENT_MARKERS)
+    body = re.sub(pattern, "", article, flags=re.IGNORECASE).strip()
+    sentence_markers = sum(body.count(marker) for marker in (".", "!", "?", "。", "！", "？"))
+    return len(body) >= 500 and sentence_markers >= 3
 
 
 def _issue(row: sqlite3.Row, code: str, message: str) -> dict[str, Any]:
@@ -192,6 +204,10 @@ def run_audit(
         elif source_type == "public_abstract":
             if not row["content_source_url"]:
                 issues.append(_issue(row, "abstract_source_missing", "公开摘要缺少来源 URL"))
+        elif source_type == "hn_submission":
+            source_host = urlparse(row["content_source_url"] or "").hostname or ""
+            if source_host.casefold() not in {"news.ycombinator.com", "www.news.ycombinator.com"}:
+                issues.append(_issue(row, "hn_submission_source_invalid", "HN 作者帖缺少有效来源 URL"))
         elif source_type in {"public_page_summary", "public_metadata_summary"}:
             if not row["content_source_url"]:
                 issues.append(_issue(row, "source_url_missing", "公开摘要或替代内容缺少来源 URL"))
@@ -209,8 +225,10 @@ def run_audit(
         if include_summaries and (contains_hallucination_markers(summary) or contains_hallucination_markers(discussion_summary)):
             issues.append(_issue(row, "hallucination_marker", "摘要包含模型拒答或幻觉标记"))
         lowered = article.lower()
-        if any(marker in lowered for marker in ("enable javascript", "access denied", "sign in to continue")):
-            if len(article) >= 1000:
+        if any(marker in lowered for marker in SHELL_CONTENT_MARKERS):
+            if _has_substantive_body_beyond_shell_marker(article):
+                logger.info("Ignoring shell marker in otherwise substantive article: id=%s", row["id"])
+            elif len(article) >= 1000:
                 issues.append(_warning_issue(row, "error_page_suspected", "内容含登录页或 JS 提示词，但正文长度足够，需人工留意"))
             else:
                 issues.append(_issue(row, "error_page", "内容疑似登录页或错误页"))
@@ -218,7 +236,12 @@ def run_audit(
     blocking_count = sum(1 for issue in issues if issue.get("severity", "blocking") == "blocking")
     report = {"items": items, "issues": issues, "blocking_count": blocking_count}
     if issues:
-        logger.warning("Audit found %s blocking issue(s)", len(issues))
+        logger.warning(
+            "Audit found %s issue(s): %s blocking, %s warning",
+            len(issues),
+            blocking_count,
+            len(issues) - blocking_count,
+        )
     else:
         logger.info("Audit passed")
     return report
@@ -230,7 +253,7 @@ def require_audit_clear_or_exempt(machine: JobStateMachine) -> bool:
     if report is None:
         raise RuntimeError("audit required before planning or publishing")
     if report.get("blocking_count", 0):
-        if not machine.job.audit_exemption:
+        if not _audit_exemption_matches(machine.job.audit_exemption, report):
             first = report.get("issues", [{}])[0]
             code = first.get("code", "unknown")
             raise RuntimeError(f"audit blocked: explicit daily approval required ({code})")

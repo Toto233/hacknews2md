@@ -181,6 +181,41 @@ class TestJobStateMachine:
 
         assert machine.can_transition(Stage.COLLECTING)
 
+    def test_publish_can_return_to_rendering_after_metadata_fix(self, job_dir):
+        """A failed draft upload can require regenerated rendered metadata."""
+        job_dir.mkdir(parents=True)
+        machine, _ = JobStateMachine.load_or_create(job_dir, "20260620")
+        machine.transition(Stage.FETCHING)
+        machine.transition(Stage.RENDERING)
+        machine.transition(Stage.COVERING)
+        machine.transition(Stage.PUBLISHING)
+
+        assert machine.can_transition(Stage.RENDERING)
+
+    def test_completed_run_can_return_to_covering(self, job_dir):
+        """A completed draft may need a replacement cover before re-publishing."""
+        job_dir.mkdir(parents=True)
+        machine, _ = JobStateMachine.load_or_create(job_dir, "20260620")
+        machine.transition(Stage.FETCHING)
+        machine.transition(Stage.RENDERING)
+        machine.transition(Stage.COVERING)
+        machine.transition(Stage.PUBLISHING)
+        machine.transition(Stage.DONE)
+
+        assert machine.can_transition(Stage.COVERING)
+
+    def test_completed_run_can_return_to_rendering(self, job_dir):
+        """A published artifact may be regenerated for an editorial correction."""
+        job_dir.mkdir(parents=True)
+        machine, _ = JobStateMachine.load_or_create(job_dir, "20260620")
+        machine.transition(Stage.FETCHING)
+        machine.transition(Stage.RENDERING)
+        machine.transition(Stage.COVERING)
+        machine.transition(Stage.PUBLISHING)
+        machine.transition(Stage.DONE)
+
+        assert machine.can_transition(Stage.RENDERING)
+
     def test_transition_persists(self, job_dir):
         """transition should persist to disk."""
         job_dir.mkdir(parents=True)
@@ -231,6 +266,23 @@ class TestJobStateMachine:
         )
         machine.record_receipt(receipt)
         assert Stage.FETCHING.value in machine.job.stages
+
+    def test_invalidate_audit_clears_report_and_exemption(self, job_dir):
+        """Content changes should force a fresh audit before publishing."""
+        job_dir.mkdir(parents=True)
+        machine, ledger_path = JobStateMachine.load_or_create(job_dir, "20260620")
+        machine.record_audit_report(
+            {"issues": [{"code": "content_short"}], "blocking_count": 1}
+        )
+        machine.approve_audit()
+
+        machine.invalidate_audit()
+
+        assert machine.job.audit_report is None
+        assert machine.job.audit_exemption is None
+        persisted = PublishJob.from_json(ledger_path)
+        assert persisted.audit_report is None
+        assert persisted.audit_exemption is None
 
     def test_record_receipt_preserves_stage_history(self, job_dir):
         """record_receipt should retain every execution while exposing the latest receipt."""

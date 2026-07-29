@@ -10,6 +10,7 @@ from urllib.parse import urlsplit
 import click
 
 from src.utils.console_encoding import configure_utf8_stdio
+from hn2md.constants import Stage
 from hn2md.state import JobStateMachine
 from hn2md.state import StageReceipt
 from hn2md.lock import LockError, release_daily_lock
@@ -70,7 +71,7 @@ def _run_single_stage(
     targets: tuple[str, ...] = (),
     rerun: bool = False,
     kwargs: dict[str, object] | None = None,
-) -> None:
+) -> dict[str, object]:
     source, ctx = _load_date_source(source_name, date_value)
     result = run_release(
         ctx,
@@ -82,6 +83,7 @@ def _run_single_stage(
         stage_kwargs={stage.value: kwargs or {}},
     )
     click.echo(f"{stage.value} complete: {result}")
+    return result
 
 
 def _date_where_clause() -> str:
@@ -224,13 +226,20 @@ def capture_screenshots(source_name: str, date_value: str | None, concurrency: i
     source, _ctx = _load_date_source(source_name, date_value)
     if source.name != "hackernews":
         raise click.ClickException("capture-screenshots currently supports hackernews only")
-    _run_single_stage(
+    result = _run_single_stage(
         source_name,
         date_value,
         GenericStage.CAPTURING,
         rerun=rerun,
         kwargs={"concurrency": concurrency},
     )
+    if rerun and GenericStage.CAPTURING.value in result.get("completed_stages", []):
+        _source, ctx = _load_date_source(source_name, date_value)
+        machine, _ = JobStateMachine.load_or_create(ctx.job_dir, ctx.period)
+        receipt = machine.job.stages.get(GenericStage.CAPTURING.value, {})
+        summary = receipt.get("output_summary", {}) if isinstance(receipt, dict) else {}
+        if isinstance(summary, dict) and summary.get("status") == "no_pending_work":
+            click.echo("CAPTURING: no screenshots were pending; the earlier capture already completed.")
 
 
 @main.command()
@@ -719,9 +728,12 @@ def release(
         except (ValueError, IndexError):
             raise click.ClickException(f"unknown stage for {source.name}: {from_stage}") from None
         stages = stages[start_index:]
+    machine, _ = JobStateMachine.load_or_create(ctx.job_dir, ctx.period)
+    capture_complete = machine.stage_completed_successfully(Stage.CAPTURING)
     if (
         source.name == "hackernews"
         and GenericStage.CAPTURING not in stages
+        and not capture_complete
         and any(
             stage in stages
             for stage in (
