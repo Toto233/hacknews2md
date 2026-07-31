@@ -437,6 +437,29 @@ def test_audit_ignores_resolved_or_removed_collect_warnings(tmp_path) -> None:
     assert report["blocking_count"] == 0
 
 
+def test_audit_allows_subscription_language_in_human_supplied_article(tmp_path) -> None:
+    ctx = _ctx(tmp_path)
+    init_database(str(ctx.db_path))
+    article = ("Research finding with methods and results. " * 12) + "Subscribe now for more."
+    with sqlite3.connect(ctx.db_path) as conn:
+        conn.execute(
+            """
+            INSERT INTO news (
+                id, title, news_url, article_content, discussion_content,
+                content_summary, discuss_summary, content_source_type,
+                content_source_url, created_at
+            ) VALUES (1, 'Supplied', 'https://example.com/story', ?, 'discussion',
+                      'summary', 'discussion summary', 'human_supplied',
+                      'https://example.com/story', datetime('now','localtime'))
+            """,
+            (article,),
+        )
+
+    report = run_audit(ctx)
+
+    assert "paywall_or_shell_page" not in {issue["code"] for issue in report["issues"]}
+
+
 def test_audit_accepts_hn_submission_content_source(tmp_path) -> None:
     ctx = _ctx(tmp_path)
     init_database(str(ctx.db_path))

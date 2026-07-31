@@ -60,11 +60,12 @@ def test_codex_skill_forbids_guessing_missing_article_content() -> None:
     assert "scraper_failures" in skill
 
 
-def test_codex_skill_refreshes_collect_receipt_after_human_backfill() -> None:
+def test_codex_skill_refreshes_context_without_recrawling_after_human_backfill() -> None:
     skill = Path("skills/publish-hacknews-codex/SKILL.md").read_text(encoding="utf-8")
     assert "用户说“补齐了”" in skill
-    assert ".\\scripts\\publisher.ps1 collect hackernews --rerun" in skill
-    assert skill.index(".\\scripts\\publisher.ps1 collect hackernews --rerun") < skill.index(".\\scripts\\publisher.ps1 audit hackernews --json")
+    assert "set-content" in skill
+    assert ".\\scripts\\publisher.ps1 collect hackernews --rerun" not in skill
+    assert ".\\scripts\\publisher.ps1 audit hackernews --phase pre-plan --json" in skill
 
 
 def test_codex_skill_keyword_gate_requires_sentence_review_for_neutral_or_negative_context() -> None:
@@ -113,3 +114,14 @@ def test_codex_skill_uses_publisher_for_future_domain_filters() -> None:
     skill = Path("skills/publish-hacknews-codex/SKILL.md").read_text(encoding="utf-8")
 
     assert ".\\scripts\\publisher.ps1 filter-domain hackernews" in skill
+
+
+def test_codex_skill_requires_adapted_khazix_writer_review_before_plan_import() -> None:
+    skill = Path("skills/publish-hacknews-codex/SKILL.md").read_text(encoding="utf-8")
+
+    review = skill.index("adapted `khazix-writer` four-layer review")
+    plan_import = skill.index(".\\scripts\\publisher.ps1 plan hackernews --manual-plan")
+    assert review < plan_import
+    assert "Do not add Khazix's name" in skill
+    assert "fabricated first-person experience" in skill
+    assert "explicit exceptions" in skill

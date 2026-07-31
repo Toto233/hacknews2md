@@ -120,6 +120,23 @@ class TestIsLowSignalArticleImageUrl:
         )
         assert is_low_signal_article_image_url("https://example.com/image.svg?width=1200")
 
+    def test_filters_tracking_pixels_and_explicit_small_dimensions(self):
+        assert is_low_signal_article_image_url(
+            "https://sb.scorecardresearch.com/p?c1=2&c2=6035250"
+        )
+        assert is_low_signal_article_image_url(
+            "https://www.google-analytics.com/g/collect?v=2&tid=G-TEST"
+        )
+        assert is_low_signal_article_image_url(
+            "https://site.goatcounter.com/count?p=/article"
+        )
+        assert is_low_signal_article_image_url(
+            "https://images.example.com/avatar.png?h=76"
+        )
+        assert is_low_signal_article_image_url("https://ad.doubleclick.net/activity;src=123")
+        assert is_low_signal_article_image_url("https://static.lwn.net/images/lcorner-ss.png")
+        assert is_low_signal_article_image_url("https://martinfowler.com/mf-name-white.png")
+
     def test_keeps_likely_article_images(self):
         assert not is_low_signal_article_image_url("https://cdn.example.com/photos/article-photo.jpg")
         assert not is_low_signal_article_image_url("https://example.com/images/chart-of-results.png")

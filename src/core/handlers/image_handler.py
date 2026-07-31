@@ -44,6 +44,16 @@ LOW_SIGNAL_IMAGE_TOKENS = (
     "creative-commons",
     "app-store",
     "googleplay",
+    "mf-name",
+    "lcorner",
+)
+
+TRACKING_IMAGE_HOSTS = (
+    "scorecardresearch.com",
+    "google-analytics.com",
+    "goatcounter.com",
+    "doubleclick.net",
+    "googlesyndication.com",
 )
 
 
@@ -88,6 +98,8 @@ def is_low_signal_article_image_url(image_url: str) -> bool:
 
     if path.endswith(".svg"):
         return True
+    if any(host == suffix or host.endswith(f".{suffix}") for suffix in TRACKING_IMAGE_HOSTS):
+        return True
     if "placeholder" in path:
         return True
     if host.endswith("twimg.com") and "/profile_images/" in path and re.search(
@@ -104,6 +116,12 @@ def is_low_signal_article_image_url(image_url: str) -> bool:
         height = int(dimension_match.group(2))
         if width < 100 or height < 100:
             return True
+    explicit_dimensions = {
+        key: int(value)
+        for key, value in re.findall(r"(?:^|[?&])(w|h|width|height)=(\d+)(?:&|$)", query)
+    }
+    if any(value < 100 for value in explicit_dimensions.values()):
+        return True
     return False
 
 

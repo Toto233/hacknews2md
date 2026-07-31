@@ -69,7 +69,6 @@ Manual repair uses publisher commands, not handwritten SQL:
 When 用户说“补齐了”, refresh the collection receipt before planning:
 
 ```powershell
-.\scripts\publisher.ps1 collect hackernews --rerun
 .\scripts\publisher.ps1 audit hackernews --phase pre-plan --json
 ```
 
@@ -122,6 +121,15 @@ Plan contract:
 - Every item has `title_chs`, `content_summary`, and `discuss_summary`.
 - If `discussion_content 为空` but `discuss_summary` uses an external HN snippet or human text, include `discuss_summary_source_type` and `discuss_summary_source_url`.
 - If validation fails, fix the JSON; do not switch to an external LLM.
+
+Before importing the plan, run an adapted `khazix-writer` four-layer review over every `title_chs`, `content_summary`, and `discuss_summary`:
+
+- L1: remove generic AI prose, textbook openings, empty transitions, vague product names, and repetitive report language.
+- L2: check readable spoken Chinese, sentence rhythm, natural transitions, and a clear lead sentence.
+- L3: ensure every factual claim, judgment, quote, and number is supported by the collected article or discussion material.
+- L4: read the complete daily recap as a reader and repair passages that feel mechanical, inflated, repetitive, or disconnected.
+
+This is an editorial review, not identity imitation. Do not add Khazix's name, signature, personal history, profanity, fixed catchphrases, or fabricated first-person experience. HackerNews is a concise multi-story digest, so its required headings, source links, colons, and summary length are explicit exceptions to the long-form formatting rules.
 
 ## 3. Render
 

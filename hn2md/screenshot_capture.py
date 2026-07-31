@@ -4,12 +4,14 @@ from __future__ import annotations
 
 import asyncio
 from collections import Counter
+import json
 from multiprocessing import get_context
 import os
+from pathlib import Path
 from queue import Empty
 import sqlite3
 import time
-from typing import Any
+from typing import Any, Callable
 
 from hn2md.context import RuntimeContext
 from src.db.connection import get_db
@@ -95,9 +97,20 @@ async def _capture_one(row: sqlite3.Row, semaphore: asyncio.Semaphore) -> dict[s
             return {"id": row["id"], "screenshot": None, "reason": "screenshot_error", "error": str(exc)}
 
 
-async def _capture_rows(rows: list[sqlite3.Row], concurrency: int) -> list[dict[str, Any]]:
+async def _capture_rows(
+    rows: list[sqlite3.Row],
+    concurrency: int,
+    on_result: Callable[[dict[str, Any]], None] | None = None,
+) -> list[dict[str, Any]]:
     semaphore = asyncio.Semaphore(max(1, concurrency))
-    return await asyncio.gather(*(_capture_one(row, semaphore) for row in rows))
+    tasks = [_capture_one(row, semaphore) for row in rows]
+    results: list[dict[str, Any]] = []
+    for task in asyncio.as_completed(tasks):
+        result = await task
+        results.append(result)
+        if on_result:
+            on_result(result)
+    return results
 
 
 def _percentile_duration_ms(durations: list[int], percentile: float) -> int | None:
@@ -109,7 +122,11 @@ def _percentile_duration_ms(durations: list[int], percentile: float) -> int | No
     return ordered[index]
 
 
-def capture_missing_screenshots(ctx: RuntimeContext, concurrency: int = 4) -> dict[str, Any]:
+def capture_missing_screenshots(
+    ctx: RuntimeContext,
+    concurrency: int = 4,
+    progress_path: Path | None = None,
+) -> dict[str, Any]:
     """Capture missing screenshots after collection; failures remain non-blocking."""
     with get_db(str(ctx.db_path)) as conn:
         conn.row_factory = sqlite3.Row
@@ -125,7 +142,29 @@ def capture_missing_screenshots(ctx: RuntimeContext, concurrency: int = 4) -> di
         ).fetchall()
 
     batch_started_at = time.monotonic()
-    results = asyncio.run(_capture_rows(rows, concurrency)) if rows else []
+    progress: dict[str, Any] = {
+        "stage": "CAPTURING",
+        "status": "running" if rows else "no_pending_work",
+        "requested": len(rows),
+        "completed": 0,
+        "captured": 0,
+        "started_at": time.time(),
+    }
+
+    def save_progress(result: dict[str, Any] | None = None) -> None:
+        if result is not None:
+            progress["completed"] += 1
+            progress["captured"] += int(bool(result.get("screenshot")))
+            progress["last_story_id"] = result.get("id")
+            progress["last_reason"] = result.get("reason")
+        if progress_path:
+            progress_path.parent.mkdir(parents=True, exist_ok=True)
+            temporary = progress_path.with_suffix(".tmp")
+            temporary.write_text(json.dumps(progress, ensure_ascii=False), encoding="utf-8")
+            temporary.replace(progress_path)
+
+    save_progress()
+    results = asyncio.run(_capture_rows(rows, concurrency, save_progress)) if rows else []
     batch_duration_ms = round((time.monotonic() - batch_started_at) * 1000)
     captured = 0
     warnings: list[dict[str, Any]] = []
@@ -159,7 +198,7 @@ def capture_missing_screenshots(ctx: RuntimeContext, concurrency: int = 4) -> di
         }
         for result in results
     ]
-    return {
+    summary = {
         "requested": len(rows),
         "captured": captured,
         "status": "no_pending_work" if not rows else "completed",
@@ -173,3 +212,8 @@ def capture_missing_screenshots(ctx: RuntimeContext, concurrency: int = 4) -> di
         "items": items,
         "warnings": warnings,
     }
+    progress.update(
+        {"status": "completed", "completed": len(results), "captured": captured, "finished_at": time.time()}
+    )
+    save_progress()
+    return summary

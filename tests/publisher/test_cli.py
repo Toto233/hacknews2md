@@ -636,6 +636,24 @@ def test_set_content_updates_article_and_source(tmp_path, monkeypatch) -> None:
             "SELECT article_content, content_source_type, content_source_url FROM news WHERE id=1"
         ).fetchone()
     assert row == ("人工补齐正文。" * 30, "human_supplied", "https://example.com/story")
+    context_files = list((tmp_path / "output" / "codex").glob("hacknews_context_*.json"))
+    assert len(context_files) == 1
+    assert json.loads(context_files[0].read_text(encoding="utf-8"))["refresh_mode"] == "database_only"
+
+
+def test_status_reports_capture_progress(tmp_path, monkeypatch) -> None:
+    monkeypatch.chdir(tmp_path)
+    job_dir = tmp_path / "output" / "jobs"
+    JobStateMachine.load_or_create(job_dir, "20260627")
+    (job_dir / "capture_progress_20260627.json").write_text(
+        json.dumps({"stage": "CAPTURING", "status": "running", "requested": 10, "completed": 3, "captured": 2}),
+        encoding="utf-8",
+    )
+
+    result = CliRunner().invoke(main, ["status", "hackernews", "--date", "2026-06-27"])
+
+    assert result.exit_code == 0, result.output
+    assert "Capture: running (3/10, captured 2)" in result.output
 
 
 def test_skip_story_can_delete_and_add_domain_filter(tmp_path, monkeypatch) -> None:

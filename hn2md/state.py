@@ -266,6 +266,26 @@ class JobStateMachine:
         self.job.updated_at = datetime.now().isoformat()
         self._save()
 
+    def refresh_collection_context(self, context_file: str, story_id: int) -> None:
+        """Record a manual repair without rerunning network collection."""
+        receipt = self.job.stages.get(Stage.COLLECTING.value)
+        if isinstance(receipt, dict):
+            summary = receipt.setdefault("output_summary", {})
+            if isinstance(summary, dict):
+                summary["context_file"] = context_file
+                warnings = summary.get("content_warnings")
+                if isinstance(warnings, list):
+                    summary["content_warnings"] = [
+                        warning
+                        for warning in warnings
+                        if not isinstance(warning, dict) or warning.get("id") != story_id
+                    ]
+                repairs = summary.setdefault("manual_repairs", [])
+                if isinstance(repairs, list):
+                    repairs.append({"id": story_id, "refreshed_at": datetime.now().isoformat()})
+        self.job.updated_at = datetime.now().isoformat()
+        self._save()
+
     def record_skipped_story(self, story: dict[str, Any]) -> None:
         """Persist an intentional manual exclusion and remove it from active stories."""
         story_id = story["id"]

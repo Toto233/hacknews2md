@@ -26,6 +26,16 @@ This file records durable project decisions that should not be changed back and 
 
 ## Accepted decisions
 
+### 2026-07-31 - Refresh manual repairs locally and expose capture progress
+
+- Status: Accepted
+- Issue: N/A (recurring daily-publishing maintenance with focused regression tests)
+- Supersedes: 2026-07-05 - Human completion requires refreshed collection context
+- Context: Manual article repairs were followed by a full collection rerun, which retried unrelated blocked sites and made a simple repair look like a new batch failure. Human-supplied article text can faithfully include subscription language from the supplied source. Screenshot capture can legitimately take several minutes, but its live state was invisible when a caller timed out.
+- Decision: `set-content` refreshes the planning context and existing collection receipt directly from the local database, then invalidates the audit; it does not crawl. Paywall/shell detection remains a gate for fetched content but does not classify an explicitly labelled `human_supplied` body as a source shell. Screenshot capture writes atomic per-run progress which `publisher status` reports. Image candidate filtering rejects verified tracking and decorative assets before download.
+- Failure mode of alternative: Re-running collection for every repair repeatedly contacts unrelated failing sources and reintroduces stale warnings; treating every subscription phrase in human-supplied research as a shell discards usable, attributed material; a silent long-running capture leads operators to launch a second command while the daily lock is still held; downloading tracking pixels and site chrome consumes upload capacity without improving the article.
+- Consequences: Operators can continue from `set-content` directly to `audit`, capture status is observable without touching the lock, and genuine fetched paywalls remain blocking.
+
 ### 2026-07-28 - Keep HN recovery bounded and provenance-specific
 
 - Status: Accepted

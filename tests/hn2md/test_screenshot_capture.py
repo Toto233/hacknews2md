@@ -43,6 +43,7 @@ def _ctx(tmp_path: Path) -> RuntimeContext:
 
 def test_capture_missing_screenshots_records_successes_without_blocking_failures(tmp_path: Path) -> None:
     ctx = _ctx(tmp_path)
+    progress_path = ctx.job_dir / "capture_progress_20260731.json"
 
     with patch(
         "hn2md.screenshot_capture._capture_one_in_process",
@@ -53,7 +54,7 @@ def test_capture_missing_screenshots_records_successes_without_blocking_failures
             "page_preparation": {"action": "rejected"},
         },
     ):
-        result = capture_missing_screenshots(ctx, concurrency=1)
+        result = capture_missing_screenshots(ctx, concurrency=1, progress_path=progress_path)
 
     assert result["requested"] == 1
     assert result["captured"] == 1
@@ -73,6 +74,10 @@ def test_capture_missing_screenshots_records_successes_without_blocking_failures
     ]
     assert result["page_preparation_actions"] == {"rejected": 1}
     assert result["warnings"] == []
+    progress = __import__("json").loads(progress_path.read_text(encoding="utf-8"))
+    assert progress["status"] == "completed"
+    assert progress["completed"] == 1
+    assert progress["captured"] == 1
     with sqlite3.connect(ctx.db_path) as conn:
         assert conn.execute("SELECT screenshot FROM news WHERE id=1").fetchone() == ("shot.png",)
 

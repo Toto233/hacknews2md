@@ -148,6 +148,21 @@ def status(source_name: str, date_value: str | None, year: int | None, month: in
 
     machine, _ = JobStateMachine.load_or_create(ctx.job_dir, period)
     click.echo(f"Status: {machine.job.status}")
+    progress_path = ctx.job_dir / f"capture_progress_{period}.json"
+    if progress_path.exists():
+        try:
+            progress = json_mod.loads(progress_path.read_text(encoding="utf-8"))
+        except (OSError, json_mod.JSONDecodeError):
+            progress = None
+        if isinstance(progress, dict) and progress.get("stage") == "CAPTURING":
+            click.echo(
+                "Capture: {status} ({completed}/{requested}, captured {captured})".format(
+                    status=progress.get("status", "unknown"),
+                    completed=progress.get("completed", 0),
+                    requested=progress.get("requested", 0),
+                    captured=progress.get("captured", 0),
+                )
+            )
 
 
 @main.command("unlock")
@@ -495,7 +510,17 @@ def set_content(
         )
         if cursor.rowcount == 0:
             raise click.ClickException(f"story not found for {ctx.period}: {news_id}")
-    click.echo(f"Updated story {news_id} content from {content_file}")
+    from hn2md.stages.collect import write_collection_context
+    from publisher.pipeline.runner import _hn_runtime_context
+
+    context_file = write_collection_context(_hn_runtime_context(ctx))
+    machine, _ = JobStateMachine.load_or_create(ctx.job_dir, ctx.period)
+    machine.refresh_collection_context(context_file, news_id)
+    machine.invalidate_audit()
+    click.echo(
+        f"Updated story {news_id} content from {content_file}; refreshed collection context "
+        f"without re-crawling other stories: {context_file}"
+    )
 
 
 @main.command("skip-story")

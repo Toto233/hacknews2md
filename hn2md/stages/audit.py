@@ -110,7 +110,7 @@ def _warning_is_still_actionable(warning: dict[str, Any], rows_by_id: dict[int, 
     return not (
         len(article) >= MIN_CONTENT_LENGTH
         and source_type in VALID_SOURCE_TYPES
-        and not is_paywall_or_shell_content(article)
+        and (source_type == "human_supplied" or not is_paywall_or_shell_content(article))
     )
 
 
@@ -195,7 +195,7 @@ def run_audit(
             issues.append(_issue(row, "content_missing", "正文或替代内容为空"))
         elif len(article) < MIN_CONTENT_LENGTH:
             issues.append(_issue(row, "content_short", f"内容过短（{len(article)} 字符）"))
-        if is_paywall_or_shell_content(article):
+        if source_type != "human_supplied" and is_paywall_or_shell_content(article):
             issues.append(_issue(row, "paywall_or_shell_page", "正文疑似订阅墙或站点壳页面"))
         if source_type not in VALID_SOURCE_TYPES:
             issues.append(_issue(row, "source_missing", "内容来源类型缺失或无效"))

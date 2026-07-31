@@ -276,6 +276,38 @@ async def _collect_rows(rows: list[sqlite3.Row], concurrency: int, db_path: str 
     return await asyncio.gather(*(_collect_item(row, semaphore, db_path) for row in rows))
 
 
+def write_collection_context(ctx: RuntimeContext) -> str:
+    """Write a fresh planning context from persisted records without crawling."""
+    with get_db(str(ctx.db_path)) as conn:
+        conn.row_factory = sqlite3.Row
+        rows = conn.execute(
+            """
+            SELECT id, title, news_url, discuss_url, article_content,
+                   discussion_content, screenshot, largest_image, image_2, image_3,
+                   content_source_type, content_source_url, content_source_doi
+            FROM news
+            WHERE date(created_at)=date('now','localtime')
+            ORDER BY id
+            """
+        ).fetchall()
+    ctx.codex_dir.mkdir(parents=True, exist_ok=True)
+    context_path = ctx.codex_dir / f"hacknews_context_{datetime.now().strftime('%Y%m%d_%H%M%S')}.json"
+    context_path.write_text(
+        json.dumps(
+            {
+                "generated_at": datetime.now().isoformat(timespec="seconds"),
+                "count": len(rows),
+                "items": [dict(row) for row in rows],
+                "refresh_mode": "database_only",
+            },
+            ensure_ascii=False,
+            indent=2,
+        ),
+        encoding="utf-8",
+    )
+    return str(context_path)
+
+
 class CollectStage(BaseStage):
     stage_name = Stage.COLLECTING
 
