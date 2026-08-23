@@ -17,7 +17,7 @@ dependencies = [
     "colorama",
     "Pillow",
     "pillow-avif-plugin",
-    "chardet",
+    "chardet<6",
     "brotli",
     "youtube-transcript-api",
     "twscrape",

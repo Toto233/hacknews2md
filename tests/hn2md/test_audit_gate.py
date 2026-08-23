@@ -56,7 +56,9 @@ def test_audit_returns_structured_report_without_doi_requirement(tmp_path) -> No
     codes = {issue["code"] for issue in report["issues"]}
     assert {"content_short", "abstract_source_missing", "discussion_summary_missing"} <= codes
     assert "abstract_doi_missing" not in codes
-    assert report["blocking_count"] == len(report["issues"])
+    assert report["blocking_count"] == sum(
+        issue["severity"] == "blocking" for issue in report["issues"]
+    )
     assert report["items"][0]["content_source_type"] == "public_abstract"
     assert "content_source_doi" not in report["items"][0]
 
@@ -135,6 +137,45 @@ def test_pre_plan_audit_ignores_summaries_but_keeps_content_gates(tmp_path) -> N
 
     assert report["blocking_count"] == 0
     assert not {"summary_missing", "discussion_summary_missing"} & {issue["code"] for issue in report["issues"]}
+
+
+def test_strict_audit_warns_when_summaries_are_below_editorial_targets(tmp_path) -> None:
+    ctx = _ctx(tmp_path)
+    init_database(str(ctx.db_path))
+    article = "Readable article body. " * 20
+    with sqlite3.connect(ctx.db_path) as conn:
+        conn.execute(
+            """
+            INSERT INTO news (
+                id, title, news_url, article_content, discussion_content,
+                content_summary, discuss_summary, content_source_type,
+                content_source_url, created_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now', 'localtime'))
+            """,
+            (
+                1,
+                "Story",
+                "https://example.com/story",
+                article,
+                "discussion",
+                "short summary",
+                "short discussion",
+                "full_text",
+                "https://example.com/story",
+            ),
+        )
+
+    report = run_audit(ctx)
+
+    codes = {issue["code"] for issue in report["issues"]}
+    assert "summary_length_advisory" in codes
+    assert report["length_advisory"] == {
+        "content_target": 280,
+        "discussion_target": 180,
+        "short_content_ids": [1],
+        "short_discussion_ids": [1],
+    }
+    assert report["blocking_count"] == 0
 
 
 def test_audit_blocks_paywall_shell_even_when_text_is_long(tmp_path) -> None:

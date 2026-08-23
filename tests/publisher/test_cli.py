@@ -641,6 +641,62 @@ def test_set_content_updates_article_and_source(tmp_path, monkeypatch) -> None:
     assert json.loads(context_files[0].read_text(encoding="utf-8"))["refresh_mode"] == "database_only"
 
 
+def test_repair_story_keeps_original_url_and_writes_managed_receipt(tmp_path, monkeypatch) -> None:
+    monkeypatch.chdir(tmp_path)
+    db_path = tmp_path / "data" / "hacknews.db"
+    init_database(str(db_path))
+    body_file = tmp_path / "human-input.txt"
+    body = "用户提供的页面说明。" * 30
+    body_file.write_text(body, encoding="utf-8")
+    with sqlite3.connect(db_path) as conn:
+        conn.execute(
+            """
+            INSERT INTO news (id, title, news_url, created_at)
+            VALUES (1, 'Story', 'https://example.com/original', '2026-06-27 10:00:00')
+            """
+        )
+
+    result = CliRunner().invoke(
+        main,
+        ["repair-story", "hackernews", "1", "--date", "2026-06-27", "--file", str(body_file)],
+    )
+
+    assert result.exit_code == 0, result.output
+    with sqlite3.connect(db_path) as conn:
+        row = conn.execute(
+            "SELECT article_content, content_source_type, content_source_url FROM news WHERE id=1"
+        ).fetchone()
+    assert row == (body, "human_supplied", "https://example.com/original")
+    repairs = list((tmp_path / "output" / "human-sources" / "20260627").glob("story_1_*.json"))
+    assert len(repairs) == 1
+    receipt = json.loads(repairs[0].read_text(encoding="utf-8"))
+    assert receipt["source_url"] == "https://example.com/original"
+    assert Path(receipt["content_file"]).read_text(encoding="utf-8").strip() == body
+
+
+def test_repair_story_rejects_too_short_human_content(tmp_path, monkeypatch) -> None:
+    monkeypatch.chdir(tmp_path)
+    db_path = tmp_path / "data" / "hacknews.db"
+    init_database(str(db_path))
+    body_file = tmp_path / "too-short.txt"
+    body_file.write_text("too short", encoding="utf-8")
+    with sqlite3.connect(db_path) as conn:
+        conn.execute(
+            """
+            INSERT INTO news (id, title, news_url, created_at)
+            VALUES (1, 'Story', 'https://example.com/original', '2026-06-27 10:00:00')
+            """
+        )
+
+    result = CliRunner().invoke(
+        main,
+        ["repair-story", "hackernews", "1", "--date", "2026-06-27", "--file", str(body_file)],
+    )
+
+    assert result.exit_code != 0
+    assert "at least 100 characters" in result.output
+
+
 def test_status_reports_capture_progress(tmp_path, monkeypatch) -> None:
     monkeypatch.chdir(tmp_path)
     job_dir = tmp_path / "output" / "jobs"

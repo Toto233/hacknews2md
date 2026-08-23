@@ -77,6 +77,9 @@ VALID_TRANSITIONS: set[tuple[Stage, Stage]] = {
     (Stage.APPLYING, Stage.RENDERING),
     (Stage.APPLYING, Stage.FAILED),
     (Stage.RENDERING, Stage.COVERING),
+    # Standard ImageGen covers are generated outside the legacy COVERING stage
+    # and are supplied directly to the publish command.
+    (Stage.RENDERING, Stage.PUBLISHING),
     (Stage.RENDERING, Stage.FAILED),
     (Stage.COVERING, Stage.PUBLISHING),
     (Stage.COVERING, Stage.FAILED),
@@ -134,6 +137,7 @@ class PublishJob:
     error: str | None = None
     audit_report: dict[str, Any] | None = None
     audit_exemption: dict[str, Any] | None = None
+    publish_intent: dict[str, Any] | None = None
     run_id: str = ""
 
     def to_json(self, path: Path) -> None:

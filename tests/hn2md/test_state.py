@@ -192,6 +192,15 @@ class TestJobStateMachine:
 
         assert machine.can_transition(Stage.RENDERING)
 
+    def test_rendering_can_publish_with_an_external_cover(self, job_dir):
+        """A standard ImageGen cover bypasses the legacy COVERING stage."""
+        job_dir.mkdir(parents=True)
+        machine, _ = JobStateMachine.load_or_create(job_dir, "20260620")
+        machine.transition(Stage.FETCHING)
+        machine.transition(Stage.RENDERING)
+
+        assert machine.can_transition(Stage.PUBLISHING)
+
     def test_completed_run_can_return_to_covering(self, job_dir):
         """A completed draft may need a replacement cover before re-publishing."""
         job_dir.mkdir(parents=True)

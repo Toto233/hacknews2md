@@ -87,11 +87,11 @@ def capture_page_screenshot(url: str, title: str) -> ScreenshotCapture:
         driver.set_page_load_timeout(PAGE_LOAD_TIMEOUT_SECONDS)
         logger.debug(f"[SCREENSHOT] navigating | {url}")
         driver.get(url)
+        logger.debug("[SCREENSHOT] waiting %.1fs for rendering", RENDER_WAIT_SECONDS)
+        time.sleep(RENDER_WAIT_SECONDS)
         consent = dismiss_cookie_consent(driver, url)
         page_preparation_action = consent.action
         logger.info("[SCREENSHOT] consent=%s | %s", consent.action, url[:80])
-        logger.debug("[SCREENSHOT] waiting %.1fs for rendering", RENDER_WAIT_SECONDS)
-        time.sleep(RENDER_WAIT_SECONDS)
         driver.save_screenshot(image_save_path)
         saved_screenshot_path = os.path.abspath(image_save_path)
         logger.info(f"[SCREENSHOT] OK | {saved_screenshot_path}")

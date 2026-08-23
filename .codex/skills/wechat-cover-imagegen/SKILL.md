@@ -1,11 +1,11 @@
 ---
 name: wechat-cover-imagegen
-description: Generate WeChat Official Account 21:9 cover images directly with ImageGen/Image2, especially for HackNews daily posts; use when the user asks for 微信公众号头图, 21:9 头图, 微信封面, article cover, or asks to learn baoyu/guizang-style prompts while keeping the title as the visual subject and not using HTML/CSS rendering.
+description: Generate WeChat Official Account 21:9 cover images with the standard built-in ImageGen tool, especially for HackNews daily posts; use when the user asks for 微信公众号头图, 21:9 头图, 微信封面, article cover, or wants typography-first baoyu/guizang-style prompts without HTML/CSS rendering.
 ---
 
 # WeChat Cover ImageGen
 
-Create a WeChat Official Account main cover with the native image generation tool, not HTML/SVG/canvas. The default output is a `21:9` typography-first title image: a compressed Chinese display title, refined editorial composition, one restrained supporting visual, and a center `1:1` safe crop for sharing previews.
+Create a WeChat Official Account main cover with the standard built-in `image_gen.imagegen` tool. The default output is a `21:9` typography-first title image: a compressed Chinese display title, refined editorial composition, one restrained supporting visual, and a center `1:1` safe crop for sharing previews.
 
 ## Workflow
 
@@ -29,9 +29,11 @@ Create a WeChat Official Account main cover with the native image generation too
    - Keep the complete `DISPLAY_TITLE` inside the center `1:1` safe crop because WeChat draft publishing uses the same cover image plus `pic_crop_1_1` coordinates for sharing previews.
    - Keep all important text and visual subjects inside the central safe area for WeChat thumbnail cropping.
 
-4. Generate directly with `image_gen.imagegen`.
+4. Generate directly with the standard built-in `image_gen.imagegen` tool.
    - Do not create HTML for the cover.
    - Do not repair text by drawing over the bitmap with Pillow, SVG, Canvas, or HTML. If text is wrong or weak, regenerate with a stricter prompt.
+   - Do not call `publisher cover --mode image2`; that is the retired cover path.
+   - If built-in ImageGen fails, stop and report the error. Use the CLI/API fallback or Pillow only after the user explicitly approves that fallback.
 
 5. Save the accepted image into the project output folder.
    - For daily HackNews: `output/images/YYYYMMDD/wechat_cover_YYYYMMDD_<slug>.png`.
@@ -41,15 +43,14 @@ Create a WeChat Official Account main cover with the native image generation too
 6. If the user asks to publish, pass the saved file to:
 
 ```powershell
-$env:PYTHONIOENCODING='utf-8'
-.\.venv\Scripts\hn2md.exe publish `
-  'C:\work\hacknews2md\output\markdown\<today-markdown>.md' `
-  --cover-image 'C:\work\hacknews2md\output\images\<date>\<cover>.png'
+.\scripts\publisher.ps1 publish hackernews `
+  '<absolute-path-to-today-markdown>' `
+  --cover-image '<absolute-path-to-accepted-cover>'
 ```
 
 ## Prompt Rules
 
-- Use ImageGen/Image2 directly. No HTML-based composition.
+- Use the standard built-in `image_gen.imagegen` tool. No HTML-based composition and no legacy Image2 wrapper.
 - Mention the exact aspect: `WeChat Official Account title image, 21:9, 2100 x 900`.
 - Generate or choose `DISPLAY_TITLE` before image generation; do not put a 20-30 character raw headline directly on the image.
 - State that visible text must be exactly `DISPLAY_TITLE` by default and nothing else.

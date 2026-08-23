@@ -110,6 +110,92 @@ def test_post_publish_audit_missing_media_id(tmp_path: Path) -> None:
     assert "wechat_media_id" in codes
 
 
+def test_post_publish_audit_returns_followup_recommendations(tmp_path: Path) -> None:
+    from datetime import datetime
+    from hn2md.stages.post_publish_audit import run_post_publish_audit
+
+    date_str = datetime.now().strftime("%Y%m%d")
+    job_dir = tmp_path / "jobs"
+    job_dir.mkdir()
+    db_path = tmp_path / "test.db"
+    output_dir = tmp_path / "output"
+    ledger = {
+        "date": date_str,
+        "status": "DONE",
+        "stages": {
+            "COLLECTING": {
+                "success": True,
+                "error": "No module named 'structlog'",
+                "output_summary": {},
+            },
+            "PUBLISHING": {
+                "success": True,
+                "output_summary": {
+                    "wechat_media_id": "media-1",
+                    "skipped_images": [
+                        {
+                            "path": str(tmp_path / "animation.gif"),
+                            "reason": "unsupported_format",
+                            "suffix": ".gif",
+                        }
+                    ],
+                },
+            },
+        },
+        "receipts": {
+            "COLLECTING": [
+                {
+                    "success": False,
+                    "error": "No module named 'structlog'",
+                    "output_summary": {},
+                },
+                {
+                    "success": True,
+                    "output_summary": {},
+                },
+            ],
+            "PUBLISHING": [
+                {
+                    "success": False,
+                    "error": "Mandatory screenshot fallback is incomplete. Rerun capture-screenshots for: 1: https://example.com",
+                    "output_summary": {},
+                },
+                {
+                    "success": False,
+                    "error": "image generation failed: No usable provider auth was found.",
+                    "output_summary": {},
+                },
+                {
+                    "success": True,
+                    "output_summary": {
+                        "wechat_media_id": "media-1",
+                        "skipped_images": [
+                            {
+                                "path": str(tmp_path / "animation.gif"),
+                                "reason": "unsupported_format",
+                                "suffix": ".gif",
+                            }
+                        ],
+                    },
+                },
+            ]
+        },
+    }
+    (job_dir / f"publish_job_{date_str}.json").write_text(
+        json.dumps(ledger, ensure_ascii=False), encoding="utf-8"
+    )
+
+    result = run_post_publish_audit(job_dir, db_path, output_dir, dry_run=False)
+
+    codes = {item["code"] for item in result["recommendations"]}
+    assert "python_environment_mismatch" in codes
+    assert "capture_stage_not_in_pipeline" in codes
+    assert "image_provider_auth_unavailable" in codes
+    assert "unsupported_gif_images" in codes
+    snapshot = json.loads(Path(result["snapshot_path"]).read_text(encoding="utf-8"))
+    assert {item["code"] for item in snapshot["recommendations"]} == codes
+
+
 def test_post_publish_audit_clean_publish(tmp_path: Path) -> None:
     from datetime import datetime
     from hn2md.stages.post_publish_audit import run_post_publish_audit

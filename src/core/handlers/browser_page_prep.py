@@ -25,9 +25,11 @@ REJECT_ALL_LABELS = (
     "\u4ec5\u4f7f\u7528\u5fc5\u8981 cookie",
     "\u53ea\u63a5\u53d7\u5fc5\u8981 cookie",
 )
-FRANCE24_REJECT_LABELS = (
+CONTINUE_WITHOUT_AGREEING_LABELS = (
     "continue without agreeing",
+    "continue without agreeing →",
 )
+CONSENT_ACTION_SELECTOR = "button, [role=\"button\"], input[type=\"button\"], input[type=\"submit\"], a[href]"
 
 
 @dataclass(frozen=True)
@@ -80,7 +82,7 @@ const getContext = element => {{
   }}
   return {{consentContext, modalContext}};
 }};
-const candidates = [...document.querySelectorAll('button, [role="button"], input[type="button"], input[type="submit"]')]
+const candidates = [...document.querySelectorAll('{CONSENT_ACTION_SELECTOR}')]
   .filter(isVisible)
   .map(element => ({{
     element,
@@ -110,12 +112,19 @@ def dismiss_cookie_consent(driver: Any, url: str) -> CookieConsentResult:
         if not candidate.get("element"):
             return CookieConsentResult(action="unavailable")
         label = candidate["label"]
-        candidate["element"].click()
+        try:
+            candidate["element"].click()
+        except Exception:
+            # The target has already passed the domain and label allowlist.
+            # Some CMP overlays intercept Selenium's coordinate-based click.
+            driver.execute_script("arguments[0].click();", candidate["element"])
+            logger.info("cookie_consent_js_click_fallback", url=url[:120], label=label)
         WebDriverWait(driver, CONSENT_DISMISS_WAIT_SECONDS).until(
             lambda active_driver: _consent_banner_is_gone(active_driver, url=url)
         )
         logger.info("cookie_consent_rejected", url=url[:120], label=label)
-        return CookieConsentResult(action="rejected", label=label)
+        action = "dismissed" if _is_africanews_url(url) else "rejected"
+        return CookieConsentResult(action=action, label=label)
     except Exception as exc:
         logger.info("cookie_consent_dismiss_unavailable", url=url[:120], error=str(exc)[:160])
         return CookieConsentResult(action="unavailable")
@@ -158,8 +167,12 @@ def _is_allowed_candidate(candidate_label: str, candidate: dict[str, Any], *, ur
         _is_france24_url(url)
         and consent_context
         and modal_context
-        and " ".join(candidate_label.split()).casefold()
-        in {label.casefold() for label in FRANCE24_REJECT_LABELS}
+        and _is_continue_without_agreeing_label(candidate_label)
+    ) or (
+        _is_africanews_url(url)
+        and consent_context
+        and modal_context
+        and _is_continue_without_agreeing_label(candidate_label)
     )
 
 
@@ -167,6 +180,18 @@ def _is_france24_url(url: str) -> bool:
     """Return whether a URL belongs to France24 or one of its subdomains."""
     hostname = urlparse(url).hostname or ""
     return hostname.casefold() == "france24.com" or hostname.casefold().endswith(".france24.com")
+
+
+def _is_africanews_url(url: str) -> bool:
+    """Return whether a URL belongs to Africanews or one of its subdomains."""
+    hostname = urlparse(url).hostname or ""
+    return hostname.casefold() == "africanews.com" or hostname.casefold().endswith(".africanews.com")
+
+
+def _is_continue_without_agreeing_label(label: str) -> bool:
+    """Recognize the two explicit non-consent labels used by approved CMPs."""
+    normalized_label = " ".join(label.split()).casefold()
+    return normalized_label in {candidate.casefold() for candidate in CONTINUE_WITHOUT_AGREEING_LABELS}
 
 
 def _has_consent_candidates(result: object) -> bool:

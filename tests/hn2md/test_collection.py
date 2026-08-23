@@ -165,6 +165,39 @@ def test_collect_stage_filters_decorative_images_before_saving(tmp_path) -> None
     assert row == ("article.jpg", None, None)
 
 
+def test_collect_stage_filters_tracking_and_rss_images_before_saving(tmp_path) -> None:
+    ctx = _ctx(tmp_path)
+    crawler = MagicMock()
+    crawler.crawl_article = AsyncMock(
+        return_value=(
+            "Readable article body " * 10,
+            [
+                "https://px.ads.linkedin.com/collect/?pid=1&fmt=gif",
+                "https://www.facebook.com/tr?id=1",
+                "https://vg09.met.vgwort.de/na/tracker",
+                "https://example.com/assets/rss.png",
+                "https://cdn.example.com/article-photo.jpg",
+            ],
+        )
+    )
+    crawler.close = AsyncMock()
+
+    with (
+        patch("src.core.crawlers.scrapling_crawler.ScraplingCrawler", return_value=crawler),
+        patch("src.core.handlers.discussion_handler.get_discussion_content_async", new=AsyncMock(return_value="HN discussion")),
+        patch("src.core.handlers.image_handler.save_article_image", return_value="article.jpg") as save_image,
+        patch("src.core.handlers.screenshot_handler.save_page_screenshot", return_value="shot.png"),
+    ):
+        result = CollectStage().execute(ctx, object(), concurrency=1)
+
+    assert result["image_warnings"] == []
+    save_image.assert_called_once_with(
+        "https://cdn.example.com/article-photo.jpg",
+        "https://example.com/story",
+        "Story_1",
+    )
+
+
 def test_collect_stage_routes_youtube_urls_to_youtube_handler(tmp_path) -> None:
     ctx = _ctx(tmp_path)
     _set_news_url(ctx, "https://www.youtube.com/watch?v=abc123")

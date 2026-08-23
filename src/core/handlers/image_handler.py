@@ -49,11 +49,14 @@ LOW_SIGNAL_IMAGE_TOKENS = (
 )
 
 TRACKING_IMAGE_HOSTS = (
+    "ads.linkedin.com",
+    "facebook.com",
     "scorecardresearch.com",
     "google-analytics.com",
     "goatcounter.com",
     "doubleclick.net",
     "googlesyndication.com",
+    "vgwort.de",
 )
 
 
@@ -99,6 +102,8 @@ def is_low_signal_article_image_url(image_url: str) -> bool:
     if path.endswith(".svg"):
         return True
     if any(host == suffix or host.endswith(f".{suffix}") for suffix in TRACKING_IMAGE_HOSTS):
+        return True
+    if path.endswith("/rss.png") or path.endswith("/rss.gif"):
         return True
     if "placeholder" in path:
         return True

@@ -69,6 +69,7 @@ def _check_image_preflight(
     findings: list[dict[str, Any]] = []
     skipped = receipt.get("skipped_images", [])
     compressed = receipt.get("compressed_images", [])
+    converted = receipt.get("converted_images", [])
     if skipped:
         findings.append(
             _finding(
@@ -89,9 +90,74 @@ def _check_image_preflight(
                 {"compressed": compressed},
             )
         )
-    if not skipped and not compressed:
+    if converted:
+        findings.append(
+            _finding(
+                date_str,
+                "image_preflight",
+                "info",
+                f"{len(converted)} unsupported image(s) converted for WeChat",
+                {"converted": converted},
+            )
+        )
+    if not skipped and not compressed and not converted:
         findings.append(_finding(date_str, "image_preflight", "info", "All images OK"))
     return findings
+
+
+def _recommendations_from_findings(findings: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Translate raw run findings into stable follow-up improvement categories."""
+    recommendations: dict[str, dict[str, Any]] = {}
+
+    def add(code: str, title: str, reason: str, action: str) -> None:
+        recommendations.setdefault(
+            code,
+            {
+                "code": code,
+                "title": title,
+                "reason": reason,
+                "action": action,
+            },
+        )
+
+    for finding in findings:
+        message = str(finding.get("message") or "")
+        details = finding.get("details") if isinstance(finding.get("details"), dict) else {}
+        error = str(details.get("error") or "")
+        combined = f"{message}\n{error}"
+
+        if "No module named" in combined or "RequestsDependencyWarning" in combined:
+            add(
+                "python_environment_mismatch",
+                "Use a single pinned Python environment for publisher",
+                "A stage failed or warned because runtime dependencies did not match the interpreter.",
+                "Run publisher through the project venv or configured Python path instead of ambient python/PATH.",
+            )
+        if "Mandatory screenshot fallback is incomplete" in combined:
+            add(
+                "capture_stage_not_in_pipeline",
+                "Run screenshot fallback before publish",
+                "Publish reached the WeChat gate before mandatory screenshots were captured.",
+                "Ensure direct publish/release resumes insert CAPTURING before PUBLISHING.",
+            )
+        if "No usable provider auth was found" in combined or "provider credentials are unavailable" in combined:
+            add(
+                "image_provider_auth_unavailable",
+                "Preflight AI cover provider credentials",
+                "AI cover generation ran in an environment without image provider credentials.",
+                "Fail fast before generation or run cover with access to local Codex/OpenAI image config.",
+            )
+        if finding.get("check") == "image_preflight":
+            skipped = details.get("skipped") if isinstance(details, dict) else None
+            if isinstance(skipped, list) and any(item.get("suffix") == ".gif" for item in skipped if isinstance(item, dict)):
+                add(
+                    "unsupported_gif_images",
+                    "Convert GIF images before WeChat upload",
+                    "WeChat upload skipped local GIF files because the publisher only uploads static supported formats.",
+                    "Convert GIF first frames to PNG/WebP and rewrite markdown before upload.",
+                )
+
+    return list(recommendations.values())
 
 
 def _check_keyword_warnings(
@@ -508,7 +574,11 @@ def _read_existing_finding_keys(path: Path) -> tuple[set[str], list[int]]:
 
 
 def _write_current_snapshot(
-    path: Path, date_str: str, findings: list[dict[str, Any]], blocking_count: int
+    path: Path,
+    date_str: str,
+    findings: list[dict[str, Any]],
+    blocking_count: int,
+    recommendations: list[dict[str, Any]] | None = None,
 ) -> bool:
     """Replace the machine-readable current audit conclusion for one run."""
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -520,6 +590,7 @@ def _write_current_snapshot(
                     "generated_at": datetime.now().isoformat(),
                     "date": date_str,
                     "blocking_count": blocking_count,
+                    "recommendations": recommendations or [],
                     "findings": findings,
                 },
                 ensure_ascii=False,
@@ -807,7 +878,14 @@ def run_post_publish_audit(
         )
         all_findings = _deduplicate_findings(all_findings)
     blocking_count = sum(1 for f in all_findings if f.get("severity") == "blocking")
-    snapshot_written = _write_current_snapshot(snapshot_path, date_str, all_findings, blocking_count)
+    recommendations = _recommendations_from_findings(all_findings)
+    snapshot_written = _write_current_snapshot(
+        snapshot_path,
+        date_str,
+        all_findings,
+        blocking_count,
+        recommendations,
+    )
 
     written = 0
     for finding in all_findings:
@@ -822,6 +900,7 @@ def run_post_publish_audit(
     return {
         "findings": all_findings,
         "blocking_count": blocking_count,
+        "recommendations": recommendations,
         "jsonl_written": written,
         "jsonl_path": str(jsonl_path),
         "snapshot_path": str(snapshot_path) if snapshot_written else None,

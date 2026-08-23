@@ -18,6 +18,8 @@ from src.security.content_sanitizer import contains_hallucination_markers
 
 logger = logging.getLogger(__name__)
 MIN_CONTENT_LENGTH = 100
+MIN_SUMMARY_LENGTH = 280
+MIN_DISCUSSION_SUMMARY_LENGTH = 180
 VALID_SOURCE_TYPES = {
     "full_text",
     "public_abstract",
@@ -165,6 +167,8 @@ def run_audit(
         if _warning_is_still_actionable(warning, rows_by_id)
     ]
     items: list[dict[str, Any]] = []
+    short_summaries: list[sqlite3.Row] = []
+    short_discussion_summaries: list[sqlite3.Row] = []
     for row in rows:
         article = (row["article_content"] or "").strip()
         discussion = (row["discussion_content"] or "").strip()
@@ -224,6 +228,10 @@ def run_audit(
             issues.append(_issue(row, "discussion_summary_source_url_missing", "外部或人工讨论摘要缺少来源 URL"))
         if include_summaries and (contains_hallucination_markers(summary) or contains_hallucination_markers(discussion_summary)):
             issues.append(_issue(row, "hallucination_marker", "摘要包含模型拒答或幻觉标记"))
+        if include_summaries and summary and len(summary) < MIN_SUMMARY_LENGTH:
+            short_summaries.append(row)
+        if include_summaries and discussion_summary and len(discussion_summary) < MIN_DISCUSSION_SUMMARY_LENGTH:
+            short_discussion_summaries.append(row)
         lowered = article.lower()
         if any(marker in lowered for marker in SHELL_CONTENT_MARKERS):
             if _has_substantive_body_beyond_shell_marker(article):
@@ -233,8 +241,31 @@ def run_audit(
             else:
                 issues.append(_issue(row, "error_page", "内容疑似登录页或错误页"))
 
+    length_advisory = {
+        "content_target": MIN_SUMMARY_LENGTH,
+        "discussion_target": MIN_DISCUSSION_SUMMARY_LENGTH,
+        "short_content_ids": [row["id"] for row in short_summaries],
+        "short_discussion_ids": [row["id"] for row in short_discussion_summaries],
+    }
+    if short_summaries or short_discussion_summaries:
+        issues.append(
+            {
+                "code": "summary_length_advisory",
+                "severity": "warning",
+                "message": (
+                    f"摘要长度建议：正文偏短 {len(short_summaries)} 篇"
+                    f"（目标 {MIN_SUMMARY_LENGTH} 字符），讨论偏短 {len(short_discussion_summaries)} 篇"
+                    f"（目标 {MIN_DISCUSSION_SUMMARY_LENGTH} 字符）；详见 length_advisory。"
+                ),
+            }
+        )
     blocking_count = sum(1 for issue in issues if issue.get("severity", "blocking") == "blocking")
-    report = {"items": items, "issues": issues, "blocking_count": blocking_count}
+    report = {
+        "items": items,
+        "issues": issues,
+        "blocking_count": blocking_count,
+        "length_advisory": length_advisory,
+    }
     if issues:
         logger.warning(
             "Audit found %s issue(s): %s blocking, %s warning",

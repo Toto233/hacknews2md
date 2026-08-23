@@ -3,6 +3,7 @@
 import logging
 import re
 import sqlite3
+import subprocess
 from pathlib import Path
 from typing import Any
 
@@ -12,6 +13,7 @@ from hn2md.state import JobStateMachine
 from hn2md.stages.base import BaseStage, NonRetryableStageError
 from hn2md.stages.script_loader import load_project_function
 from src.db.connection import get_db
+from src.utils.deployment import load_deployment_settings
 
 logger = logging.getLogger(__name__)
 
@@ -194,11 +196,54 @@ def _compress_image_for_wechat(image_path: Path) -> Path | None:
     return None
 
 
-def _rewrite_oversize_images_for_wechat(markdown_content: str, markdown_path: Path) -> tuple[str, list[dict[str, Any]]]:
-    """Rewrite valid oversized local image references to compressed JPEG copies."""
+def _convert_unsupported_image_for_wechat(image_path: Path) -> Path | None:
+    """Create a WeChat-supported static image copy for unsupported local formats."""
+    if image_path.suffix.lower() != ".gif":
+        return None
+    try:
+        from PIL import Image
+    except ImportError:
+        logger.warning("[PUBLISH] Pillow unavailable; cannot convert image: %s", image_path)
+        return None
+
+    target = image_path.with_name(f"{image_path.stem}_wechat.png")
+    try:
+        with Image.open(image_path) as image:
+            image.seek(0)
+            frame = image.convert("RGBA")
+            frame.save(target, format="PNG", optimize=True)
+        return target
+    except Exception as exc:
+        logger.warning("[PUBLISH] Failed to convert image %s: %s", image_path, exc)
+        return None
+
+
+def _rewrite_wechat_images(
+    markdown_content: str,
+    markdown_path: Path,
+) -> tuple[str, list[dict[str, Any]], list[dict[str, Any]]]:
+    """Rewrite unsupported/oversized local image references to WeChat-safe copies."""
     compressed: list[dict[str, Any]] = []
+    converted: list[dict[str, Any]] = []
     rewritten = markdown_content
-    for skipped in _find_skipped_local_images(markdown_content):
+    for skipped in _find_skipped_local_images(rewritten):
+        if skipped.get("reason") != "unsupported_format":
+            continue
+        original = Path(str(skipped["path"]))
+        converted_path = _convert_unsupported_image_for_wechat(original)
+        if not converted_path:
+            continue
+        rewritten = rewritten.replace(str(original), str(converted_path))
+        converted.append(
+            {
+                "original_path": str(original),
+                "converted_path": str(converted_path),
+                "original_suffix": skipped.get("suffix"),
+                "converted_suffix": converted_path.suffix.lower(),
+            }
+        )
+
+    for skipped in _find_skipped_local_images(rewritten):
         if skipped.get("reason") != "oversize":
             continue
         original = Path(str(skipped["path"]))
@@ -214,9 +259,73 @@ def _rewrite_oversize_images_for_wechat(markdown_content: str, markdown_path: Pa
                 "compressed_size_bytes": compressed_path.stat().st_size,
             }
         )
-    if compressed and rewritten != markdown_content:
+    if (converted or compressed) and rewritten != markdown_content:
         markdown_path.write_text(rewritten, encoding="utf-8")
+    return rewritten, compressed, converted
+
+
+def _rewrite_oversize_images_for_wechat(markdown_content: str, markdown_path: Path) -> tuple[str, list[dict[str, Any]]]:
+    """Backward-compatible wrapper for callers that only expect compression info."""
+    rewritten, compressed, _converted = _rewrite_wechat_images(markdown_content, markdown_path)
     return rewritten, compressed
+
+
+def _run_astro_git(repo: Path, *args: str, check: bool = True) -> subprocess.CompletedProcess[str]:
+    """Run a scoped Astro repository Git command with captured diagnostics."""
+    return subprocess.run(
+        ["git", "-C", str(repo), *args],
+        check=check,
+        capture_output=True,
+        text=True,
+    )
+
+
+def _sync_astro(ctx: RuntimeContext, machine: JobStateMachine) -> dict[str, str]:
+    """Commit and push the rendered Astro article, returning durable provenance."""
+    render_receipt = machine.job.stages.get(Stage.RENDERING.value, {})
+    astro_file_value = render_receipt.get("output_summary", {}).get("astro_file")
+    if not astro_file_value:
+        raise RuntimeError("Astro target requested but RENDERING produced no astro_file")
+
+    settings = load_deployment_settings(project_root=ctx.project_root)
+    repo = settings.astro_repo
+    if not settings.astro_enabled or repo is None:
+        raise RuntimeError("Astro target requested but Astro is not enabled or configured")
+    repo = repo.resolve()
+    if not repo.is_dir():
+        raise RuntimeError(f"Astro repository not found: {repo}")
+
+    astro_file = Path(astro_file_value).resolve()
+    if not astro_file.is_file():
+        raise RuntimeError(f"Rendered Astro file not found: {astro_file}")
+    try:
+        relative_file = astro_file.relative_to(repo)
+    except ValueError as exc:
+        raise RuntimeError(f"Rendered Astro file is outside configured repository: {astro_file}") from exc
+
+    _run_astro_git(repo, "add", "--", str(relative_file))
+    _run_astro_git(repo, "diff", "--cached", "--check")
+    staged = _run_astro_git(repo, "diff", "--cached", "--quiet", check=False)
+    if staged.returncode == 0:
+        commit = _run_astro_git(repo, "rev-parse", "HEAD").stdout.strip()
+        return {
+            "status": "already_synced",
+            "repo": str(repo),
+            "file": str(astro_file),
+            "commit": commit,
+        }
+    if staged.returncode != 1:
+        raise RuntimeError(f"Unable to inspect staged Astro changes: {staged.stderr.strip()}")
+
+    _run_astro_git(repo, "commit", "-m", f"{machine.job.date}: 更新 HackNews 博客")
+    commit = _run_astro_git(repo, "rev-parse", "HEAD").stdout.strip()
+    _run_astro_git(repo, "push")
+    return {
+        "status": "pushed",
+        "repo": str(repo),
+        "file": str(astro_file),
+        "commit": commit,
+    }
 
 
 class PublishStage(BaseStage):
@@ -229,6 +338,7 @@ class PublishStage(BaseStage):
         dry_run: bool = False,
         markdown_file: str | None = None,
         cover_image: str | None = None,
+        targets: tuple[str, ...] = ("wechat",),
     ) -> dict[str, Any]:
         render_receipt = machine.job.stages.get(Stage.RENDERING.value)
         cover_receipt = machine.job.stages.get(Stage.COVERING.value)
@@ -250,7 +360,7 @@ class PublishStage(BaseStage):
         keyword_warnings: list[dict[str, Any]] = []
         if md_path.exists():
             md_content = md_path.read_text(encoding="utf-8")
-            md_content, compressed_images = _rewrite_oversize_images_for_wechat(md_content, md_path)
+            md_content, compressed_images, converted_images = _rewrite_wechat_images(md_content, md_path)
             skipped_images = _find_skipped_local_images(md_content)
 
             from src.utils.db_utils import check_illegal_content, get_illegal_keywords
@@ -280,11 +390,12 @@ class PublishStage(BaseStage):
         else:
             skipped_images = []
             compressed_images = []
+            converted_images = []
             logger.warning(f"[PUBLISH] Markdown file not found: {md_file}")
 
         # --- Dry-run mode ---
         if dry_run:
-            logger.info("[PUBLISH] DRY RUN — skipping WeChat draft creation")
+            logger.info("[PUBLISH] DRY RUN — skipping external publication")
             return {
                 "wechat_media_id": None,
                 "markdown_file": md_file,
@@ -292,19 +403,38 @@ class PublishStage(BaseStage):
                 "safety_check": "passed",
                 "skipped_images": skipped_images,
                 "compressed_images": compressed_images,
+                "converted_images": converted_images,
                 "keyword_warnings": keyword_warnings,
+                "astro": {"status": "dry_run"} if "astro" in targets else None,
+                "requested_targets": list(targets),
+                "completed_targets": [],
             }
 
-        _preflight_wechat(ctx)
-        publish_to_wechat = load_project_function(ctx, "scripts.publish_wechat", "publish_to_wechat")
-        media_id = publish_to_wechat(md_file, cover_image=cover)
-        if not media_id:
-            raise RuntimeError("WeChat draft publish failed: no media_id returned")
+        media_id: str | None = None
+        completed_targets: list[str] = []
+        if "wechat" in targets:
+            _preflight_wechat(ctx)
+            publish_to_wechat = load_project_function(ctx, "scripts.publish_wechat", "publish_to_wechat")
+            media_id = publish_to_wechat(md_file, cover_image=cover)
+            if not media_id:
+                raise RuntimeError("WeChat draft publish failed: no media_id returned")
+            completed_targets.append("wechat")
+
+        astro = _sync_astro(ctx, machine) if "astro" in targets else None
+        if astro and astro.get("status") == "pushed":
+            completed_targets.append("astro")
+        if getattr(machine.job, "publish_intent", None) is not None:
+            machine.job.publish_intent["completed_targets"] = completed_targets
+            machine._save()
         return {
-            "wechat_media_id": str(media_id),
+            "wechat_media_id": str(media_id) if media_id else None,
             "markdown_file": md_file,
             "cover_image": cover,
             "skipped_images": skipped_images,
             "compressed_images": compressed_images,
+            "converted_images": converted_images,
             "keyword_warnings": keyword_warnings,
+            "astro": astro,
+            "requested_targets": list(targets),
+            "completed_targets": completed_targets,
         }

@@ -1,6 +1,7 @@
 from unittest.mock import MagicMock, patch
 
 from src.core.handlers.browser_page_prep import (
+    CONSENT_ACTION_SELECTOR,
     dismiss_cookie_consent,
     is_allowed_consent_rejection,
 )
@@ -12,6 +13,11 @@ def test_cookie_dismissal_requires_an_allowlisted_reject_action_in_a_modal_conse
         consent_context=True,
         modal_context=True,
     )
+
+
+def test_cookie_consent_probe_includes_anchor_actions() -> None:
+    """Some CMPs, including Africanews, render their dismiss action as a link."""
+    assert "a[href]" in CONSENT_ACTION_SELECTOR
 
 
 def test_cookie_dismissal_refuses_ordinary_or_accept_actions() -> None:
@@ -108,6 +114,90 @@ def test_dismiss_cookie_consent_rejects_france24_continue_without_agreeing() -> 
     assert result.action == "rejected"
     assert result.label == "Continue without agreeing"
     reject_button.click.assert_called_once()
+
+
+def test_dismiss_cookie_consent_dismisses_africanews_without_agreeing() -> None:
+    """Africanews offers a non-consent path that must precede screenshots."""
+    driver = MagicMock()
+    dismiss_button = MagicMock()
+    driver.execute_script.side_effect = [
+        {
+            "action": "candidates",
+            "candidates": [
+                {
+                    "element": dismiss_button,
+                    "label": "Continue without agreeing →",
+                    "consentContext": True,
+                    "modalContext": True,
+                }
+            ],
+        },
+        {"action": "no_consent_banner"},
+    ]
+
+    with patch("src.core.handlers.browser_page_prep.WebDriverWait") as wait:
+        wait.return_value.until.side_effect = lambda condition: condition(driver)
+        result = dismiss_cookie_consent(
+            driver,
+            "https://www.africanews.com/2026/08/04/example/",
+        )
+
+    assert result.action == "dismissed"
+    assert result.label == "Continue without agreeing →"
+    dismiss_button.click.assert_called_once()
+
+
+def test_dismiss_cookie_consent_uses_js_click_after_interception() -> None:
+    driver = MagicMock()
+    dismiss_button = MagicMock()
+    dismiss_button.click.side_effect = RuntimeError("overlay")
+    driver.execute_script.side_effect = [
+        {
+            "action": "candidates",
+            "candidates": [
+                {
+                    "element": dismiss_button,
+                    "label": "Continue without agreeing →",
+                    "consentContext": True,
+                    "modalContext": True,
+                }
+            ],
+        },
+        None,
+        {"action": "no_consent_banner"},
+    ]
+
+    with patch("src.core.handlers.browser_page_prep.WebDriverWait") as wait:
+        wait.return_value.until.side_effect = lambda condition: condition(driver)
+        result = dismiss_cookie_consent(
+            driver,
+            "https://www.africanews.com/2026/08/04/example/",
+        )
+
+    assert result.action == "dismissed"
+    dismiss_button.click.assert_called_once()
+    assert driver.execute_script.call_args_list[1].args == ("arguments[0].click();", dismiss_button)
+
+
+def test_dismiss_cookie_consent_refuses_africanews_dismissal_outside_africanews() -> None:
+    driver = MagicMock()
+    dismiss_button = MagicMock()
+    driver.execute_script.return_value = {
+        "action": "candidates",
+        "candidates": [
+            {
+                "element": dismiss_button,
+                "label": "Continue without agreeing",
+                "consentContext": True,
+                "modalContext": True,
+            }
+        ],
+    }
+
+    result = dismiss_cookie_consent(driver, "https://example.com/article")
+
+    assert result.action == "no_safe_consent_action"
+    dismiss_button.click.assert_not_called()
 
 
 def test_dismiss_cookie_consent_refuses_france24_accept_action() -> None:

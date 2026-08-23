@@ -264,10 +264,10 @@ def capture_screenshots(source_name: str, date_value: str | None, concurrency: i
 @click.option("--approve", is_flag=True, help="Approve the current blocking audit snapshot")
 @click.option(
     "--phase",
-    type=click.Choice(["pre-plan", "strict"], case_sensitive=False),
-    default="strict",
+    type=click.Choice(["auto", "pre-plan", "strict"], case_sensitive=False),
+    default="auto",
     show_default=True,
-    help="Use pre-plan before manual summaries; strict validates final summaries.",
+    help="auto selects pre-plan before summaries and strict afterwards.",
 )
 def audit(
     source_name: str,
@@ -288,8 +288,11 @@ def audit(
 
     from publisher.pipeline.runner import _hn_runtime_context
 
-    report = run_audit(_hn_runtime_context(ctx), include_summaries=phase == "strict")
-    report["phase"] = phase
+    effective_phase = phase
+    if phase == "auto":
+        effective_phase = "strict" if machine.stage_completed_successfully(Stage.APPLYING) else "pre-plan"
+    report = run_audit(_hn_runtime_context(ctx), include_summaries=effective_phase == "strict")
+    report["phase"] = effective_phase
     machine.record_audit_report(report)
     if json_output:
         click.echo(json_mod.dumps(report, ensure_ascii=False, indent=2))
@@ -523,6 +526,34 @@ def set_content(
     )
 
 
+@main.command("repair-story")
+@click.argument("source_name")
+@click.argument("news_id", type=int)
+@click.option("--date", "date_value", default=None, help="YYYY-MM-DD or YYYYMMDD")
+@click.option("--file", "content_file", type=click.Path(exists=True, dir_okay=False), required=True)
+@click.option("--source-url", default=None, help="Override the story URL retained as human-source provenance")
+def repair_story(
+    source_name: str,
+    news_id: int,
+    date_value: str | None,
+    content_file: str,
+    source_url: str | None,
+) -> None:
+    """Apply a managed human-supplied repair and refresh planning context."""
+    ctx = _ensure_hackernews(source_name, date_value)
+    content = Path(content_file).read_text(encoding="utf-8")
+    from publisher.manual_repairs import repair_story_content
+
+    try:
+        repair = repair_story_content(ctx, news_id, content, source_url=source_url)
+    except ValueError as exc:
+        raise click.ClickException(str(exc)) from exc
+    click.echo(
+        f"Repaired story {repair.story_id} with human-supplied content; source={repair.source_url}; "
+        f"receipt={repair.repair_file}; context={repair.context_file}"
+    )
+
+
 @main.command("skip-story")
 @click.argument("source_name")
 @click.argument("news_id", type=int)
@@ -600,11 +631,19 @@ def filter_domain(source_name: str, domain: str, reason: str) -> None:
 @click.option("--date", "date_value", default=None, help="YYYY-MM-DD or YYYYMMDD")
 @click.option("--manual-plan", "manual_plan_file", type=click.Path(exists=True, dir_okay=False), default=None)
 @click.option("--llm", default=None)
-def plan(source_name: str, date_value: str | None, manual_plan_file: str | None, llm: str | None) -> None:
+@click.option("--rerun", is_flag=True, help="Replace a completed planning receipt")
+def plan(
+    source_name: str,
+    date_value: str | None,
+    manual_plan_file: str | None,
+    llm: str | None,
+    rerun: bool,
+) -> None:
     _run_single_stage(
         source_name,
         date_value,
         GenericStage.PLANNING,
+        rerun=rerun,
         kwargs={"manual_plan_file": manual_plan_file, "llm": llm},
     )
 
@@ -613,11 +652,13 @@ def plan(source_name: str, date_value: str | None, manual_plan_file: str | None,
 @click.argument("source_name")
 @click.argument("plan_file", required=False)
 @click.option("--date", "date_value", default=None, help="YYYY-MM-DD or YYYYMMDD")
-def apply(source_name: str, plan_file: str | None, date_value: str | None) -> None:
+@click.option("--rerun", is_flag=True, help="Reapply a completed plan")
+def apply(source_name: str, plan_file: str | None, date_value: str | None, rerun: bool) -> None:
     _run_single_stage(
         source_name,
         date_value,
         GenericStage.APPLYING,
+        rerun=rerun,
         kwargs={"plan_file": plan_file},
     )
 
@@ -652,7 +693,7 @@ def render(
 @click.argument("source_name")
 @click.argument("markdown_file", required=False)
 @click.option("--date", "date_value", default=None, help="YYYY-MM-DD or YYYYMMDD")
-@click.option("--mode", type=click.Choice(["ai", "pillow", "external"]), default="pillow")
+@click.option("--mode", type=click.Choice(["image2", "ai", "pillow", "external"]), default="image2")
 @click.option("--target-word", default=None)
 @click.option("--display-title", default=None, help="Exact compressed title rendered on the cover")
 @click.option("--cover-image", default=None, type=click.Path(exists=True, dir_okay=False))

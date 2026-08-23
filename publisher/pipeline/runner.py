@@ -12,6 +12,18 @@ from publisher.context import PublisherContext
 from publisher.sources.base import SourceDefinition
 
 
+_HACKERNEWS_STAGE_ORDER: tuple[GenericStage, ...] = (
+    GenericStage.FETCHING,
+    GenericStage.COLLECTING,
+    GenericStage.CAPTURING,
+    GenericStage.PLANNING,
+    GenericStage.APPLYING,
+    GenericStage.RENDERING,
+    GenericStage.COVERING,
+    GenericStage.PUBLISHING,
+)
+
+
 def _hn_runtime_context(ctx: PublisherContext) -> RuntimeContext:
     return RuntimeContext(
         project_root=ctx.project_root,
@@ -56,18 +68,35 @@ def _run_release_locked(
     runtime_ctx = _hn_runtime_context(ctx)
     completed: list[str] = []
     publish_targets = targets or source.default_publish_targets
-    stage_sequence = tuple(stages)
+    requested_stage_sequence = tuple(stages)
+    if GenericStage.PUBLISHING in requested_stage_sequence:
+        machine.job.publish_intent = {
+            "requested_targets": list(publish_targets),
+            "completed_targets": [],
+        }
+        machine._save()
+    stage_sequence, inserted_required_stages = _with_required_pre_publish_stages(
+        source,
+        machine,
+        requested_stage_sequence,
+        rerun=rerun,
+    )
     stage_options = stage_kwargs or {}
 
     for stage_name in stage_sequence:
         hn_stage = _to_hn_stage(stage_name)
+        resume_status: str | None = None
+        if rerun or stage_name in inserted_required_stages:
+            if stage_name in inserted_required_stages:
+                resume_status = machine.job.status
+            _rewind_status_for_rerun(machine, stage_name)
         if not rerun and machine.stage_completed_successfully(hn_stage):
             # A previous rerun may have moved the ledger back to an earlier
             # stage while this stage's successful artifact remains reusable.
             # Keep the state machine aligned with the receipt before the next
             # stage transitions forward.
             if machine.job.status != hn_stage.value:
-                machine.transition(hn_stage)
+                _align_status_to_reused_stage(machine, stage_name)
             continue
         if stage_name in source.audit_required_stages:
             _ensure_audit_ready(runtime_ctx, machine, strict=stage_name == GenericStage.PUBLISHING)
@@ -78,13 +107,21 @@ def _run_release_locked(
             or stage_options.get(stage_name.value)
             or {}
         )
-        if stage_name == GenericStage.PUBLISHING and dry_run:
-            kwargs["dry_run"] = True
+        if stage_name == GenericStage.PUBLISHING:
+            # Publish target orchestration is currently a HackerNews contract.
+            # Product Hunt has its own publish stage and its WeChat-only target.
+            if source.name == "hackernews":
+                kwargs["targets"] = publish_targets
+            if dry_run:
+                kwargs["dry_run"] = True
         if stage_name == GenericStage.RENDERING and "astro" not in publish_targets:
             kwargs["astro_enabled"] = False
         receipt = stage.run(runtime_ctx, machine, force_retry=rerun, **kwargs)
         _validate_stage_artifacts(stage_name, receipt, source.required_artifacts.get(stage_name, ()))
         completed.append(stage_name.value)
+        if resume_status and _stage_is_after(resume_status, stage_name):
+            machine.job.status = resume_status
+            machine._save()
 
     if GenericStage.PUBLISHING in stage_sequence:
         from hn2md.constants import Stage
@@ -100,6 +137,98 @@ def _run_release_locked(
         "targets": publish_targets,
         "completed_stages": completed,
     }
+
+
+def _with_required_pre_publish_stages(
+    source: SourceDefinition,
+    machine: JobStateMachine,
+    stages: tuple[GenericStage, ...],
+    *,
+    rerun: bool,
+) -> tuple[tuple[GenericStage, ...], set[GenericStage]]:
+    """Ensure direct Hacker News resumes include mandatory screenshots.
+
+    The visual fallback is a prerequisite for planning as well as publishing.
+    Inserting it here keeps individual CLI commands on the same contract as
+    ``release`` and prevents opaque ``COLLECTING -> PLANNING`` errors.
+    """
+    requires_capture = {
+        GenericStage.PLANNING,
+        GenericStage.APPLYING,
+        GenericStage.RENDERING,
+        GenericStage.COVERING,
+        GenericStage.PUBLISHING,
+    }
+    if (
+        rerun
+        or source.name != "hackernews"
+        or not any(stage in requires_capture for stage in stages)
+        or GenericStage.CAPTURING not in source.stages
+    ):
+        return stages, set()
+    if GenericStage.CAPTURING in stages or machine.stage_completed_successfully(_to_hn_stage(GenericStage.CAPTURING)):
+        return stages, set()
+    return (GenericStage.CAPTURING, *stages), {GenericStage.CAPTURING}
+
+
+def _align_status_to_reused_stage(machine: JobStateMachine, target: GenericStage) -> None:
+    """Advance ledger status through reusable completed stages up to target."""
+    try:
+        current = GenericStage(machine.job.status)
+    except ValueError:
+        machine.transition(_to_hn_stage(target))
+        return
+
+    if current == target:
+        return
+    if current not in _HACKERNEWS_STAGE_ORDER or target not in _HACKERNEWS_STAGE_ORDER:
+        machine.transition(_to_hn_stage(target))
+        return
+
+    current_index = _HACKERNEWS_STAGE_ORDER.index(current)
+    target_index = _HACKERNEWS_STAGE_ORDER.index(target)
+    if target_index < current_index:
+        machine.transition(_to_hn_stage(target))
+        return
+
+    for stage_name in _HACKERNEWS_STAGE_ORDER[current_index + 1 : target_index + 1]:
+        if stage_name != target and not machine.stage_completed_successfully(_to_hn_stage(stage_name)):
+            raise RuntimeError(
+                f"Cannot reuse {target.value}: intermediate stage {stage_name.value} has not completed"
+            )
+        if machine.job.status != stage_name.value:
+            machine.transition(_to_hn_stage(stage_name))
+
+
+def _rewind_status_for_rerun(machine: JobStateMachine, target: GenericStage) -> None:
+    """Allow explicit reruns of earlier stages after a later-stage failure."""
+    try:
+        current = GenericStage(machine.job.status)
+    except ValueError:
+        return
+    if current not in _HACKERNEWS_STAGE_ORDER or target not in _HACKERNEWS_STAGE_ORDER:
+        return
+    current_index = _HACKERNEWS_STAGE_ORDER.index(current)
+    target_index = _HACKERNEWS_STAGE_ORDER.index(target)
+    if target_index >= current_index:
+        return
+
+    predecessor_index = target_index - 1
+    if predecessor_index < 0:
+        machine.job.status = "IDLE"
+    else:
+        machine.job.status = _HACKERNEWS_STAGE_ORDER[predecessor_index].value
+    machine._save()
+
+
+def _stage_is_after(status: str, stage_name: GenericStage) -> bool:
+    try:
+        current = GenericStage(status)
+    except ValueError:
+        return False
+    if current not in _HACKERNEWS_STAGE_ORDER or stage_name not in _HACKERNEWS_STAGE_ORDER:
+        return False
+    return _HACKERNEWS_STAGE_ORDER.index(current) > _HACKERNEWS_STAGE_ORDER.index(stage_name)
 
 
 def _validate_stage_artifacts(stage_name: GenericStage, receipt: object, required_artifacts: tuple[str, ...]) -> None:

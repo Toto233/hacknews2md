@@ -34,6 +34,10 @@ class FakeCaptureStage(FakeStage):
     stage_name = HnStage.CAPTURING
 
 
+class FakePlanStage(FakeStage):
+    stage_name = HnStage.PLANNING
+
+
 def test_run_release_invokes_source_stages_in_order(tmp_path) -> None:
     fake_stage = FakeStage()
     source = SourceDefinition(
@@ -87,6 +91,125 @@ def test_run_release_aligns_state_when_reusing_completed_stage(tmp_path) -> None
     fake_stage.run.assert_not_called()
 
 
+def test_run_release_aligns_through_completed_intermediate_stage(tmp_path) -> None:
+    fake_stage = FakePlanStage()
+    source = SourceDefinition(
+        name="hackernews",
+        period_kind="date",
+        stages={GenericStage.PLANNING: lambda: fake_stage},
+        audit_required_stages=(),
+    )
+    ctx = PublisherContext.create(tmp_path, source="hackernews", period="20260627")
+    machine, _ = JobStateMachine.load_or_create(ctx.job_dir, ctx.period)
+    machine.transition(HnStage.FETCHING)
+    machine.transition(HnStage.COLLECTING)
+    machine.job.stages[HnStage.CAPTURING.value] = {"success": True}
+    machine.job.stages[HnStage.PLANNING.value] = {"success": True}
+    machine._save()
+
+    result = run_release(ctx, source, stages=[GenericStage.PLANNING])
+
+    assert result["completed_stages"] == []
+    reloaded, _ = JobStateMachine.load_or_create(ctx.job_dir, ctx.period)
+    assert reloaded.job.status == HnStage.PLANNING.value
+    fake_stage.run.assert_not_called()
+
+
+def test_run_release_inserts_missing_capture_before_direct_hackernews_publish(tmp_path) -> None:
+    capture_stage = FakeCaptureStage()
+    publish_stage = FakePublishStage()
+    source = SourceDefinition(
+        name="hackernews",
+        period_kind="date",
+        stages={
+            GenericStage.CAPTURING: lambda: capture_stage,
+            GenericStage.PUBLISHING: lambda: publish_stage,
+        },
+        audit_required_stages=(),
+    )
+    ctx = PublisherContext.create(tmp_path, source="hackernews", period="20260627")
+    machine, _ = JobStateMachine.load_or_create(ctx.job_dir, ctx.period)
+    machine.transition(HnStage.FETCHING)
+    machine.transition(HnStage.COLLECTING)
+    machine._save()
+
+    result = run_release(ctx, source, stages=[GenericStage.PUBLISHING])
+
+    assert result["completed_stages"] == ["CAPTURING", "PUBLISHING"]
+    capture_stage.run.assert_called_once()
+    publish_stage.run.assert_called_once()
+
+
+def test_run_release_inserts_missing_capture_before_direct_hackernews_plan(tmp_path) -> None:
+    capture_stage = FakeCaptureStage()
+    plan_stage = FakePlanStage()
+    source = SourceDefinition(
+        name="hackernews",
+        period_kind="date",
+        stages={
+            GenericStage.CAPTURING: lambda: capture_stage,
+            GenericStage.PLANNING: lambda: plan_stage,
+        },
+        audit_required_stages=(),
+    )
+    ctx = PublisherContext.create(tmp_path, source="hackernews", period="20260627")
+    machine, _ = JobStateMachine.load_or_create(ctx.job_dir, ctx.period)
+    machine.transition(HnStage.FETCHING)
+    machine.transition(HnStage.COLLECTING)
+    machine._save()
+
+    result = run_release(ctx, source, stages=[GenericStage.PLANNING])
+
+    assert result["completed_stages"] == ["CAPTURING", "PLANNING"]
+    capture_stage.run.assert_called_once()
+    plan_stage.run.assert_called_once()
+
+
+def test_run_release_inserted_capture_can_recover_from_later_status(tmp_path) -> None:
+    capture_stage = FakeCaptureStage()
+    publish_stage = FakePublishStage()
+    source = SourceDefinition(
+        name="hackernews",
+        period_kind="date",
+        stages={
+            GenericStage.CAPTURING: lambda: capture_stage,
+            GenericStage.PUBLISHING: lambda: publish_stage,
+        },
+        audit_required_stages=(),
+    )
+    ctx = PublisherContext.create(tmp_path, source="hackernews", period="20260627")
+    machine, _ = JobStateMachine.load_or_create(ctx.job_dir, ctx.period)
+    machine.job.status = HnStage.COVERING.value
+    machine.job.stages[HnStage.COLLECTING.value] = {"success": True}
+    machine._save()
+
+    result = run_release(ctx, source, stages=[GenericStage.PUBLISHING])
+
+    assert result["completed_stages"] == ["CAPTURING", "PUBLISHING"]
+    capture_stage.run.assert_called_once()
+    publish_stage.run.assert_called_once()
+
+
+def test_run_release_rerun_can_recover_earlier_stage_after_publish_failure(tmp_path) -> None:
+    fake_stage = FakeCaptureStage()
+    source = SourceDefinition(
+        name="hackernews",
+        period_kind="date",
+        stages={GenericStage.CAPTURING: lambda: fake_stage},
+    )
+    ctx = PublisherContext.create(tmp_path, source="hackernews", period="20260627")
+    machine, _ = JobStateMachine.load_or_create(ctx.job_dir, ctx.period)
+    machine.job.status = HnStage.PUBLISHING.value
+    machine.job.stages[HnStage.COLLECTING.value] = {"success": True}
+    machine.job.stages[HnStage.PUBLISHING.value] = {"success": False}
+    machine._save()
+
+    result = run_release(ctx, source, stages=[GenericStage.CAPTURING], rerun=True)
+
+    assert result["completed_stages"] == ["CAPTURING"]
+    fake_stage.run.assert_called_once()
+
+
 def test_run_release_rejects_stage_missing_required_artifact(tmp_path) -> None:
     fake_stage = FakeStage()
     fake_stage.run.return_value.output_summary = {}
@@ -131,6 +254,29 @@ def test_run_release_can_rerun_publishing_from_done_without_prior_stages(tmp_pat
     reloaded, _ = JobStateMachine.load_or_create(ctx.job_dir, ctx.period)
     assert reloaded.job.status == HnStage.DONE.value
     fake_stage.run.assert_called_once()
+
+
+def test_run_release_passes_publish_targets_to_publish_stage(tmp_path) -> None:
+    fake_stage = FakePublishStage()
+    source = SourceDefinition(
+        name="hackernews",
+        period_kind="date",
+        stages={GenericStage.PUBLISHING: lambda: fake_stage},
+        audit_required_stages=(),
+    )
+    ctx = PublisherContext.create(tmp_path, source="hackernews", period="20260627")
+    machine, _ = JobStateMachine.load_or_create(ctx.job_dir, ctx.period)
+    machine.job.status = HnStage.PUBLISHING.value
+    machine._save()
+
+    run_release(ctx, source, stages=[GenericStage.PUBLISHING], targets=("wechat", "astro"))
+
+    assert fake_stage.run.call_args.kwargs["targets"] == ("wechat", "astro")
+    reloaded, _ = JobStateMachine.load_or_create(ctx.job_dir, ctx.period)
+    assert reloaded.job.publish_intent == {
+        "requested_targets": ["wechat", "astro"],
+        "completed_targets": [],
+    }
 
 
 def test_run_release_passes_force_retry_on_rerun(tmp_path) -> None:

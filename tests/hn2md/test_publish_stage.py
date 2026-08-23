@@ -3,6 +3,7 @@ import importlib
 import sqlite3
 import sys
 import textwrap
+from subprocess import CompletedProcess
 from unittest.mock import call, patch
 
 import pytest
@@ -169,6 +170,86 @@ def test_publish_reports_unsupported_local_image_formats(tmp_path) -> None:
             "suffix": ".gif",
         }
     ]
+
+
+def test_publish_converts_valid_gif_images_before_wechat_upload(tmp_path) -> None:
+    image = tmp_path / "animation.gif"
+    Image.new("RGB", (32, 32), "red").save(image, format="GIF")
+    md = tmp_path / "article.md"
+    md.write_text(f"# safe\n\n![gif]({image})\n", encoding="utf-8")
+    machine = type("M", (), {"job": type("J", (), {"stages": {}})()})()
+
+    with (
+        patch("src.utils.db_utils.get_illegal_keywords", return_value=[]),
+        patch("hn2md.stages.publish.load_project_function", return_value=lambda *_, **__: "media-1"),
+    ):
+        result = PublishStage().execute(object(), machine, markdown_file=str(md))
+
+    assert result["wechat_media_id"] == "media-1"
+    assert result["skipped_images"] == []
+    assert result["converted_images"] == [
+        {
+            "original_path": str(image),
+            "converted_path": str(image.with_name("animation_wechat.png")),
+            "original_suffix": ".gif",
+            "converted_suffix": ".png",
+        }
+    ]
+    assert image.with_name("animation_wechat.png").exists()
+    assert str(image.with_name("animation_wechat.png")) in md.read_text(encoding="utf-8")
+
+
+def test_publish_syncs_astro_and_records_pushed_commit(tmp_path) -> None:
+    astro_repo = tmp_path / "astro"
+    astro_file = astro_repo / "src" / "data" / "blog" / "article.md"
+    astro_file.parent.mkdir(parents=True)
+    astro_file.write_text("# Astro", encoding="utf-8")
+    md = tmp_path / "article.md"
+    md.write_text("# safe", encoding="utf-8")
+    ctx = RuntimeContext(
+        project_root=tmp_path,
+        db_path=tmp_path / "data" / "hacknews.db",
+        output_dir=tmp_path / "output",
+        job_dir=tmp_path / "output" / "jobs",
+        markdown_dir=tmp_path / "output" / "markdown",
+        images_dir=tmp_path / "output" / "images",
+        codex_dir=tmp_path / "output" / "codex",
+        config_path=tmp_path / "config" / "config.json",
+    )
+    machine = type(
+        "M",
+        (),
+        {"job": type("J", (), {"date": "20260627", "stages": {Stage.RENDERING.value: {"output_summary": {"astro_file": str(astro_file)}}}})()},
+    )()
+    settings = type("Settings", (), {"astro_enabled": True, "astro_repo": astro_repo})()
+    commands: list[list[str]] = []
+
+    def _git(command: list[str], **_kwargs) -> CompletedProcess[str]:
+        commands.append(command)
+        if command[-3:] == ["diff", "--cached", "--quiet"]:
+            return CompletedProcess(command, 1, "", "")
+        if command[-2:] == ["rev-parse", "HEAD"]:
+            return CompletedProcess(command, 0, "abc123\n", "")
+        return CompletedProcess(command, 0, "", "")
+
+    with (
+        patch("src.utils.db_utils.get_illegal_keywords", return_value=[]),
+        patch("hn2md.stages.publish.load_deployment_settings", return_value=settings),
+        patch("hn2md.stages.publish.subprocess.run", side_effect=_git),
+    ):
+        result = PublishStage().execute(ctx, machine, markdown_file=str(md), targets=("astro",))
+
+    assert result["wechat_media_id"] is None
+    assert result["requested_targets"] == ["astro"]
+    assert result["completed_targets"] == ["astro"]
+    assert result["astro"] == {
+        "status": "pushed",
+        "repo": str(astro_repo),
+        "file": str(astro_file),
+        "commit": "abc123",
+    }
+    assert commands[-2][-1] == "HEAD"
+    assert commands[-1][-1] == "push"
 
 
 def test_publish_keyword_gate_warns_with_full_sentence_without_blocking(tmp_path) -> None:

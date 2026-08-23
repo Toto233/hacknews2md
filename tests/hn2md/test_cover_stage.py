@@ -2,12 +2,14 @@ from pathlib import Path
 import json
 import sys
 import textwrap
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 
+import pytest
 from PIL import Image
 
 from hn2md.constants import Stage
 from hn2md.context import RuntimeContext
+from hn2md.stages.base import NonRetryableStageError
 from hn2md.stages.cover import CoverStage
 
 
@@ -18,10 +20,48 @@ def _machine(md: Path):
 def test_cover_ai_calls_reusable_api(tmp_path) -> None:
     md = tmp_path / "a.md"
     ctx = object()
-    with patch("hn2md.stages.cover.load_project_function", return_value=lambda *_, **__: "ai.png") as load:
+    with (
+        patch("hn2md.stages.cover._preflight_ai_cover_provider"),
+        patch("hn2md.stages.cover.load_project_function", return_value=lambda *_, **__: "ai.png") as load,
+    ):
         result = CoverStage().execute(ctx, _machine(md), mode="ai", target_word="短标题")
     load.assert_called_once_with(ctx, "scripts.generate_wechat_cover_ai", "generate_cover_ai")
     assert result["cover_image"] == "ai.png"
+
+
+def test_cover_ai_fails_fast_when_provider_auth_is_unavailable(tmp_path, monkeypatch) -> None:
+    md = tmp_path / "a.md"
+    project = tmp_path / "project"
+    wrapper = project / "tools" / "gpt-image-2-skill" / "scripts" / "gpt_image_2_skill.cjs"
+    wrapper.parent.mkdir(parents=True)
+    wrapper.write_text("// wrapper", encoding="utf-8")
+    config = project / "config" / "deployment.local.json"
+    config.parent.mkdir(parents=True)
+    config.write_text(
+        json.dumps({"image_generator": {"wrapper_path": str(wrapper)}}),
+        encoding="utf-8",
+    )
+    ctx = RuntimeContext(
+        project_root=project,
+        db_path=project / "data" / "hacknews.db",
+        output_dir=project / "output",
+        job_dir=project / "output" / "jobs",
+        markdown_dir=project / "output" / "markdown",
+        images_dir=project / "output" / "images",
+        codex_dir=project / "output" / "codex",
+        config_path=project / "config" / "config.json",
+    )
+    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+    monkeypatch.setenv("USERPROFILE", str(tmp_path / "empty-home"))
+
+    with (
+        patch("pathlib.Path.home", return_value=tmp_path / "empty-home"),
+        patch("hn2md.stages.cover.load_project_function") as load,
+        pytest.raises(NonRetryableStageError, match="AI cover provider credentials are unavailable"),
+    ):
+        CoverStage().execute(ctx, _machine(md), mode="ai", target_word="短标题")
+
+    load.assert_not_called()
 
 
 def test_cover_defaults_to_deterministic_fallback(tmp_path) -> None:
@@ -37,9 +77,17 @@ def test_cover_defaults_to_deterministic_fallback(tmp_path) -> None:
 def test_cover_pillow_calls_reusable_api(tmp_path) -> None:
     md = tmp_path / "a.md"
     ctx = object()
-    with patch("hn2md.stages.cover.load_project_function", return_value=lambda *_: "pillow.png") as load:
-        result = CoverStage().execute(ctx, _machine(md), markdown_file=str(md), mode="pillow")
+    generator = Mock(return_value="pillow.png")
+    with patch("hn2md.stages.cover.load_project_function", return_value=generator) as load:
+        result = CoverStage().execute(
+            ctx,
+            _machine(md),
+            markdown_file=str(md),
+            mode="pillow",
+            display_title="短标题",
+        )
     load.assert_called_once_with(ctx, "scripts.generate_wechat_cover", "generate_cover")
+    generator.assert_called_once_with(str(md), title_override="短标题")
     assert result["cover_image"] == "pillow.png"
 
 
@@ -66,6 +114,26 @@ def test_cover_external_registers_existing_image(tmp_path) -> None:
     preview = Path(result["share_preview_image"])
     assert preview.exists()
     assert Image.open(preview).size == (900, 900)
+
+
+def test_cover_image2_registers_a_pre_generated_image_with_provenance(tmp_path) -> None:
+    md = tmp_path / "a.md"
+    cover = tmp_path / "cover.png"
+    Image.new("RGB", (2100, 900), "white").save(cover)
+
+    result = CoverStage().execute(
+        object(),
+        _machine(md),
+        markdown_file=str(md),
+        mode="image2",
+        cover_image=str(cover),
+        display_title="事故时间线",
+    )
+
+    assert result["cover_image"] == str(cover)
+    assert result["mode"] == "image2"
+    assert result["generator"] == "image2"
+    assert result["display_title"] == "事故时间线"
 
 
 def test_cover_external_requires_existing_image(tmp_path) -> None:

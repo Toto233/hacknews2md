@@ -152,12 +152,16 @@ def draw_gradient(draw: ImageDraw.ImageDraw, bg_from: str, bg_to: str) -> None:
         draw.line([(0, y), (WIDTH, y)], fill=color)
 
 
-def generate_cover(markdown_path: str, output: Optional[str] = None) -> str:
+def generate_cover(
+    markdown_path: str,
+    output: Optional[str] = None,
+    title_override: Optional[str] = None,
+) -> str:
     md_path = Path(markdown_path)
     markdown = md_path.read_text(encoding="utf-8")
     frontmatter, body = parse_frontmatter_and_body(markdown)
 
-    title = extract_first_title(body, frontmatter.get("title", "HackNews 摘要"))
+    title = title_override or extract_first_title(body, frontmatter.get("title", "HackNews 摘要"))
     date_text = extract_date(frontmatter, md_path)
     tags = [tag for tag in frontmatter.get("tags", "").split(",") if tag][:4]
     digest = frontmatter.get("digest", "")
