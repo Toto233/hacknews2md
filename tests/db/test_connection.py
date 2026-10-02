@@ -10,6 +10,24 @@ from pathlib import Path
 from src.db.connection import Database, get_db, backup_db, check_integrity
 
 
+def test_read_only_connection_rejects_writes_and_reads_during_writer(temp_db):
+    with get_db(temp_db.db_path) as writer:
+        writer.execute("BEGIN IMMEDIATE")
+        writer.execute("UPDATE test_table SET name = ?", ("uncommitted",))
+        with get_db(temp_db.db_path, read_only=True) as reader:
+            assert reader.execute("SELECT name FROM test_table").fetchone()[0] == "test_name"
+            with pytest.raises(sqlite3.OperationalError, match="readonly"):
+                reader.execute("INSERT INTO test_table (name) VALUES (?)", ("forbidden",))
+
+
+def test_read_only_missing_database_does_not_create_directories(tmp_path):
+    missing = tmp_path / "absent" / "missing.db"
+    with pytest.raises(FileNotFoundError):
+        with get_db(str(missing), read_only=True):
+            pass
+    assert not missing.parent.exists()
+
+
 @pytest.fixture
 def temp_db_path(tmp_path):
     """Create a temporary database path."""

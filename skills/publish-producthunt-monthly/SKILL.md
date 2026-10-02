@@ -1,29 +1,43 @@
 ---
 name: publish-producthunt-monthly
-description: Generate or publish Product Hunt monthly digests with Top 10 analysis; also supports explicitly requested basic leaderboards.
+description: Generate, preview or publish audited Product Hunt monthly digests; migrate or recover prior monthly artifacts and draft receipts.
 ---
 
 # Product Hunt monthly
 
-Read [the publishing execution contract](../../AGENTS.md). 默认只发布 WeChat drafts, never subscriber mass-send or Astro. “生成/预览” ends with verified local artifacts; “发送到微信草稿” authorizes upload after checks without another routine confirmation.
+Read [the publishing execution contract](../../AGENTS.md) and [PH operations](../../docs/PRODUCTHUNT.md). Run `scripts/ph2md.ps1` from this repository; cross-platform use `python -m ph2md.cli`. PH owns monthly data and receipts under `data/producthunt/` and `output/producthunt/` and calls shared WeChat directly. “生成/预览” ends with verified local artifacts; “发送到微信草稿” authorizes upload after checks without routine confirmation. Subscriber mass-send and Astro are separate targets.
 
 Use the year/month already specified in the request or current article. With no period context, use the latest completed calendar month and state the assumption; do not ask routinely. Resume existing artifacts before fetching or uploading again. An uncertain upload requires checking its outcome, not an immediate duplicate draft.
 
-## Select the implemented workflow
+## Prepare the editorial plan
 
-The default monthly article includes Top 10 images, distinct observation/risk text, full list, and original monthly URL. The current repository renderer does **not** yet implement the manual insight plan or its strict content gate. For this default editorial article, read [editorial compatibility workflow](references/editorial-compatibility.md) and use it end to end. Do not claim that a basic renderer ran the editorial audit.
+The monthly article includes Top 10 images, distinct observation/risk text, full list, and original monthly URL. Inspect existing status first and reuse saved work. To copy prior external editorial data use `migrate-legacy --from-root <old workspace>` before initializing target data or fetching; the operations guide owns migration conditions. Preserve originals and known Media IDs.
 
-Use the following repository commands only when the user requests a basic leaderboard without editorial analysis, or for explicitly scoped source diagnostics. Run them from `D:/python/hacknews2md_re`. Keep `data/producthunt.db` separate from other sources and from the compatibility project's database.
+Fetch only for an empty month or a necessary/requested refresh. Back up existing data and artifacts before refresh. Check numbered ranks, Top 10 identities and launch URLs; one homepage can have distinct launches. Export does not overwrite existing editorial plans.
 
 ```powershell
-.\scripts\publisher.ps1 status producthunt --year <YYYY> --month <MM>
-.\scripts\publisher.ps1 fetch producthunt --year <YYYY> --month <MM>
-.\scripts\publisher.ps1 render producthunt --year <YYYY> --month <MM>
-.\scripts\publisher.ps1 cover producthunt --year <YYYY> --month <MM>
-.\scripts\publisher.ps1 publish producthunt --year <YYYY> --month <MM>
+.\scripts\ph2md.ps1 status --year YEAR --month MONTH
+.\scripts\ph2md.ps1 fetch --year YEAR --month MONTH --limit 25
+.\scripts\ph2md.ps1 export-plan --year YEAR --month MONTH
 ```
 
-For an authorized end-to-end **basic** release, `.\scripts\publisher.ps1 release producthunt --year <YYYY> --month <MM>` combines those stages. Do not use it for a preview-only request. Inspect outputs before upload; this renderer does not establish editorial completeness. If its existing deterministic cover does not meet an explicit ImageGen request, generate via the cover skill and pass the accepted artifact using supported publish options after inspecting command help.
+Complete `output/producthunt/codex/producthunt_plan_YYYYMM.json`, keeping each Top 10 rank, name and URL bound to the saved source. Write distinct `observation` and `risk` from the product's materials under the criteria below.
+
+## Audit, render and verify
+
+```powershell
+.\scripts\ph2md.ps1 audit --year YEAR --month MONTH
+.\scripts\ph2md.ps1 render --year YEAR --month MONTH
+.\scripts\ph2md.ps1 preview --year YEAR --month MONTH
+```
+
+Audit must pass with no findings. Missing items, identity mismatch, short fields, duplicates and banned fallback language require repair. Rendering rechecks the plan and backs up same-month Markdown, HTML and images. Inspect source fidelity, Top 10 image cards, complete list and source link. `--skip-logos` is for offline diagnostics; preview/publish require all ten product images bound by hashes to the render receipt.
+
+Use the rendered cover unless a new one is requested. For ImageGen, follow the [cover skill](../../.codex/skills/wechat-cover-imagegen/SKILL.md), inspect complete/square crops and pass the accepted file with `--cover-image` to both preview and upload. Plan/source/Markdown/product-image changes invalidate the render fingerprint: rerender and inspect before preview or publish.
+
+Preview checks actual Markdown conversion, images and cover without WeChat calls. For an authorized draft upload run `.\scripts\ph2md.ps1 publish --year YEAR --month MONTH`. It uses author `PH月榜`, strict image upload and remote verification. Credentials stay in ignored config/environment; use the configured account. An unresolved destination follows the execution contract.
+
+Keep one owner for monthly database/receipt writes and publishing. Existing confirmed IDs are reused. `attempting`/`uncertain` results require receipt and remote inspection; a known ID with incomplete verification is `PUBLISH_UNVERIFIED`, not completed publication. Preserve IDs and old drafts during recovery.
 
 ## Editorial requirements and done
 
@@ -31,7 +45,7 @@ For an authorized end-to-end **basic** release, `.\scripts\publisher.ps1 release
 - Distinguish a supported capability from an inference and an unanswered risk. Do not invent tests, prices, performance or user feedback from metadata.
 - Read all Top 10 entries together: remove reused reasoning and generic claims such as “排名靠前说明有明确需求”; varied wording alone does not make duplicated analysis specific.
 - Fix local content/format errors autonomously. Ask only for unresolved evidence or a material user choice after supported recovery; do not invent missing content or build a new pipeline during publishing.
-- Generation is complete when the article, cover, links and applicable audit/preview are verified. Publication additionally requires a WeChat Media ID. Report paths, period, receipt, and unresolved warnings accurately; do not report unrun tests or checks.
+- Generation is complete when article, Top 10 images, cover, links, audit and preview are verified. Publication additionally requires the confirmed Media ID and successful remote verification recorded in the monthly receipt/state. Report paths, period, receipt and unresolved warnings accurately; do not report unrun checks.
 - Record a concise post-run observation. Use the stable improvement policy in `docs/DECISIONS.md`: daily advice does not authorize code/skill changes. Run focused tests only when changing implementation, not every month for unchanged publishing code.
 
-Remove the compatibility branch only after the repository route demonstrably preserves its editorial contract; changing commands alone is not feature parity.
+Legacy `publisher <command> producthunt` routes to this same implementation; old basic `release`/`cover` do not replace the editorial sequence. The external compatibility branch was superseded by the [2026-10-02 monorepo decision](../../docs/DECISIONS.md), preserving editorial quality, backup and duplicate-draft requirements.

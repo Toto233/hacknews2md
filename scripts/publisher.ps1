@@ -26,5 +26,5 @@ if (-not $python) {
     $python = "python"
 }
 
-& $python -m publisher.cli @Arguments
+& $python -m publisher.entrypoint @Arguments
 exit $LASTEXITCODE

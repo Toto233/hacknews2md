@@ -4,18 +4,29 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "hn2md"
-version = "0.1.0"
-description = "Unified HackNews-to-Markdown publishing CLI"
+dynamic = ["version"]
+description = "Hacker News and Product Hunt publishing applications with shared WeChat infrastructure"
 readme = "README.md"
 requires-python = ">=3.11"
 license = "MIT"
 dependencies = [
     "requests",
     "certifi",
-    "PySocks",
     "beautifulsoup4>=4.12.0",
-    "colorama",
     "Pillow",
+    "httpx",
+    "markdown>=3.4.0",
+    "tinycss2>=1.2.1",
+    "structlog",
+    "click>=8.1",
+    "tzdata; sys_platform == 'win32'",
+]
+
+[project.optional-dependencies]
+producthunt = []
+hackernews = [
+    "PySocks",
+    "colorama",
     "pillow-avif-plugin",
     "chardet<6",
     "brotli",
@@ -23,22 +34,15 @@ dependencies = [
     "twscrape",
     "lxml",
     "google-genai",
-    "httpx",
     "curl-cffi",
-    "markdown>=3.4.0",
-    "tinycss2>=1.2.1",
     "selenium",
-    "structlog",
     "crawl4ai",
     "scrapling",
     "playwright",
     "PyPDF2",
     "pycryptodome",
     "pyperclip",
-    "click>=8.1",
 ]
-
-[project.optional-dependencies]
 dev = [
     "pytest>=7.0",
     "pytest-cov>=4.0",
@@ -47,10 +51,14 @@ dev = [
 
 [project.scripts]
 hn2md = "hn2md.cli:main"
-publisher = "publisher.cli:main"
+publisher = "publisher.entrypoint:main"
+ph2md = "ph2md.cli:main"
 
 [tool.setuptools.packages.find]
-include = ["hn2md*", "publisher*", "src*"]
+include = ["hn2md*", "ph2md*", "publisher*", "publisher_shared*", "src*", "scripts*"]
+
+[tool.setuptools.dynamic]
+version = {attr = "publisher_shared.__version__"}
 
 [tool.setuptools.package-data]
 "*" = ["*.css"]

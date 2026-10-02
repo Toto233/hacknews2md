@@ -1,6 +1,6 @@
 # 发布运行手册
 
-本手册处理运行中断与恢复。Hacker News 日报的正常编辑顺序和门禁以 [发布技能](../skills/publish-hacknews-codex/SKILL.md)为准；Product Hunt 编辑月报以 [月报技能](../skills/publish-producthunt-monthly/SKILL.md)及其兼容流程为准。命令从本仓库根目录执行，先用 `./scripts/publisher.ps1 <command> --help` 核对当前参数。微信公众号目标是草稿，不是群发。
+本手册处理运行中断与恢复。Hacker News 日报的正常编辑顺序和门禁以 [发布技能](../skills/publish-hacknews-codex/SKILL.md)为准；Product Hunt 编辑月报以 [月报技能](../skills/publish-producthunt-monthly/SKILL.md)和 [操作指南](PRODUCTHUNT.md)为准。命令从本仓库根目录执行，先用 `./scripts/publisher.ps1 <command> --help` 或 `./scripts/ph2md.ps1 <command> --help` 核对当前参数。微信公众号目标是草稿，不是群发。
 
 ## 先看状态，再续跑
 
@@ -49,6 +49,6 @@ Astro 仓库不可用、已有预暂存改动或推送失败，不应阻断已�
 
 ## Product Hunt 月报
 
-`publisher producthunt` 是基础榜单路线，不具备兼容项目的 Top 10 编辑计划与严格审计。默认编辑月报在 `D:\python\producthunt-monthly` 中运行：`ph2md` 管月榜数据，`scripts.export_producthunt_plan` 与 `scripts.audit_producthunt_plan` 管逐条观察/风险，`scripts.render_producthunt_wechat` 生成文稿和图片，`scripts.publish_producthunt_editorial` 预检或创建微信草稿并回写 Media ID。重抓已填充月份前先保留数据；刷新会事务式替换，渲染会备份已有同月文章与图片。详细命令在月报项目 README。
+月报全部在本仓库 `ph2md` 内运行：`status → fetch → export-plan → audit → render → preview → publish`。`export-plan` 后由编辑者完成 Top 10 计划；裸自动发布不能代替这一步。旧 `publisher <command> producthunt` 入口转交同一流程，`release`、`cover` 等旧基础阶段会给出迁移提示。
 
-月报的抓榜与渲染可独立运行；微信发布目前仍调用本仓库的上传脚本与配置。它没有 Astro 目标，也不与日报共用数据库或回执。月报上传结果不明时，先查兼容项目 `output/receipts/publish_YYYYMM.json` 和远端草稿，新入口不会自动重传。
+默认数据库为 `data/producthunt/producthunt.db`；编辑计划、文稿、图片与回执在 `output/producthunt/`。刷新已有月份前保留数据；刷新事务式替换产品行，重渲染备份已有同月文章与图片。月报直接使用公共微信模块和本部署账号配置，没有 Astro 目标。上传结果不明时，查 `output/producthunt/receipts/publish_YYYYMM.json` 和远端草稿，先确认结果再恢复；已知 Media ID 的月份不会自动重传。旧独立项目的数据需要显式复制迁移，完整步骤见 [Product Hunt 指南](PRODUCTHUNT.md)。

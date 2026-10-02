@@ -2,17 +2,17 @@
 
 ## Project and routing
 
-`publisher/` owns source-driven orchestration; `hn2md/` implements the HackerNews stages/state; `src/` contains fetchers, handlers, LLM providers and integrations. New daily workflow behavior belongs in `publisher/`.
+One repository and one Python distribution own both sources. `publisher/` owns the HackerNews orchestration entry; `hn2md/` and `src/` implement its stages and integrations. `ph2md/` owns Product Hunt monthly data, editing, state and receipts. `publisher_shared/wechat/` owns shared Markdown conversion and WeChat transport. New daily HackerNews workflow behavior belongs in `publisher/`; Product Hunt workflow behavior belongs in `ph2md/`.
 
 Daily commands run from this repository through `./scripts/publisher.ps1 <command> <source>`, which selects the configured runtime. For HackerNews start with `.\scripts\publisher.ps1 status hackernews` and the maintained [publishing skill](skills/publish-hacknews-codex/SKILL.md). Codex publishing uses its manual-plan route; a bare automated `release` is not a substitute for that editorial work.
 
 Read task-specific guidance when it applies:
 
 - HackNews generation, continuation or publishing: [publish-hacknews-codex](skills/publish-hacknews-codex/SKILL.md).
-- Product Hunt monthly articles: [publish-producthunt-monthly](skills/publish-producthunt-monthly/SKILL.md), including its explicit editorial compatibility branch.
+- Product Hunt monthly articles or migration of prior monthly data: [publish-producthunt-monthly](skills/publish-producthunt-monthly/SKILL.md), using the repository's `scripts/ph2md.ps1` entry.
 - Cover generation or editing: [wechat-cover-imagegen](.codex/skills/wechat-cover-imagegen/SKILL.md).
 - Changes to publishing behavior, gates or skills: [docs/DECISIONS.md](docs/DECISIONS.md).
-- Architecture redesign: `docs/ARCHITECTURE_REDESIGN.md`. Operational troubleshooting: `docs/RUNBOOK.md`; verify historical commands against the current wrapper's help.
+- Module/package boundaries and installation: [docs/MONOREPO.md](docs/MONOREPO.md). Operational troubleshooting: [docs/RUNBOOK.md](docs/RUNBOOK.md) and [docs/PRODUCTHUNT.md](docs/PRODUCTHUNT.md); verify historical commands against the current wrapper's help. `docs/ARCHITECTURE_REDESIGN.md` is a historical design.
 
 ## Execution contract
 
@@ -39,6 +39,7 @@ A direct request to optimize authorizes the local instruction change now: consul
 - Credentials belong in ignored configuration or environment variables; keep secrets out of logs, prompts and commits. Sanitize generated content before publication.
 - Use parameterized SQL and the unified `src/db/connection.py` factory for SQLite, with WAL and busy_timeout. Coordinate concurrent connections and preserve the source/period single-writer lock.
 - Preserve unrelated user changes and generated artifacts. Use the canonical wrapper for publishing state changes; do not reactivate archived summarization scripts.
+- Keep source-specific audit, state and receipts in their business module. Shared WeChat code receives prepared articles and returns transport results; it must not import HackerNews/Product Hunt workflows. Preserve HN's existing runtime paths; Product Hunt uses `data/producthunt/` and `output/producthunt/`. Migrate old monthly data by explicit copy with originals and known Media IDs preserved.
 - Public functions have return annotations. Operational application logs use `structlog.get_logger()`.
 - `pyproject.toml` owns dependencies; keep `requirements.txt` synchronized and optional heavy packages in optional-dependency groups. No automatic package installation at runtime.
 - The app's external LLM provider configuration is separate from the Codex model. Preserve configured routing unless migration is requested; Gemini 2.5-series execution remains forbidden.

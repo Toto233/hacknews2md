@@ -22,7 +22,8 @@ import os
 import sqlite3
 from contextlib import contextmanager
 from datetime import datetime
-from typing import Optional
+from pathlib import Path
+from typing import Iterator, Optional
 
 logger = logging.getLogger(__name__)
 
@@ -70,15 +71,22 @@ class Database:
         if db_dir:
             os.makedirs(db_dir, exist_ok=True)
 
-    def get_connection(self) -> sqlite3.Connection:
+    def get_connection(self, *, read_only: bool = False) -> sqlite3.Connection:
         """Get a new connection with standard pragmas applied.
 
         Returns a sqlite3.Connection with WAL mode, busy_timeout,
         foreign keys, and other optimizations configured.
         """
-        conn = sqlite3.connect(self.db_path)
-        for pragma in _PRAGMAS:
-            conn.execute(pragma)
+        target = Path(self.db_path).resolve().as_uri() + "?mode=ro" if read_only else self.db_path
+        conn = sqlite3.connect(target, uri=read_only)
+        try:
+            for pragma in _PRAGMAS:
+                if read_only and pragma == "PRAGMA journal_mode=WAL":
+                    continue
+                conn.execute(pragma)
+        except Exception:
+            conn.close()
+            raise
         return conn
 
     def backup(self, dest_path: str | None = None, max_backups: int = 7) -> str:
@@ -201,7 +209,7 @@ def _get_global_db() -> Database:
 
 
 @contextmanager
-def get_db(db_path: str | None = None):
+def get_db(db_path: str | None = None, *, read_only: bool = False) -> Iterator[sqlite3.Connection]:
     """Context manager for database connections.
 
     Usage:
@@ -211,9 +219,12 @@ def get_db(db_path: str | None = None):
 
     Args:
         db_path: Optional custom database path. Uses default if None.
+        read_only: Open an existing database without allowing writes or changing journal mode.
     """
+    if read_only and not Path(db_path or _DEFAULT_DB_PATH).is_file():
+        raise FileNotFoundError(db_path or _DEFAULT_DB_PATH)
     db = Database(db_path) if db_path else _get_global_db()
-    conn = db.get_connection()
+    conn = db.get_connection(read_only=True) if read_only else db.get_connection()
     try:
         yield conn
         conn.commit()

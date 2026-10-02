@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import sqlite3
+import socket
 from contextlib import contextmanager
 from unittest.mock import Mock
 
@@ -12,6 +13,10 @@ from publisher.hn_front_recovery import fetch_browser_front_ids
 
 
 def test_browser_front_ids_preserve_order_and_existing_filters(tmp_path, monkeypatch) -> None:
+    monkeypatch.setattr(
+        socket, "getaddrinfo",
+        lambda *_args, **_kwargs: [(socket.AF_INET, socket.SOCK_STREAM, socket.IPPROTO_TCP, "", ("93.184.216.34", 443))],
+    )
     db_path = tmp_path / "news.db"
     with sqlite3.connect(db_path) as conn:
         conn.execute("CREATE TABLE news_history (id INTEGER PRIMARY KEY, news_url TEXT)")

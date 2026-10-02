@@ -1,3 +1,3 @@
 """Generic publishing framework for source-driven digest pipelines."""
 
-__version__ = "0.1.0"
+from publisher_shared import __version__

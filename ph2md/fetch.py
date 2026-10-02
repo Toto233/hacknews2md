@@ -1,13 +1,11 @@
 from __future__ import annotations
 
-from pathlib import Path
-from urllib.parse import urlparse
-
 import httpx
+from pathlib import Path
 
-from publisher.producthunt.extractor import parse_leaderboard_html
-from publisher.producthunt.models import FetchResult
-from src.security.url_validator import validate_url
+from ph2md.extractors.producthunt_page import parse_leaderboard_html
+from ph2md.models import FetchResult
+from ph2md.security import URLValidationError, validate_outbound_url
 
 PRODUCTHUNT_HOST = "www.producthunt.com"
 
@@ -29,19 +27,18 @@ def fetch_leaderboard(
 ) -> FetchResult:
     url = build_leaderboard_url(year, month)
     try:
-        validate_url(url)
-    except Exception as exc:
+        validate_outbound_url(url, allowed_hosts={PRODUCTHUNT_HOST})
+    except URLValidationError as exc:
         raise FetchError(str(exc)) from exc
-    if urlparse(url).hostname != PRODUCTHUNT_HOST:
-        raise FetchError(f"invalid Product Hunt host: {url}")
 
     try:
         with httpx.Client(
             timeout=20,
             follow_redirects=True,
             transport=transport,
+            event_hooks={"request": [lambda request: validate_outbound_url(str(request.url), allowed_hosts={PRODUCTHUNT_HOST})]},
             headers={
-                "User-Agent": "hn2md-producthunt/0.1 (+https://www.producthunt.com)",
+                "User-Agent": "ph2md/0.1 (+https://www.producthunt.com)",
                 "Accept": "text/html,application/xhtml+xml",
             },
         ) as client:
@@ -52,6 +49,8 @@ def fetch_leaderboard(
         raise FetchError(f"Product Hunt returned HTTP {status}") from exc
     except httpx.HTTPError as exc:
         raise FetchError(f"Product Hunt request failed: {exc}") from exc
+    except URLValidationError as exc:
+        raise FetchError(f"Unsafe Product Hunt redirect: {exc}") from exc
 
     products = parse_leaderboard_html(response.text, year=year, month=month, limit=limit)
     warnings: list[dict[str, str]] = []
@@ -64,7 +63,12 @@ def fetch_leaderboard(
     return FetchResult(year=year, month=month, url=url, products=products, warnings=warnings)
 
 
-def fetch_leaderboard_from_html_file(html_file: Path, year: int, month: int, limit: int = 25) -> FetchResult:
+def fetch_leaderboard_from_html_file(
+    html_file: Path,
+    year: int,
+    month: int,
+    limit: int = 25,
+) -> FetchResult:
     html = html_file.read_text(encoding="utf-8")
     products = parse_leaderboard_html(html, year=year, month=month, limit=limit)
     warnings: list[dict[str, str]] = []

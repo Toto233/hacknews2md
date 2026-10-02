@@ -126,8 +126,8 @@ def _run_release_locked(
             or {}
         )
         if stage_name == GenericStage.PUBLISHING:
-            # Publish target orchestration is currently a HackerNews contract.
-            # Product Hunt has its own publish stage and its WeChat-only target.
+            # Hacker News stages consume target orchestration here. Product Hunt
+            # runs in ph2md with its own monthly ledger and editorial gates.
             if source.name == "hackernews":
                 kwargs["targets"] = publish_targets
             if dry_run:

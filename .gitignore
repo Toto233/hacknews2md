@@ -43,6 +43,7 @@ ENV/
 /data/**/*.db-journal
 /data/**/*.db-wal
 /data/**/*.db-shm
+/data/producthunt/locks/
 *.db
 *.db-journal
 *.db-wal
@@ -56,6 +57,8 @@ docs/*
 !/docs/DECISIONS.md
 !/docs/RUNBOOK.md
 !/docs/INSTRUCTION_AUDIT_20260906.md
+!/docs/MONOREPO.md
+!/docs/PRODUCTHUNT.md
 /docs/superpowers/
 
 # ─── Codex / Skills ─────────────────────────────────────────────

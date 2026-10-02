@@ -26,6 +26,16 @@ This file records durable project decisions that should not be changed back and 
 
 ## Accepted decisions
 
+### 2026-10-02 — Consolidate HN and PH in one distribution with shared WeChat transport
+
+- Status: Accepted
+- Issue: N/A (explicit user request to implement the discussed monorepo design and update documentation)
+- Supersedes: 2026-09-06 — Unify authorization, recovery and completion in publishing instructions, only its requirement to use the external Product Hunt editorial compatibility branch; and 2026-09-30 — Make Product Hunt editorial releases source-bound and receipt-driven, only its external compatibility command/location. Editorial quality, ranking integrity, backup, uncertain-upload and duplicate-draft rules remain active.
+- Context: Product Hunt's complete editorial flow lived in a separate repository while its publisher used a hard-coded path to this repository. The integrated basic renderer lacked editorial parity. Maintaining another uploader would duplicate fixes; three independently versioned packages would add release work for a small project.
+- Decision: Keep one repository, one `hn2md` Python distribution and one version. Bring the complete editorial monthly flow into `ph2md`, retire the basic implementation, and route legacy `publisher <command> producthunt` calls to the same audited flow. Keep HN's current command/state/path contract. Extract shared WeChat conversion and transport into `publisher_shared/wechat`; each source owns its audit, database, state and receipts. Make HN-specific heavy dependencies optional with `hackernews`, and offer an explicit `producthunt` installation extra. Isolate new PH runtime data under `data/producthunt/` and `output/producthunt/`.
+- Failure mode of alternative: Copying uploaders requires fixes in two places. Separate repositories with fixed local paths fail on fresh deployment; forcing PH onto HN's daily state machine or basic renderer loses monthly audit semantics. Immediate multi-package releases create version coordination without a present independent-version requirement.
+- Consequences: Installing PH includes its public publishing capability and common dependencies without another repository. Existing independent-project data is migrated by explicit copy, preserving originals, backups and known Media IDs. Shared transport tests and business-level offline tests validate both callers; no live draft creation is required for this refactor. See [Monorepo architecture](MONOREPO.md) and [PH operations](PRODUCTHUNT.md).
+
 ### 2026-10-02 — Identify the HN fetch client honestly and stop on HTTP 419
 
 - Status: Accepted

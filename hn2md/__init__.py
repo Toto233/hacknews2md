@@ -1,3 +1,3 @@
 """hn2md: Unified HackNews-to-Markdown publishing CLI."""
 
-__version__ = "0.2.0"
+from publisher_shared import __version__

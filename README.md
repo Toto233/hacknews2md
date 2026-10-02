@@ -1,34 +1,37 @@
 # 新闻与月榜发布器
 
-本仓库负责 Hacker News 中文日报的采集、编辑门禁与发布，也提供 Product Hunt 月报的 Codex 编辑规范和微信上传组件。默认“发布到微信”是创建公众号**草稿**，不是群发。
+本仓库提供 Hacker News 中文日报和 Product Hunt 中文月报的采集、编辑门禁与发布。两个业务模块共享一份微信发布实现，使用一个 Python 安装包和统一版本。默认“发布到微信”是创建公众号**草稿**，不是群发。
 
 ## 项目边界
 
 | 位置 | 职责 |
 | --- | --- |
-| `publisher/` | 按来源编排阶段、状态和回执；日报从这里进入。 |
-| `hn2md/`、`src/` | Hacker News 阶段、抓取、数据库和微信集成。 |
+| `publisher/` | 日报编排入口；Product Hunt 命令转交给 `ph2md`。 |
+| `hn2md/`、`src/` | Hacker News 阶段、抓取、数据库和来源集成。 |
+| `ph2md/` | 月榜抓取、Top 10 编辑审计、渲染、月度状态与发布回执。 |
+| `publisher_shared/wechat/` | 公共 Markdown 转换、图片上传、公众号草稿创建与校验。 |
 | `skills/publish-hacknews-codex/` | 日报的 Codex 编辑与恢复流程。 |
-| `skills/publish-producthunt-monthly/` | 月报的编辑标准，指向独立的 `producthunt-monthly` 兼容项目。 |
-| `D:\python\producthunt-monthly` | 月榜抓取、数据、Top 10 计划、审计和渲染；微信发布目前调用本仓库的上传脚本与配置。 |
+| `skills/publish-producthunt-monthly/` | 本仓库月报的编辑与发布流程。 |
 
-Astro 博客是独立仓库。Hacker News 完整发布会尝试同步 Astro；Product Hunt 月报默认仅创建微信草稿。两个来源的数据库和发布回执不混用。
+Astro 博客是独立仓库。Hacker News 完整发布会尝试同步 Astro；Product Hunt 月报默认仅创建微信草稿。两个来源的数据库和发布回执不混用。组织方式与依赖边界见 [Monorepo 架构](docs/MONOREPO.md)。
 
 ## 安装与配置
 
-需要 Windows PowerShell、Python 3.11+ 和 Codex。SQLite 由 Python 使用，不要求单独安装 `sqlite3` 命令行工具。
+需要 Python 3.11+；Windows 示例使用 PowerShell，Codex 用于人工计划和封面工作流。SQLite 由 Python 使用，不要求单独安装 `sqlite3` 命令行工具。
 
 ```powershell
 python -m venv .venv
-.\.venv\Scripts\python.exe -m pip install -e .
+.\.venv\Scripts\python.exe -m pip install -e ".[hackernews,producthunt]"
 Copy-Item .\config\config.json.example .\config\config.json
 Copy-Item .\config\deployment.example.json .\config\deployment.local.json
 powershell -ExecutionPolicy Bypass -File .\install.ps1
 ```
 
-`install.ps1` 安装本仓库的 Hacker News skill。把微信公众号 AppID/AppSecret 放在忽略的 `config/config.json`，也可使用 `WECHAT_APPID`、`WECHAT_APPSEC`；本机 Astro 路径等放在 `config/deployment.local.json`。不要提交凭据、`data/` 或 `output/`。
+仅使用 Product Hunt 可将安装参数改为 `".[producthunt]"`；仅使用 Hacker News 用 `".[hackernews]"`。只下载这一个仓库即可，公共发布模块会一并安装。`requirements.txt` 保留完整依赖供旧安装方式使用。依赖详情以 `pyproject.toml` 为准。
 
-运行命令优先使用 `scripts/publisher.ps1`，它会选择已配置的 Python 环境。`hn2md` 是内部兼容 CLI；新的日报流程以 `publisher` 为准。
+`install.ps1` 安装本仓库的 Hacker News skill，是 Codex 工作流的可选步骤。把微信公众号 AppID/AppSecret 放在忽略的 `config/config.json`，也可使用 `WECHAT_APPID`、`WECHAT_APPSEC`；本机 Astro 路径等放在 `config/deployment.local.json`。PH 使用相同的本部署配置，无需部署另一个项目。不要提交凭据、`data/` 或 `output/`。
+
+日报优先使用 `scripts/publisher.ps1`，月报优先使用 `scripts/ph2md.ps1`，包装器选择已配置的 Python 环境。安装后也可使用 `publisher`、`ph2md` 命令；跨平台月报入口是 `python -m ph2md.cli`。`hn2md` 是内部兼容 CLI；新的日报流程以 `publisher` 为准。
 
 ## Hacker News 日报
 
@@ -53,17 +56,27 @@ python .\scripts\publish_today_wechat.py --no-pause
 
 ## Product Hunt 月报
 
-默认月报要求 Top 10 的逐条观察、风险和图片，以及完整榜单和原月榜链接。当前这条编辑流程在独立的 `producthunt-monthly` 项目中实现；本仓库的 `publisher producthunt` 是基础榜单路线，**不等同于已审计的编辑月报**。入口和审核边界见 [月报技能](skills/publish-producthunt-monthly/SKILL.md)。
+月报流程已纳入本仓库 `ph2md/`，要求 Top 10 的逐条观察、风险和图片，以及完整榜单和原月榜链接。使用 `scripts/ph2md.ps1` 运行完整编辑流程，旧基础榜单实现已由这条流程替代。详细步骤、迁移及恢复见 [Product Hunt 指南](docs/PRODUCTHUNT.md)，编辑标准见 [月报技能](skills/publish-producthunt-monthly/SKILL.md)。
 
-在月报项目中，先抓榜、导出并补完 Top 10 计划，运行严格审计和渲染；使用以下命令做本地预检或创建草稿：
+以下以最近一个完整自然月 2026 年 9 月为例，已有该月数据时先复用，再按需要抓取：
 
 ```powershell
-python -m scripts.publish_producthunt_editorial --year YEAR --month MONTH --cover-image "<已验收封面>" --preview
-python -m scripts.publish_producthunt_editorial --year YEAR --month MONTH --cover-image "<已验收封面>"
-python -m ph2md.cli status --year YEAR --month MONTH
+.\scripts\ph2md.ps1 status --year 2026 --month 9
+.\scripts\ph2md.ps1 fetch --year 2026 --month 9 --limit 25
+.\scripts\ph2md.ps1 export-plan --year 2026 --month 9
 ```
 
-上传命令会记录 Media ID 和月报状态；已确认成功或结果不明的上传不会自动重复。月榜数据和渲染文件仍在月报项目内，微信上传脚本及配置目前在本仓库，因此月报的**生成可独立运行，微信发布尚不能单仓库独立运行**。详细命令以月报项目的 README/运行手册为准。
+补完 `output/producthunt/codex/producthunt_plan_202609.json` 的产品观察与风险后：
+
+```powershell
+.\scripts\ph2md.ps1 audit --year 2026 --month 9
+.\scripts\ph2md.ps1 render --year 2026 --month 9
+.\scripts\ph2md.ps1 preview --year 2026 --month 9
+# 需要创建微信草稿时执行
+.\scripts\ph2md.ps1 publish --year 2026 --month 9
+```
+
+预检不调用微信 API。上传会记录 Media ID 和月报状态，已确认成功或结果不明的上传不会自动重复。PH 数据库为 `data/producthunt/producthunt.db`，产物和回执在 `output/producthunt/`；无需另行安装 HN 专用依赖。旧独立项目的数据先按指南显式迁移，保留原件和既有草稿 Media ID。
 
 ## 微信预检与验证
 

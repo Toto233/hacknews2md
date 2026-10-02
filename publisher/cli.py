@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from datetime import datetime
 from pathlib import Path
+from typing import Any
 import json as json_mod
 import re
 import sqlite3
@@ -27,7 +28,28 @@ from src.utils.db_utils import init_database
 from src.utils.scraper_failures import extract_domain
 
 
-@click.group()
+class PublisherGroup(click.Group):
+    """Keep direct Python imports compatible with the lazy console router."""
+
+    def main(self, args: list[str] | None = None, **kwargs: Any) -> Any:
+        from publisher.entrypoint import producthunt_arguments
+        import sys
+
+        try:
+            ph_arguments = producthunt_arguments(sys.argv[1:] if args is None else args)
+        except click.ClickException as exc:
+            if kwargs.get("standalone_mode", True):
+                exc.show()
+                raise SystemExit(exc.exit_code) from exc
+            raise
+        if ph_arguments is not None:
+            from ph2md.cli import main as ph_main
+
+            return ph_main.main(args=ph_arguments, **kwargs)
+        return super().main(args=args, **kwargs)
+
+
+@click.group(cls=PublisherGroup)
 def main() -> None:
     """Generic source-driven publishing CLI."""
     configure_utf8_stdio()
@@ -39,7 +61,10 @@ def _load_source_context(
     year: int | None = None,
     month: int | None = None,
 ) -> tuple[SourceDefinition, PublisherContext]:
-    source = get_source(source_name)
+    try:
+        source = get_source(source_name)
+    except KeyError as exc:
+        raise click.ClickException(str(exc)) from exc
     if not source.enabled:
         raise click.ClickException(f"source is not enabled yet: {source.name}")
     contract_errors = validate_source_definition(source)

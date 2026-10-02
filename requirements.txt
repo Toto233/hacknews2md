@@ -1,3 +1,5 @@
+# Legacy full-feature installation. For PH only use pip install '.[producthunt]'.
+# Keep this list synchronized with base + hackernews + producthunt in pyproject.toml.
 requests
 certifi
 PySocks
@@ -23,3 +25,5 @@ playwright
 PyPDF2
 pycryptodome
 pyperclip
+click>=8.1
+tzdata; sys_platform == 'win32'

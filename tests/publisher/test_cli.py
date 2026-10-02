@@ -253,24 +253,20 @@ def test_hackernews_fetch_does_not_pass_producthunt_options(tmp_path, monkeypatc
     assert kwargs.get("stage_kwargs") in (None, {})
 
 
-def test_producthunt_fetch_uses_month_period_and_producthunt_database(tmp_path, monkeypatch) -> None:
+def test_producthunt_status_routes_to_isolated_monthly_application(tmp_path, monkeypatch) -> None:
     monkeypatch.chdir(tmp_path)
 
     with patch("publisher.cli.run_release", return_value={"completed_stages": ["FETCHING"]}) as run:
-        result = CliRunner().invoke(
-            main,
-            ["fetch", "producthunt", "--year", "2026", "--month", "6"],
-        )
+        result = CliRunner().invoke(main, ["status", "producthunt", "--year", "2026", "--month", "6"])
 
     assert result.exit_code == 0, result.output
-    ctx = run.call_args.args[0]
-    _, kwargs = run.call_args
-    assert ctx.period == "202606"
-    assert ctx.db_path == tmp_path / "data" / "producthunt.db"
-    assert [stage.value for stage in kwargs["stages"]] == ["FETCHING"]
+    run.assert_not_called()
+    assert "NOT_STARTED" in result.output
+    assert not (tmp_path / "data" / "hacknews.db").exists()
+    assert not (tmp_path / "output" / "jobs" / "publish_job_202606.json").exists()
 
 
-def test_producthunt_release_from_render_uses_month_period(tmp_path, monkeypatch) -> None:
+def test_producthunt_basic_release_is_retired_instead_of_bypassing_editorial_audit(tmp_path, monkeypatch) -> None:
     monkeypatch.chdir(tmp_path)
 
     with patch("publisher.cli.run_release", return_value={"completed_stages": ["RENDERING"]}) as run:
@@ -289,13 +285,10 @@ def test_producthunt_release_from_render_uses_month_period(tmp_path, monkeypatch
             ],
         )
 
-    assert result.exit_code == 0, result.output
-    ctx = run.call_args.args[0]
-    _, kwargs = run.call_args
-    assert ctx.period == "202606"
-    assert ctx.db_path == tmp_path / "data" / "producthunt.db"
-    assert [stage.value for stage in kwargs["stages"]] == ["RENDERING", "COVERING", "PUBLISHING"]
-    assert kwargs["dry_run"] is True
+    assert result.exit_code != 0
+    assert "retired" in result.output
+    assert "audit" in result.output
+    run.assert_not_called()
 
 
 def test_plan_command_imports_manual_plan(tmp_path, monkeypatch) -> None:
@@ -985,7 +978,7 @@ def test_filter_domain_rejects_unsupported_source(tmp_path, monkeypatch) -> None
     result = CliRunner().invoke(main, ["filter-domain", "producthunt", "example.com"])
 
     assert result.exit_code != 0
-    assert "does not support domain filtering" in result.output
+    assert "No such command" in result.output
 
 
 def test_filter_domain_rejects_malformed_or_unsafe_domain_inputs(tmp_path, monkeypatch) -> None:

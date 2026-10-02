@@ -8,7 +8,7 @@ from urllib.parse import urljoin
 
 from bs4 import BeautifulSoup
 
-from publisher.producthunt.models import Product
+from ph2md.models import Product
 
 PRODUCTHUNT_BASE = "https://www.producthunt.com"
 
@@ -25,19 +25,27 @@ def _parse_next_data(html: str, year: int, month: int) -> list[Product]:
     script = soup.find("script", id="__NEXT_DATA__")
     if not script or not script.string:
         return []
+
     try:
         data = json.loads(script.string)
     except json.JSONDecodeError:
         return []
 
-    candidates = [item for item in _walk_dicts(data) if _looks_like_product(item)]
-    seen: set[str] = set()
+    candidates = [
+        item
+        for item in _walk_dicts(data)
+        if _looks_like_product(item)
+    ]
+    seen: set[tuple[int | None, str, str]] = set()
     products: list[Product] = []
     for item in candidates:
         product = _product_from_mapping(item, year, month, len(products) + 1)
-        if product.producthunt_url in seen:
+        # Several launches can share one parent product page. Collapse only
+        # repeated representations of the same launch in nested page data.
+        launch = (_to_int(item.get("rank")), product.name.casefold(), product.producthunt_url)
+        if launch in seen:
             continue
-        seen.add(product.producthunt_url)
+        seen.add(launch)
         products.append(product)
     return products
 
@@ -82,18 +90,30 @@ def _product_from_mapping(item: dict[str, Any], year: int, month: int, fallback_
 def _parse_html_fallback(html: str, year: int, month: int) -> list[Product]:
     soup = BeautifulSoup(html, "html.parser")
     cards = soup.select("section[data-container], article[data-test='post-item'], article, [data-test='post-item']")
+    # The monthly page interleaves unnumbered promoted cards with the numbered
+    # leaderboard. They share the same section markup, so counting every
+    # section shifts the ranks and can put a promoted product in the Top 10.
+    has_numbered_cards = any(
+        re.match(r"\s*\d+\.\s+", link.get_text(" ", strip=True))
+        for card in cards
+        if (link := card.find("a", href=re.compile(r"/products/")))
+    )
     products: list[Product] = []
-    for index, card in enumerate(cards, start=1):
+    for card in cards:
         link = card.find("a", href=re.compile(r"/products/"))
         if not link:
             continue
-        _display_rank, name = _rank_and_name(link.get_text(" ", strip=True), index)
+        link_text = link.get_text(" ", strip=True)
+        if has_numbered_cards and not re.match(r"\s*\d+\.\s+", link_text):
+            continue
+        rank = len(products) + 1
+        _display_rank, name = _rank_and_name(link_text, rank)
         text = card.get_text(" ", strip=True)
         products.append(
             Product(
                 year=year,
                 month=month,
-                rank=index,
+                rank=rank,
                 name=name,
                 slug=_slug_from_url(link.get("href", "")),
                 tagline=_extract_card_tagline(card, link),
@@ -155,9 +175,21 @@ def _to_int(value: Any) -> int | None:
     return None
 
 
+def _first_int(text: str) -> int | None:
+    match = re.search(r"\b(\d+)\b", text)
+    return int(match.group(1)) if match else None
+
+
 def _metric(text: str, label: str) -> int | None:
     match = re.search(rf"(\d[\d,]*)\s+{re.escape(label)}", text, flags=re.IGNORECASE)
     return int(match.group(1).replace(",", "")) if match else None
+
+
+def _first_paragraph(card: Any) -> str | None:
+    paragraph = card.find("p")
+    if not paragraph:
+        return None
+    return paragraph.get_text(" ", strip=True)
 
 
 def _rank_and_name(text: str, fallback_rank: int) -> tuple[int, str]:
@@ -175,8 +207,7 @@ def _extract_card_tagline(card: Any, product_link: Any) -> str | None:
             text = sibling.get_text(" ", strip=True)
             if text:
                 return text
-    paragraph = card.find("p")
-    return paragraph.get_text(" ", strip=True) if paragraph else None
+    return _first_paragraph(card)
 
 
 def _extract_card_categories(card: Any) -> list[str]:
@@ -204,7 +235,9 @@ def _extract_card_thumbnail(card: Any, name: str) -> str | None:
 
 def _extract_vote_count(card: Any) -> int | None:
     button = card.find(attrs={"data-test": "vote-button"})
-    return _to_int(button.get_text(" ", strip=True)) if button else None
+    if not button:
+        return None
+    return _to_int(button.get_text(" ", strip=True))
 
 
 def _extract_comment_count(card: Any) -> int | None:

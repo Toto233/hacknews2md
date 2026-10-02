@@ -1,21 +1,17 @@
 from __future__ import annotations
 
 from publisher.sources.base import SourceDefinition
-from publisher.sources.hackernews import HACKERNEWS_SOURCE
-from publisher.sources.producthunt import PRODUCTHUNT_SOURCE
-
-_SOURCES = {
-    HACKERNEWS_SOURCE.name: HACKERNEWS_SOURCE,
-    PRODUCTHUNT_SOURCE.name: PRODUCTHUNT_SOURCE,
-}
 
 
 def list_sources() -> list[str]:
-    return sorted(_SOURCES)
+    return ["hackernews"]
 
 
 def get_source(name: str) -> SourceDefinition:
-    try:
-        return _SOURCES[name]
-    except KeyError as exc:
-        raise KeyError(f"unknown publisher source: {name}") from exc
+    if name == "hackernews":
+        from publisher.sources.hackernews import HACKERNEWS_SOURCE
+
+        return HACKERNEWS_SOURCE
+    if name == "producthunt":
+        raise KeyError("Product Hunt uses the ph2md editorial application; run ph2md --help")
+    raise KeyError(f"unknown publisher source: {name}")
