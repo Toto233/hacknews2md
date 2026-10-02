@@ -6,7 +6,7 @@ from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
 
 from hn2md.context import RuntimeContext
-from hn2md.stages.collect import CollectStage, _fetch_discussion_with_retries
+from hn2md.stages.collect import CollectStage, _fetch_discussion_with_retries, write_collection_context
 
 
 def _ctx(tmp_path: Path) -> RuntimeContext:
@@ -56,6 +56,28 @@ def _ctx(tmp_path: Path) -> RuntimeContext:
 def _set_news_url(ctx: RuntimeContext, url: str) -> None:
     with sqlite3.connect(ctx.db_path) as conn:
         conn.execute("UPDATE news SET news_url=? WHERE id=1", (url,))
+
+
+def test_collection_and_refreshed_context_use_run_period(tmp_path: Path) -> None:
+    ctx = _ctx(tmp_path)
+    with sqlite3.connect(ctx.db_path) as conn:
+        conn.execute(
+            "UPDATE news SET created_at='2000-01-02 10:00:00', article_content=?, discussion_content=? WHERE id=1",
+            ("Readable article. " * 20, "HN discussion already collected."),
+        )
+        conn.execute(
+            "INSERT INTO news (id, title, news_url, article_content, discussion_content, created_at) "
+            "VALUES (2, 'Today', 'https://example.com/today', ?, 'HN discussion', datetime('now', 'localtime'))",
+            ("Today's article. " * 20,),
+        )
+    machine = type("M", (), {"job": type("J", (), {"date": "20000102"})()})()
+
+    result = CollectStage().execute(ctx, machine, concurrency=1)
+    refreshed = write_collection_context(ctx, period="20000102")
+
+    assert result["total"] == 1
+    assert [item["id"] for item in json.loads(Path(result["context_file"]).read_text(encoding="utf-8"))["items"]] == [1]
+    assert [item["id"] for item in json.loads(Path(refreshed).read_text(encoding="utf-8"))["items"]] == [1]
 
 
 def test_collect_stage_collects_full_context_and_writes_snapshot(tmp_path) -> None:

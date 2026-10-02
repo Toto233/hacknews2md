@@ -44,12 +44,22 @@ def run_release(
     dry_run: bool = False,
     targets: tuple[str, ...] | None = None,
     rerun: bool = False,
+    allow_duplicate_publish: bool = False,
     stage_kwargs: dict[GenericStage | str, dict[str, object]] | None = None,
 ) -> dict[str, object]:
     lock_path = ctx.job_dir / f".lock_{ctx.period}"
     try:
         with daily_lock(lock_path):
-            return _run_release_locked(ctx, source, stages, dry_run, targets, rerun, stage_kwargs)
+            return _run_release_locked(
+                ctx,
+                source,
+                stages,
+                dry_run,
+                targets,
+                rerun,
+                allow_duplicate_publish,
+                stage_kwargs,
+            )
     except LockError as exc:
         raise click.ClickException(str(exc)) from exc
 
@@ -61,6 +71,7 @@ def _run_release_locked(
     dry_run: bool,
     targets: tuple[str, ...] | None,
     rerun: bool,
+    allow_duplicate_publish: bool,
     stage_kwargs: dict[GenericStage | str, dict[str, object]] | None,
 ) -> dict[str, object]:
     """Run stages while holding the daily ledger lock."""
@@ -70,6 +81,13 @@ def _run_release_locked(
     publish_targets = targets or source.default_publish_targets
     requested_stage_sequence = tuple(stages)
     if GenericStage.PUBLISHING in requested_stage_sequence:
+        _guard_duplicate_wechat_publish(
+            machine,
+            publish_targets,
+            rerun=rerun,
+            dry_run=dry_run,
+            allow_duplicate_publish=allow_duplicate_publish,
+        )
         machine.job.publish_intent = {
             "requested_targets": list(publish_targets),
             "completed_targets": [],
@@ -139,6 +157,38 @@ def _run_release_locked(
     }
 
 
+def _guard_duplicate_wechat_publish(
+    machine: JobStateMachine,
+    publish_targets: tuple[str, ...],
+    *,
+    rerun: bool,
+    dry_run: bool,
+    allow_duplicate_publish: bool,
+) -> None:
+    """Require an explicit new-draft intent before repeating a successful upload."""
+    if dry_run or "wechat" not in publish_targets or not rerun or allow_duplicate_publish:
+        return
+    candidates: list[dict[str, object]] = []
+    previous = machine.job.stages.get("PUBLISHING")
+    if isinstance(previous, dict):
+        candidates.append(previous)
+    history = machine.job.receipts.get("PUBLISHING")
+    if isinstance(history, list):
+        candidates.extend(item for item in history if isinstance(item, dict))
+    media_ids = {
+        str(output.get("wechat_media_id"))
+        for item in candidates
+        if item.get("success") is True
+        and isinstance((output := item.get("output_summary")), dict)
+        and output.get("wechat_media_id")
+    }
+    if media_ids:
+        raise click.ClickException(
+            "WeChat draft already exists for this run. Use --new-draft only when another draft was explicitly requested. "
+            f"Existing Media ID(s): {', '.join(sorted(media_ids))}"
+        )
+
+
 def _with_required_pre_publish_stages(
     source: SourceDefinition,
     machine: JobStateMachine,
@@ -202,14 +252,26 @@ def _align_status_to_reused_stage(machine: JobStateMachine, target: GenericStage
 
 def _rewind_status_for_rerun(machine: JobStateMachine, target: GenericStage) -> None:
     """Allow explicit reruns of earlier stages after a later-stage failure."""
+    if machine.job.status == "DONE":
+        if target in {
+            GenericStage.RENDERING,
+            GenericStage.COVERING,
+            GenericStage.PUBLISHING,
+        }:
+            return
+        current_index = len(_HACKERNEWS_STAGE_ORDER)
+    else:
+        try:
+            current = GenericStage(machine.job.status)
+        except ValueError:
+            return
+        if current not in _HACKERNEWS_STAGE_ORDER:
+            return
+        current_index = _HACKERNEWS_STAGE_ORDER.index(current)
     try:
-        current = GenericStage(machine.job.status)
+        target_index = _HACKERNEWS_STAGE_ORDER.index(target)
     except ValueError:
         return
-    if current not in _HACKERNEWS_STAGE_ORDER or target not in _HACKERNEWS_STAGE_ORDER:
-        return
-    current_index = _HACKERNEWS_STAGE_ORDER.index(current)
-    target_index = _HACKERNEWS_STAGE_ORDER.index(target)
     if target_index >= current_index:
         return
 
@@ -252,7 +314,7 @@ def _ensure_audit_ready(runtime_ctx: RuntimeContext, machine: JobStateMachine, *
     required_phase = "strict" if strict else "pre-plan"
     previous_phase = (machine.job.audit_report or {}).get("phase") or required_phase
     if machine.job.audit_report is None or previous_phase != required_phase:
-        report = run_audit(runtime_ctx, include_summaries=strict)
+        report = run_audit(runtime_ctx, include_summaries=strict, period=machine.job.date)
         report["phase"] = required_phase
         machine.record_audit_report(report)
     require_audit_clear_or_exempt(machine)

@@ -3,6 +3,7 @@ import sqlite3
 import subprocess
 import sys
 from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import patch
 
 from click.testing import CliRunner
@@ -21,6 +22,16 @@ def test_status_reports_not_started_for_missing_hackernews_run(tmp_path, monkeyp
     assert "Status: NOT_STARTED" in result.output
     assert "Source: hackernews" in result.output
     assert "Period: 20260627" in result.output
+
+
+def test_fetch_forwards_browser_front_ids_to_hackernews_stage(tmp_path, monkeypatch) -> None:
+    monkeypatch.chdir(tmp_path)
+    ids = ",".join(str(item_id) for item_id in range(1, 11))
+    with patch("publisher.cli.run_release", return_value={"completed_stages": ["FETCHING"]}) as run:
+        result = CliRunner().invoke(main, ["fetch", "hackernews", "--front-ids", ids])
+
+    assert result.exit_code == 0, result.output
+    assert run.call_args.kwargs["stage_kwargs"]["FETCHING"]["front_ids"] == ids
 
 
 def test_status_reads_existing_hn_ledger(tmp_path, monkeypatch) -> None:
@@ -76,6 +87,30 @@ def test_release_from_stage_publishing_targets_wechat_only(tmp_path, monkeypatch
     assert [stage.value for stage in kwargs["stages"]] == ["PUBLISHING"]
     assert kwargs["targets"] == ("wechat",)
     assert kwargs["rerun"] is True
+
+
+def test_release_new_draft_forwards_explicit_duplicate_intent(tmp_path, monkeypatch) -> None:
+    monkeypatch.chdir(tmp_path)
+
+    with patch("publisher.cli.run_release", return_value={"completed_stages": ["PUBLISHING"]}) as run:
+        result = CliRunner().invoke(
+            main,
+            [
+                "release",
+                "hackernews",
+                "--date",
+                "2026-06-27",
+                "--from-stage",
+                "PUBLISHING",
+                "--target",
+                "wechat",
+                "--new-draft",
+            ],
+        )
+
+    assert result.exit_code == 0, result.output
+    assert run.call_args.kwargs["rerun"] is True
+    assert run.call_args.kwargs["allow_duplicate_publish"] is True
 
 
 def test_validate_source_reports_hackernews_contract_ok() -> None:
@@ -484,8 +519,129 @@ def test_review_run_command_runs_post_publish_review(tmp_path, monkeypatch) -> N
     assert kwargs["job_dir"] == tmp_path / "output" / "jobs"
     assert kwargs["db_path"] == tmp_path / "data" / "hacknews.db"
     assert kwargs["output_dir"] == tmp_path / "output"
+    assert kwargs["date_str"] == "20260627"
     assert kwargs["dry_run"] is False
     assert kwargs["verbose"] is True
+
+
+def test_record_keyword_review_persists_exact_decision(tmp_path, monkeypatch) -> None:
+    monkeypatch.chdir(tmp_path)
+    sentence = "中国的新功能仍待监管要求落实。"
+    markdown = tmp_path / "output" / "article.md"
+    markdown.parent.mkdir(parents=True)
+    markdown.write_text(sentence, encoding="utf-8")
+    machine, _ = JobStateMachine.load_or_create(tmp_path / "output" / "jobs", "20260627")
+    machine.job.stages[Stage.RENDERING.value] = {
+        "success": True,
+        "output_summary": {"markdown_file": str(markdown)},
+    }
+    machine._save()
+
+    result = CliRunner().invoke(
+        main,
+        [
+            "record-keyword-review",
+            "hackernews",
+            "--date",
+            "2026-06-27",
+            "--keyword",
+            "中国",
+            "--sentence",
+            sentence,
+            "--classification",
+            "neutral",
+            "--decision",
+            "保留并发布",
+        ],
+    )
+
+    assert result.exit_code == 0, result.output
+    reloaded, _ = JobStateMachine.load_or_create(tmp_path / "output" / "jobs", "20260627")
+    assert reloaded.job.keyword_decisions[0]["sentence"] == sentence
+    assert reloaded.job.keyword_decisions[0]["decision"] == "保留并发布"
+
+
+def test_record_screenshot_waiver_requires_failed_capture_and_exact_user_decision(tmp_path, monkeypatch) -> None:
+    monkeypatch.chdir(tmp_path)
+    db_path = tmp_path / "data" / "hacknews.db"
+    init_database(str(db_path))
+    url = "https://example.com/story"
+    with sqlite3.connect(db_path) as conn:
+        conn.execute(
+            "INSERT INTO news (id, title, news_url, created_at) "
+            "VALUES (1, 'Story', ?, '2026-06-27 10:00:00')",
+            (url,),
+        )
+    machine, _ = JobStateMachine.load_or_create(tmp_path / "output" / "jobs", "20260627")
+    machine.record_receipt(StageReceipt(
+        stage=Stage.CAPTURING.value,
+        started_at="2026-06-27T10:00:00",
+        finished_at="2026-06-27T10:01:00",
+        success=True,
+        output_summary={"items": [{"id": 1, "captured": False}]},
+    ))
+    args = [
+        "record-screenshot-waiver", "hackernews", "1", "--date", "2026-06-27",
+        "--url", url, "--reason", "Original page unreachable after retries",
+    ]
+    denied = CliRunner().invoke(main, args)
+    assert denied.exit_code != 0
+    assert "--user-confirmed" in denied.output
+
+    accepted = CliRunner().invoke(main, [*args, "--user-confirmed"])
+    assert accepted.exit_code == 0, accepted.output
+    reloaded, _ = JobStateMachine.load_or_create(tmp_path / "output" / "jobs", "20260627")
+    waiver = reloaded.job.screenshot_waivers[0]
+    assert waiver["period"] == "20260627"
+    assert waiver["run_id"] == machine.job.run_id
+    assert waiver["news_id"] == 1
+    assert waiver["news_url"] == url
+    assert waiver["approved_by"] == "user"
+
+    wrong_url = CliRunner().invoke(main, [*args[:6], "https://example.com/other", *args[7:], "--user-confirmed"])
+    assert wrong_url.exit_code != 0
+    assert "do not match" in wrong_url.output
+
+
+def test_record_astro_verifies_remote_head_and_persists_evidence(tmp_path, monkeypatch) -> None:
+    monkeypatch.chdir(tmp_path)
+    astro_repo = tmp_path / "astro"
+    astro_file = astro_repo / "src" / "data" / "blog" / "20260627.md"
+    astro_file.parent.mkdir(parents=True)
+    astro_file.write_text("# Published", encoding="utf-8")
+    machine, _ = JobStateMachine.load_or_create(tmp_path / "output" / "jobs", "20260627")
+    machine.job.stages[Stage.RENDERING.value] = {
+        "success": True,
+        "output_summary": {"astro_file": str(astro_file)},
+    }
+    machine._save()
+    settings = SimpleNamespace(astro_enabled=True, astro_repo=astro_repo)
+
+    def fake_git(_repo, *arguments, check=True):
+        stdout = ""
+        if arguments == ("rev-parse", "HEAD"):
+            stdout = "head123\n"
+        elif arguments == ("rev-parse", "--abbrev-ref", "HEAD"):
+            stdout = "main\n"
+        elif arguments[:3] == ("log", "-1", "--format=%H"):
+            stdout = "file456\n"
+        elif arguments == ("ls-remote", "origin", "refs/heads/main"):
+            stdout = "head123\trefs/heads/main\n"
+        return subprocess.CompletedProcess(arguments, 0, stdout=stdout, stderr="")
+
+    with patch("src.utils.deployment.load_deployment_settings", return_value=settings), patch(
+        "publisher.cli._run_git", side_effect=fake_git
+    ):
+        result = CliRunner().invoke(
+            main,
+            ["record-astro", "hackernews", "--date", "2026-06-27"],
+        )
+
+    assert result.exit_code == 0, result.output
+    reloaded, _ = JobStateMachine.load_or_create(tmp_path / "output" / "jobs", "20260627")
+    assert reloaded.job.manual_astro["commit"] == "file456"
+    assert reloaded.job.manual_astro["remote_head"] == "head123"
+    assert reloaded.job.manual_astro["remote_verified"] is True
 
 
 def test_repair_astro_generates_output_and_updates_done_ledger(tmp_path, monkeypatch) -> None:
@@ -710,6 +866,45 @@ def test_status_reports_capture_progress(tmp_path, monkeypatch) -> None:
 
     assert result.exit_code == 0, result.output
     assert "Capture: running (3/10, captured 2)" in result.output
+
+
+def test_status_aggregates_capture_progress_across_partial_reruns(tmp_path, monkeypatch) -> None:
+    monkeypatch.chdir(tmp_path)
+    job_dir = tmp_path / "output" / "jobs"
+    machine, _ = JobStateMachine.load_or_create(job_dir, "20260627")
+    first = StageReceipt(
+        stage=Stage.CAPTURING.value,
+        started_at="2026-06-27T10:00:00",
+        finished_at="2026-06-27T10:01:00",
+        success=True,
+        output_summary={
+            "requested": 3,
+            "captured": 2,
+            "items": [
+                {"id": 1, "captured": True},
+                {"id": 2, "captured": False},
+                {"id": 3, "captured": True},
+            ],
+        },
+    )
+    second = StageReceipt(
+        stage=Stage.CAPTURING.value,
+        started_at="2026-06-27T10:02:00",
+        finished_at="2026-06-27T10:03:00",
+        success=True,
+        output_summary={
+            "requested": 1,
+            "captured": 1,
+            "items": [{"id": 2, "captured": True}],
+        },
+    )
+    machine.record_receipt(first)
+    machine.record_receipt(second)
+
+    result = CliRunner().invoke(main, ["status", "hackernews", "--date", "2026-06-27"])
+
+    assert result.exit_code == 0, result.output
+    assert "Capture: completed (3/3, captured 3)" in result.output
 
 
 def test_skip_story_can_delete_and_add_domain_filter(tmp_path, monkeypatch) -> None:

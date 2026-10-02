@@ -24,8 +24,13 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 
+from hn2md.stages.audit import MIN_DISCUSSION_SUMMARY_LENGTH, MIN_SUMMARY_LENGTH
 from src.db.connection import get_db
 from src.utils.jsonl_writer import append_jsonl
+
+
+RECOMMENDATION_PROMOTION_OCCURRENCES = 3
+RECOMMENDATION_LOOKBACK_RUNS = 7
 
 
 def _finding(
@@ -85,7 +90,7 @@ def _check_image_preflight(
             _finding(
                 date_str,
                 "image_preflight",
-                "warning" if len(compressed) > 3 else "info",
+                "info",
                 f"{len(compressed)} image(s) auto-compressed to <=1MB",
                 {"compressed": compressed},
             )
@@ -126,6 +131,20 @@ def _recommendations_from_findings(findings: list[dict[str, Any]]) -> list[dict[
         error = str(details.get("error") or "")
         combined = f"{message}\n{error}"
 
+        if finding.get("check") == "stage_retry":
+            add(
+                "stage_retry_overhead",
+                "Review repeated stage reruns before changing the workflow",
+                "One or more publish stages were rerun during the completed daily release.",
+                "Compare the direct retry causes across runs; change the workflow only if the same cause becomes a candidate.",
+            )
+        if finding.get("check") == "duplicate_draft_risk":
+            add(
+                "duplicate_wechat_draft",
+                "Require explicit intent before creating another WeChat draft",
+                "More than one successful WeChat media ID was recorded for the same daily run.",
+                "Keep ordinary reruns blocked after a successful upload; use --new-draft only for an explicitly requested replacement.",
+            )
         if "No module named" in combined or "RequestsDependencyWarning" in combined:
             add(
                 "python_environment_mismatch",
@@ -156,23 +175,115 @@ def _recommendations_from_findings(findings: list[dict[str, Any]]) -> list[dict[
                     "WeChat upload skipped local GIF files because the publisher only uploads static supported formats.",
                     "Convert GIF first frames to PNG/WebP and rewrite markdown before upload.",
                 )
+        if finding.get("check") == "summary_quality" and finding.get("severity") == "blocking":
+            add(
+                "summary_quality_gate_regression",
+                "Keep summary minimum lengths as a hard pre-publish gate",
+                "A completed run contains summaries below the minimum publishable lengths.",
+                "Repair the summaries and verify that strict audit runs immediately before publishing.",
+            )
 
     return list(recommendations.values())
 
 
+def _classify_recommendation_maturity(
+    output_dir: Path,
+    date_str: str,
+    recommendations: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    """Attach cross-run evidence without turning observations into automatic changes."""
+    history_paths = sorted((output_dir / "reviews").glob("run_review_latest_*.json"))
+    # A review of an older run must not learn from future snapshots.
+    eligible_history: list[Path] = []
+    for path in history_paths:
+        path_date = path.stem.removeprefix("run_review_latest_")
+        if path_date < date_str:
+            eligible_history.append(path)
+    history_paths = eligible_history[-(RECOMMENDATION_LOOKBACK_RUNS - 1) :]
+    dates_by_code: dict[str, set[str]] = {}
+    for path in history_paths:
+        try:
+            snapshot = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            continue
+        history_date = str(snapshot.get("date") or "")
+        for recommendation in snapshot.get("recommendations", []):
+            if not isinstance(recommendation, dict):
+                continue
+            code = str(recommendation.get("code") or "")
+            if code and history_date:
+                dates_by_code.setdefault(code, set()).add(history_date)
+
+    classified: list[dict[str, Any]] = []
+    for recommendation in recommendations:
+        item = dict(recommendation)
+        code = str(item.get("code") or "")
+        dates = dates_by_code.setdefault(code, set())
+        dates.add(date_str)
+        occurrence_dates = sorted(dates)
+        is_candidate = len(occurrence_dates) >= RECOMMENDATION_PROMOTION_OCCURRENCES
+        item.update(
+            {
+                "status": "candidate" if is_candidate else "observation",
+                "occurrence_count": len(occurrence_dates),
+                "occurrence_dates": occurrence_dates,
+                "policy": (
+                    "Review docs/DECISIONS.md and require an explicit accepted decision before implementation."
+                    if is_candidate
+                    else "Report only; do not change code or skills from a single run."
+                ),
+            }
+        )
+        classified.append(item)
+    return classified
+
+
 def _check_keyword_warnings(
-    receipt: dict[str, Any], date_str: str
+    receipt: dict[str, Any], date_str: str, decisions: list[dict[str, Any]] | None = None
 ) -> list[dict[str, Any]]:
     findings: list[dict[str, Any]] = []
     warnings = receipt.get("keyword_warnings", [])
     if warnings:
+        decisions = decisions or []
+        reviewed: list[dict[str, Any]] = []
+        unreviewed: list[dict[str, Any]] = []
+        decision_keys = {
+            (
+                str(item.get("keyword") or "").strip(),
+                str(item.get("sentence") or "").strip(),
+            )
+            for item in decisions
+            if isinstance(item, dict)
+        }
+        for warning in warnings:
+            key = (
+                str(warning.get("keyword") or "").strip(),
+                str(warning.get("sentence") or "").strip(),
+            )
+            legacy = warning.get("legacy_sentences")
+            legacy_keys = (
+                {(key[0], str(sentence).strip()) for sentence in legacy}
+                if isinstance(legacy, list)
+                else set()
+            )
+            (reviewed if key in decision_keys or legacy_keys & decision_keys else unreviewed).append(warning)
+        if not unreviewed:
+            return [
+                _finding(
+                    date_str,
+                    "keyword_review",
+                    "info",
+                    f"All {len(reviewed)} keyword context(s) have recorded decisions",
+                    {"reviewed": reviewed[:10]},
+                )
+            ]
         findings.append(
             _finding(
                 date_str,
                 "keyword_review",
                 "warning",
-                f"{len(warnings)} keyword hit(s) — verify each was reviewed",
-                {"keyword_warnings": warnings[:10]},
+                f"{len(unreviewed)} keyword context(s) lack a recorded decision",
+                {"keyword_warnings": unreviewed[:10], "reviewed_count": len(reviewed)},
             )
         )
     else:
@@ -181,7 +292,10 @@ def _check_keyword_warnings(
 
 
 def _check_story_completeness(
-    db_path: Path, receipt: dict[str, Any], date_str: str
+    db_path: Path,
+    receipt: dict[str, Any],
+    date_str: str,
+    skipped_stories: list[dict[str, Any]] | None = None,
 ) -> list[dict[str, Any]]:
     """Compare DB stories vs rendered markdown using source/discussion URLs."""
     findings: list[dict[str, Any]] = []
@@ -197,17 +311,27 @@ def _check_story_completeness(
                 """
                 SELECT id, title, news_url, discuss_url
                 FROM news
-                WHERE date(created_at)=date('now','localtime')
+                WHERE strftime('%Y%m%d', created_at)=?
+                UNION ALL
+                SELECT id, title, news_url, discuss_url
+                FROM news_history
+                WHERE strftime('%Y%m%d', created_at)=?
                 ORDER BY id
-                """
+                """,
+                (date_str, date_str),
             ).fetchall()
     except Exception:
         findings.append(_finding(date_str, "completeness", "warning", "Could not query DB for story count"))
         return findings
 
     md_text = Path(md_file).read_text(encoding="utf-8")
+    skipped_ids = {
+        item.get("id") for item in (skipped_stories or []) if isinstance(item, dict)
+    }
     missing: list[dict[str, Any]] = []
     for row in rows:
+        if row["id"] in skipped_ids:
+            continue
         candidates = [
             str(row["news_url"] or "").strip(),
             str(row["discuss_url"] or "").strip(),
@@ -230,10 +354,100 @@ def _check_story_completeness(
     return findings
 
 
+def _check_summary_quality(db_path: Path, date_str: str) -> list[dict[str, Any]]:
+    """Recheck final summary lengths so post-run review can detect gate regressions."""
+    if not db_path.exists():
+        return []
+    try:
+        with get_db(str(db_path)) as conn:
+            tables = {row[0] for row in conn.execute("SELECT name FROM sqlite_master WHERE type='table'")}
+            if "news" not in tables:
+                return []
+            rows = conn.execute(
+                """
+                SELECT id,
+                       length(trim(coalesce(content_summary, ''))) AS content_length,
+                       length(trim(coalesce(discuss_summary, ''))) AS discussion_length
+                FROM news
+                WHERE strftime('%Y%m%d', created_at)=?
+                UNION ALL
+                SELECT id,
+                       length(trim(coalesce(content_summary, ''))) AS content_length,
+                       length(trim(coalesce(discuss_summary, ''))) AS discussion_length
+                FROM news_history
+                WHERE strftime('%Y%m%d', created_at)=?
+                ORDER BY id
+                """,
+                (date_str, date_str),
+            ).fetchall()
+    except (OSError, sqlite3.DatabaseError):
+        return []
+    if not rows:
+        return []
+
+    short_content_ids = [row[0] for row in rows if int(row[1] or 0) < MIN_SUMMARY_LENGTH]
+    short_discussion_ids = [row[0] for row in rows if int(row[2] or 0) < MIN_DISCUSSION_SUMMARY_LENGTH]
+    content_lengths = [int(row[1] or 0) for row in rows]
+    discussion_lengths = [int(row[2] or 0) for row in rows]
+    details = {
+        "content_min": min(content_lengths),
+        "content_max": max(content_lengths),
+        "discussion_min": min(discussion_lengths),
+        "discussion_max": max(discussion_lengths),
+        "content_minimum": MIN_SUMMARY_LENGTH,
+        "discussion_minimum": MIN_DISCUSSION_SUMMARY_LENGTH,
+        "short_content_ids": short_content_ids,
+        "short_discussion_ids": short_discussion_ids,
+    }
+    if short_content_ids or short_discussion_ids:
+        return [
+            _finding(
+                date_str,
+                "summary_quality",
+                "blocking",
+                "Published summaries are below the minimum lengths; the strict gate did not protect the run.",
+                details,
+            )
+        ]
+    return [
+        _finding(
+            date_str,
+            "summary_quality",
+            "info",
+            (
+                f"Summary lengths OK: content {details['content_min']}-{details['content_max']}, "
+                f"discussion {details['discussion_min']}-{details['discussion_max']}"
+            ),
+            details,
+        )
+    ]
+
+
 def _check_astro_output(
-    publish_receipt: dict[str, Any], render_receipt: dict[str, Any], date_str: str
+    publish_receipt: dict[str, Any],
+    render_receipt: dict[str, Any],
+    date_str: str,
+    manual_astro: dict[str, Any] | None = None,
 ) -> list[dict[str, Any]]:
     findings: list[dict[str, Any]] = []
+    automatic = publish_receipt.get("astro")
+    astro_evidence = automatic if isinstance(automatic, dict) else manual_astro
+    if isinstance(astro_evidence, dict) and astro_evidence.get("status") in {
+        "pushed",
+        "already_synced",
+    }:
+        commit = astro_evidence.get("commit") or "unknown commit"
+        verified = astro_evidence.get("remote_verified", automatic is not None)
+        severity = "info" if verified else "warning"
+        findings.append(
+            _finding(
+                date_str,
+                "astro_publish",
+                severity,
+                f"Astro {astro_evidence.get('status')}: {commit}",
+                {"astro": astro_evidence},
+            )
+        )
     astro_file = render_receipt.get("astro_file")
     if render_receipt.get("astro_skipped"):
         reason = render_receipt.get("astro_skip_reason") or "reason not recorded"
@@ -579,6 +793,7 @@ def _write_current_snapshot(
     findings: list[dict[str, Any]],
     blocking_count: int,
     recommendations: list[dict[str, Any]] | None = None,
+    daily_summary: dict[str, Any] | None = None,
 ) -> bool:
     """Replace the machine-readable current audit conclusion for one run."""
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -590,6 +805,7 @@ def _write_current_snapshot(
                     "generated_at": datetime.now().isoformat(),
                     "date": date_str,
                     "blocking_count": blocking_count,
+                    "daily_summary": daily_summary or {},
                     "recommendations": recommendations or [],
                     "findings": findings,
                 },
@@ -603,6 +819,45 @@ def _write_current_snapshot(
         temporary_path.unlink(missing_ok=True)
         return False
     return True
+
+
+def _build_daily_summary(
+    date_str: str,
+    ledger: dict[str, Any],
+    findings: list[dict[str, Any]],
+    recommendations: list[dict[str, Any]],
+) -> dict[str, Any]:
+    publish = ledger.get("stages", {}).get("PUBLISHING", {}).get("output_summary", {})
+    automatic_astro = publish.get("astro") if isinstance(publish.get("astro"), dict) else None
+    nested_manual = publish.get("manual_astro") if isinstance(publish.get("manual_astro"), dict) else None
+    root_manual = ledger.get("manual_astro") if isinstance(ledger.get("manual_astro"), dict) else None
+    astro = automatic_astro or nested_manual or root_manual or {}
+    blocking_count = sum(1 for item in findings if item.get("severity") == "blocking")
+    status = ledger.get("status") or "UNKNOWN"
+    compact_safe = status == "DONE" and blocking_count == 0
+    stages = ledger.get("stages", {})
+    planning = stages.get("PLANNING", {}).get("output_summary", {}) if isinstance(stages, dict) else {}
+    applying = stages.get("APPLYING", {}).get("output_summary", {}) if isinstance(stages, dict) else {}
+    story_count = planning.get("story_count") if isinstance(planning, dict) else None
+    if not isinstance(story_count, int):
+        story_count = applying.get("updated") if isinstance(applying, dict) else None
+    if not isinstance(story_count, int):
+        story_count = len(ledger.get("stories", []))
+    return {
+        "date": date_str,
+        "status": status,
+        "story_count": story_count,
+        "wechat_media_id": publish.get("wechat_media_id"),
+        "astro_status": astro.get("status"),
+        "astro_commit": astro.get("commit"),
+        "blocking_count": blocking_count,
+        "warning_count": sum(1 for item in findings if item.get("severity") == "warning"),
+        "observations": [item["code"] for item in recommendations if item.get("status") == "observation"],
+        "candidates": [item["code"] for item in recommendations if item.get("status") == "candidate"],
+        "change_policy": "Daily review reports evidence only; workflow changes require a promoted candidate and an accepted decision.",
+        "compact_safe": compact_safe,
+        "compact_message": "本轮已结束，适合执行 /compact" if compact_safe else None,
+    }
 
 
 def _receipt_warning_key(stage_name: str, warning_key: str, warning: Any) -> str:
@@ -627,11 +882,12 @@ def _check_stage_receipts(
     """Surface run-time problems from stage receipts for post-run follow-up."""
     findings: list[dict[str, Any]] = []
     warning_keys = ("image_warnings", "content_warnings", "discussion_warnings")
-    highest_retry_by_stage: dict[str, tuple[int, Any, dict[str, Any]]] = {}
+    receipts_by_stage: dict[str, list[dict[str, Any]]] = {}
     seen_warning_keys: set[str] = set()
     skipped_stories = skipped_stories or []
 
     for stage_name, receipt in _iter_stage_receipts(stages, receipt_history):
+        receipts_by_stage.setdefault(stage_name, []).append(receipt)
 
         if receipt.get("success") is False:
             latest_receipt = stages.get(stage_name)
@@ -650,17 +906,6 @@ def _check_stage_receipts(
                     },
                 )
             )
-
-        retry_count = int(receipt.get("retry_count") or 0)
-        if retry_count > 0:
-            previous = highest_retry_by_stage.get(stage_name)
-            if previous is None or retry_count > previous[0]:
-                output = receipt.get("output_summary")
-                highest_retry_by_stage[stage_name] = (
-                    retry_count,
-                    receipt.get("error"),
-                    output if isinstance(output, dict) else {},
-                )
 
         output_summary = receipt.get("output_summary") or {}
         if not isinstance(output_summary, dict):
@@ -762,37 +1007,81 @@ def _check_stage_receipts(
                 )
             )
 
-    for stage_name, (retry_count, error, output_summary) in highest_retry_by_stage.items():
+    for stage_name, stage_receipts in receipts_by_stage.items():
+        latest = stage_receipts[-1]
+        output_summary = latest.get("output_summary")
+        output_summary = output_summary if isinstance(output_summary, dict) else {}
+        retry_count = max(
+            len(stage_receipts) - 1,
+            max((int(item.get("retry_count") or 0) for item in stage_receipts), default=0),
+        )
+        if retry_count <= 0:
+            continue
         no_op_capture = (
             stage_name == "CAPTURING"
             and output_summary.get("requested") == 0
             and output_summary.get("captured") == 0
             and not output_summary.get("warnings")
         )
+        if no_op_capture:
+            findings.append(
+                _finding(
+                    date_str,
+                    "stage_retry",
+                    "info",
+                    f"{stage_name} rerun found no pending work",
+                    {
+                        "stage": stage_name,
+                        "retry_count": retry_count,
+                        "error": latest.get("error"),
+                        "resolution": "no_pending_work",
+                    },
+                )
+            )
+            continue
+
+        successful = [item for item in stage_receipts if item.get("success") is True]
+        failed = [item for item in stage_receipts if item.get("success") is False]
+        if stage_name == "PUBLISHING":
+            media_ids = {
+                str((item.get("output_summary") or {}).get("wechat_media_id"))
+                for item in successful
+                if isinstance(item.get("output_summary"), dict)
+                and (item.get("output_summary") or {}).get("wechat_media_id")
+            }
+            if len(media_ids) > 1:
+                findings.append(
+                    _finding(
+                        date_str,
+                        "duplicate_draft_risk",
+                        "warning",
+                        f"PUBLISHING created {len(media_ids)} successful WeChat drafts",
+                        {"media_ids": sorted(media_ids), "retry_count": retry_count},
+                    )
+                )
+
+        if failed and successful:
+            # Failure recovery is already reported with its concrete error above.
+            continue
+        if len(successful) > 1:
+            resolution = "capture_completion" if stage_name == "CAPTURING" else "content_revision"
+            findings.append(
+                _finding(
+                    date_str,
+                    "stage_revision",
+                    "info",
+                    f"{stage_name} reran successfully for {resolution}",
+                    {"stage": stage_name, "rerun_count": retry_count, "resolution": resolution},
+                )
+            )
+            continue
         findings.append(
             _finding(
                 date_str,
                 "stage_retry",
-                "info" if no_op_capture else "warning",
-                (
-                    f"{stage_name} rerun found no pending work"
-                    if no_op_capture
-                    else f"{stage_name} retried {retry_count} time(s)"
-                ),
-                (
-                    {
-                        "stage": stage_name,
-                        "retry_count": retry_count,
-                        "error": error,
-                        "resolution": "no_pending_work",
-                    }
-                    if no_op_capture
-                    else {
-                        "stage": stage_name,
-                        "retry_count": retry_count,
-                        "error": error,
-                    }
-                ),
+                "warning",
+                f"{stage_name} retried {retry_count} time(s)",
+                {"stage": stage_name, "retry_count": retry_count, "error": latest.get("error")},
             )
         )
     return findings
@@ -807,6 +1096,7 @@ def run_post_publish_audit(
     output_dir: Path,
     dry_run: bool = False,
     verbose: bool = False,
+    date_str: str | None = None,
 ) -> dict[str, Any]:
     """Run post-publish audit, append findings to JSONL, return summary.
 
@@ -819,17 +1109,20 @@ def run_post_publish_audit(
 
         {"findings": [...], "blocking_count": int, "jsonl_path": str}
     """
-    date_str = datetime.now().strftime("%Y%m%d")
+    date_str = date_str or datetime.now().strftime("%Y%m%d")
     jsonl_path = output_dir / "reviews" / f"run_review_{date_str}.jsonl"
     snapshot_path = output_dir / "reviews" / f"run_review_latest_{date_str}.json"
 
-    # Load the publish receipt from today's job ledger
+    # Load the publish receipt from the requested daily job ledger.
     ledger_path = job_dir / f"publish_job_{date_str}.json"
+    ledger: dict[str, Any] = {}
     stages: dict[str, Any] = {}
     receipt_history: dict[str, Any] = {}
     receipt: dict[str, Any] = {}
     render_receipt: dict[str, Any] = {}
     skipped_stories: list[dict[str, Any]] = []
+    keyword_decisions: list[dict[str, Any]] = []
+    manual_astro: dict[str, Any] | None = None
     if ledger_path.exists():
         try:
             ledger = json.loads(ledger_path.read_text(encoding="utf-8"))
@@ -840,6 +1133,17 @@ def run_post_publish_audit(
             raw_skipped_stories = ledger.get("skipped_stories", [])
             if isinstance(raw_skipped_stories, list):
                 skipped_stories = [story for story in raw_skipped_stories if isinstance(story, dict)]
+            raw_keyword_decisions = ledger.get("keyword_decisions", [])
+            if isinstance(raw_keyword_decisions, list):
+                keyword_decisions = [
+                    decision for decision in raw_keyword_decisions if isinstance(decision, dict)
+                ]
+            root_manual_astro = ledger.get("manual_astro")
+            nested_manual_astro = receipt.get("manual_astro") if isinstance(receipt, dict) else None
+            if isinstance(root_manual_astro, dict):
+                manual_astro = root_manual_astro
+            elif isinstance(nested_manual_astro, dict):
+                manual_astro = nested_manual_astro
         except (OSError, json.JSONDecodeError):
             pass
 
@@ -859,9 +1163,16 @@ def run_post_publish_audit(
         if not isinstance(output_summary, dict):
             continue
         all_findings.extend(_check_image_preflight(output_summary, date_str))
-        all_findings.extend(_check_keyword_warnings(output_summary, date_str))
-    all_findings.extend(_check_story_completeness(db_path, receipt, date_str))
-    all_findings.extend(_check_astro_output(receipt, render_receipt, date_str))
+        all_findings.extend(
+            _check_keyword_warnings(output_summary, date_str, keyword_decisions)
+        )
+    all_findings.extend(
+        _check_story_completeness(db_path, receipt, date_str, skipped_stories)
+    )
+    all_findings.extend(_check_summary_quality(db_path, date_str))
+    all_findings.extend(
+        _check_astro_output(receipt, render_receipt, date_str, manual_astro)
+    )
     all_findings = _deduplicate_findings(all_findings)
 
     # Append only new findings — only warning/blocking unless verbose.
@@ -878,13 +1189,19 @@ def run_post_publish_audit(
         )
         all_findings = _deduplicate_findings(all_findings)
     blocking_count = sum(1 for f in all_findings if f.get("severity") == "blocking")
-    recommendations = _recommendations_from_findings(all_findings)
+    recommendations = _classify_recommendation_maturity(
+        output_dir,
+        date_str,
+        _recommendations_from_findings(all_findings),
+    )
+    daily_summary = _build_daily_summary(date_str, ledger, all_findings, recommendations)
     snapshot_written = _write_current_snapshot(
         snapshot_path,
         date_str,
         all_findings,
         blocking_count,
         recommendations,
+        daily_summary,
     )
 
     written = 0
@@ -901,6 +1218,7 @@ def run_post_publish_audit(
         "findings": all_findings,
         "blocking_count": blocking_count,
         "recommendations": recommendations,
+        "daily_summary": daily_summary,
         "jsonl_written": written,
         "jsonl_path": str(jsonl_path),
         "snapshot_path": str(snapshot_path) if snapshot_written else None,

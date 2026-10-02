@@ -11,6 +11,18 @@ from hn2md.stages.audit import require_audit_clear_or_exempt, run_audit
 from src.utils.db_utils import init_database
 
 
+VALID_CONTENT_SUMMARY = ("合格正文摘要覆盖事件、机制、事实、限制与影响。" * 20)[:280]
+VALID_DISCUSSION_SUMMARY = ("合格讨论摘要覆盖支持、反对、案例与未决问题。" * 20)[:180]
+
+
+def _set_valid_summaries(ctx: RuntimeContext) -> None:
+    with sqlite3.connect(ctx.db_path) as conn:
+        conn.execute(
+            "UPDATE news SET content_summary = ?, discuss_summary = ?",
+            (VALID_CONTENT_SUMMARY, VALID_DISCUSSION_SUMMARY),
+        )
+
+
 def _ctx(tmp_path: Path) -> RuntimeContext:
     output = tmp_path / "output"
     return RuntimeContext(
@@ -31,6 +43,42 @@ def _machine(tmp_path: Path, date: str = "20260628") -> JobStateMachine:
     path = tmp_path / f"publish_job_{date}.json"
     job.to_json(path)
     return JobStateMachine(job, path)
+
+
+def test_audit_uses_requested_period_and_its_collect_warnings(tmp_path: Path) -> None:
+    ctx = _ctx(tmp_path)
+    init_database(str(ctx.db_path))
+    with sqlite3.connect(ctx.db_path) as conn:
+        conn.execute(
+            "INSERT INTO news (id, title, news_url, created_at) "
+            "VALUES (1, 'Old', 'https://example.com/old', '2000-01-02 10:00:00')"
+        )
+        conn.execute(
+            "INSERT INTO news (id, title, news_url, created_at) "
+            "VALUES (2, 'Today', 'https://example.com/today', datetime('now', 'localtime'))"
+        )
+    ctx.job_dir.mkdir(parents=True)
+    (ctx.job_dir / "publish_job_20000102.json").write_text(
+        json.dumps(
+            {
+                "stages": {
+                    "COLLECTING": {
+                        "output_summary": {
+                            "content_warnings": [
+                                {"id": 1, "title": "Old", "url": "https://example.com/old", "reason": "article_content_missing"}
+                            ]
+                        }
+                    }
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    report = run_audit(ctx, include_summaries=False, period="20000102")
+
+    assert [item["id"] for item in report["items"]] == [1]
+    assert any(issue["code"] == "collect_content_warning" and issue["news_id"] == 1 for issue in report["issues"])
 
 
 def test_audit_returns_structured_report_without_doi_requirement(tmp_path) -> None:
@@ -139,7 +187,7 @@ def test_pre_plan_audit_ignores_summaries_but_keeps_content_gates(tmp_path) -> N
     assert not {"summary_missing", "discussion_summary_missing"} & {issue["code"] for issue in report["issues"]}
 
 
-def test_strict_audit_warns_when_summaries_are_below_editorial_targets(tmp_path) -> None:
+def test_strict_audit_blocks_summaries_below_minimum_lengths(tmp_path) -> None:
     ctx = _ctx(tmp_path)
     init_database(str(ctx.db_path))
     article = "Readable article body. " * 20
@@ -169,13 +217,15 @@ def test_strict_audit_warns_when_summaries_are_below_editorial_targets(tmp_path)
 
     codes = {issue["code"] for issue in report["issues"]}
     assert "summary_length_advisory" in codes
+    assert "summary_too_short" in codes
+    assert "discussion_summary_too_short" in codes
     assert report["length_advisory"] == {
         "content_target": 280,
         "discussion_target": 180,
         "short_content_ids": [1],
         "short_discussion_ids": [1],
     }
-    assert report["blocking_count"] == 0
+    assert report["blocking_count"] == 2
 
 
 def test_audit_blocks_paywall_shell_even_when_text_is_long(tmp_path) -> None:
@@ -255,6 +305,8 @@ def test_audit_accepts_human_supplied_content_source(tmp_path) -> None:
             """
         )
 
+    _set_valid_summaries(ctx)
+
     report = run_audit(ctx)
 
     assert report["blocking_count"] == 0
@@ -279,6 +331,8 @@ def test_audit_blocks_discussion_summary_without_source_when_discussion_is_empty
             )
             """
         )
+
+    _set_valid_summaries(ctx)
 
     report = run_audit(ctx)
 
@@ -308,6 +362,8 @@ def test_audit_accepts_external_discussion_summary_source_when_discussion_is_emp
             )
             """
         )
+
+    _set_valid_summaries(ctx)
 
     report = run_audit(ctx)
 
@@ -341,6 +397,8 @@ def test_audit_does_not_block_long_article_with_javascript_marker(tmp_path) -> N
             ),
         )
 
+    _set_valid_summaries(ctx)
+
     report = run_audit(ctx)
 
     codes = {issue["code"] for issue in report["issues"]}
@@ -369,6 +427,8 @@ def test_audit_blocks_short_article_with_javascript_marker(tmp_path) -> None:
             """
         )
 
+    _set_valid_summaries(ctx)
+
     report = run_audit(ctx)
 
     codes = {issue["code"] for issue in report["issues"]}
@@ -394,6 +454,7 @@ def test_audit_merges_collect_content_warnings_from_ledger(tmp_path) -> None:
             )
             """
         )
+    _set_valid_summaries(ctx)
     period = datetime.now().strftime("%Y%m%d")
     ctx.job_dir.mkdir(parents=True)
     (ctx.job_dir / f"publish_job_{period}.json").write_text(
@@ -453,6 +514,7 @@ def test_audit_ignores_resolved_or_removed_collect_warnings(tmp_path) -> None:
             )
             """
         )
+    _set_valid_summaries(ctx)
     period = datetime.now().strftime("%Y%m%d")
     ctx.job_dir.mkdir(parents=True)
     (ctx.job_dir / f"publish_job_{period}.json").write_text(
@@ -496,6 +558,8 @@ def test_audit_allows_subscription_language_in_human_supplied_article(tmp_path) 
             (article,),
         )
 
+    _set_valid_summaries(ctx)
+
     report = run_audit(ctx)
 
     assert "paywall_or_shell_page" not in {issue["code"] for issue in report["issues"]}
@@ -525,6 +589,8 @@ def test_audit_accepts_hn_submission_content_source(tmp_path) -> None:
                 "https://news.ycombinator.com/item?id=1",
             ),
         )
+
+    _set_valid_summaries(ctx)
 
     report = run_audit(ctx)
 

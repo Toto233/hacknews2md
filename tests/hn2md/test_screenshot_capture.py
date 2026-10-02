@@ -82,6 +82,39 @@ def test_capture_missing_screenshots_records_successes_without_blocking_failures
         assert conn.execute("SELECT screenshot FROM news WHERE id=1").fetchone() == ("shot.png",)
 
 
+def test_capture_missing_screenshots_uses_requested_period(tmp_path: Path) -> None:
+    ctx = _ctx(tmp_path)
+    with sqlite3.connect(ctx.db_path) as conn:
+        conn.execute("UPDATE news SET created_at='2000-01-02 10:00:00' WHERE id=1")
+        conn.execute(
+            "INSERT INTO news (id, title, news_url, created_at) "
+            "VALUES (2, 'Today', 'https://example.com/today', datetime('now', 'localtime'))"
+        )
+
+    with patch(
+        "hn2md.screenshot_capture._capture_one_in_process",
+        return_value={"id": 1, "screenshot": "old.png", "duration_ms": 10},
+    ):
+        result = capture_missing_screenshots(ctx, concurrency=1, period="20000102")
+
+    assert result["requested"] == 1
+    assert [item["id"] for item in result["items"]] == [1]
+    with sqlite3.connect(ctx.db_path) as conn:
+        assert conn.execute("SELECT screenshot FROM news WHERE id=1").fetchone() == ("old.png",)
+        assert conn.execute("SELECT screenshot FROM news WHERE id=2").fetchone() == (None,)
+
+
+def test_capture_stage_passes_its_run_period(tmp_path: Path) -> None:
+    from hn2md.stages.screenshot import CaptureScreenshotsStage
+
+    ctx = _ctx(tmp_path)
+    machine = type("M", (), {"job": type("J", (), {"date": "20000102"})()})()
+    with patch("hn2md.stages.screenshot.capture_missing_screenshots", return_value={"requested": 0}) as capture:
+        CaptureScreenshotsStage().execute(ctx, machine, concurrency=2)
+
+    assert capture.call_args.kwargs["period"] == "20000102"
+
+
 def test_capture_rows_honors_the_concurrency_limit(monkeypatch) -> None:
     active = 0
     peak_active = 0

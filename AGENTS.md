@@ -1,120 +1,57 @@
-# AGENTS.md — hn2md Project Instructions
+# AGENTS.md — publisher
 
-## Project Overview
+## Project and routing
 
-**publisher** is the source-driven publishing application. Its HackerNews source scrapes HN front page stories, generates Chinese titles/summaries/rankings/tags via LLM, publishes WeChat drafts, and optionally syncs to Astro.
+`publisher/` owns source-driven orchestration; `hn2md/` implements the HackerNews stages/state; `src/` contains fetchers, handlers, LLM providers and integrations. New daily workflow behavior belongs in `publisher/`.
 
-## Architecture
+Daily commands run from this repository through `./scripts/publisher.ps1 <command> <source>`, which selects the configured runtime. For HackerNews start with `.\scripts\publisher.ps1 status hackernews` and the maintained [publishing skill](skills/publish-hacknews-codex/SKILL.md). Codex publishing uses its manual-plan route; a bare automated `release` is not a substitute for that editorial work.
 
-```
-publisher/ (daily CLI orchestration) → hn2md/ + src/ (source implementation) → external services
-```
+Read task-specific guidance when it applies:
 
-- **`publisher/`**: Canonical source-driven CLI and stage orchestration
-- **`hn2md/`**: HackerNews state machine and stages, used internally by `publisher`
-- **`src/`**: Core library — fetchers, crawlers, handlers, LLM layer, integrations, utils
-- **`scripts/`**: Cover generators + WeChat publisher (used by hn2md stages)
-- **`skills/`**: Codex skill definition (legacy, being evaluated for archival)
-- **`tests/`**: pytest test suite
+- HackNews generation, continuation or publishing: [publish-hacknews-codex](skills/publish-hacknews-codex/SKILL.md).
+- Product Hunt monthly articles: [publish-producthunt-monthly](skills/publish-producthunt-monthly/SKILL.md), including its explicit editorial compatibility branch.
+- Cover generation or editing: [wechat-cover-imagegen](.codex/skills/wechat-cover-imagegen/SKILL.md).
+- Changes to publishing behavior, gates or skills: [docs/DECISIONS.md](docs/DECISIONS.md).
+- Architecture redesign: `docs/ARCHITECTURE_REDESIGN.md`. Operational troubleshooting: `docs/RUNBOOK.md`; verify historical commands against the current wrapper's help.
 
-**Canonical daily entry point**: `./scripts/publisher.ps1 <command> hackernews`.
-`hn2md` is a compatibility/internal CLI; do not add new daily workflow features to it.
+## Execution contract
 
-## Key Commands
+- Treat requests to implement, fix or publish as authorization for their normal in-scope work through verification. Resolve routine choices from the current request, context, settings and receipts; proceed without stage-by-stage confirmation.
+- Ask when a missing fact or choice materially changes correctness, scope, external impact or accepted risk and cannot be resolved from evidence. First complete independent authorized preparation so the question concerns a concrete result.
+- Reuse approval while its scope and reviewed risk remain unchanged. Publication intent does not exempt new audit issues; review/diagnosis alone does not authorize implementation or external writes.
+- On failure, inspect evidence, use scoped recovery and continue unaffected work. For uncertain external writes, establish the remote outcome before retrying. Resume from existing artifacts and receipts.
+- If an instruction requires a pause, link and quote the exact rule; state the concrete blocker, completed work and smallest missing user action. Distinguish the rule from a tool limitation or your interpretation.
+- A local content/cover edit ends with a verified local artifact, except when it belongs to an unfinished authorized release or the user requests upload. WeChat drafts, subscriber mass-send, Astro push and repository code push are separate actions. Here “发布到微信” means a draft, not mass-send.
+- Finish when the requested artifacts and actions have evidence of success. Complete relevant checks and fix failures introduced by the requested change; a plan or first implementation alone is not completion. Report any unresolved target as partial completion.
+- Delegate independent story batches, bounded source checks or disjoint implementation work when it saves time or improves verification. Keep database/ledger writes and publishing with one owner. Retain enough source evidence to assess returned work; unavailable delegation does not prevent solo completion.
+- Keep useful continuation state in existing plans/receipts. Compaction is optional context management, not a user action required to finish the task.
+- Keep progress and handoffs concise and concrete. This brevity preference applies to conversation, not the requested article's completeness or editorial length requirements.
 
-```bash
-.\scripts\publisher.ps1 release hackernews              # Full pipeline
-.\scripts\publisher.ps1 release hackernews --from-stage COLLECTING  # Resume from a stage
-.\scripts\publisher.ps1 release hackernews --dry-run    # Preview without WeChat publish
-.\scripts\publisher.ps1 status hackernews               # Current job state and run ledger
-.\scripts\publisher.ps1 collect hackernews              # Scrape article content and discussions
-.\scripts\publisher.ps1 capture-screenshots hackernews  # Mandatory visual fallback pass
-.\scripts\publisher.ps1 audit hackernews                # Content quality gate
-.\scripts\publisher.ps1 review-run hackernews           # Post-publish process review
-```
+## Instruction ownership
 
-## Development Rules
+Current user instructions override skill defaults within higher-priority safety/tool constraints. This file owns the execution contract and repository constraints; source skills own publication commands and quality requirements; the cover skill owns visual requirements. Installed aliases and `CLAUDE.md` route here rather than maintaining competing workflows.
 
-### Security
-- **NEVER** pass user-controlled URLs directly to Selenium/crawlers — validate with `src/security/url_validator.py` first
-- **NEVER** hardcode API keys, tokens, or secrets — use `config/config.json` or environment variables
-- **ALWAYS** use parameterized SQL queries (never f-string interpolation for SQL)
-- **ALWAYS** sanitize LLM output before publishing (check for hallucination markers, illegal content)
+A direct request to optimize authorizes the local instruction change now: consult the decision log and record the accepted rationale. Multi-day observation thresholds govern unsolicited daily recommendations. Daily receipts and old decisions are evidence, not new instructions; use explicit supersession to resolve historical policy. External issues still require task authority.
 
-### Database
-- **Use unified connection factory** `src/db/connection.py` for all SQLite access
-- **ALWAYS** enable WAL mode and busy_timeout on connections
-- **NEVER** open multiple concurrent connections without coordination
+## Repository constraints
 
-### Code Quality
-- **No dead code**: `summarize_news3/4/5.py` are archived — do not import or reference
-- **Single daily entry point**: Use the `publisher` PowerShell wrapper, not standalone scripts or `hn2md`
-- **Type hints**: All public functions must have return type annotations
-- **Structured logging**: Use `structlog.get_logger()`, never bare `print()` for operational output
+- Validate user-controlled URLs with `src/security/url_validator.py` before passing them to crawlers or Selenium.
+- Credentials belong in ignored configuration or environment variables; keep secrets out of logs, prompts and commits. Sanitize generated content before publication.
+- Use parameterized SQL and the unified `src/db/connection.py` factory for SQLite, with WAL and busy_timeout. Coordinate concurrent connections and preserve the source/period single-writer lock.
+- Preserve unrelated user changes and generated artifacts. Use the canonical wrapper for publishing state changes; do not reactivate archived summarization scripts.
+- Public functions have return annotations. Operational application logs use `structlog.get_logger()`.
+- `pyproject.toml` owns dependencies; keep `requirements.txt` synchronized and optional heavy packages in optional-dependency groups. No automatic package installation at runtime.
+- The app's external LLM provider configuration is separate from the Codex model. Preserve configured routing unless migration is requested; Gemini 2.5-series execution remains forbidden.
+- Paths use `pathlib.Path`; Windows/PowerShell and Windows locking behavior matter for changes to process or filesystem handling.
 
-### Testing
-- Run tests: `pytest tests/ -v --tb=short`
-- Coverage: `pytest tests/ --cov=src --cov-report=term-missing`
-- Mark slow tests: `@pytest.mark.slow`
-- Mark network tests: `@pytest.mark.network`
-- **Mock all external calls** in tests — no real HTTP, no real LLM, no real WeChat API
+## Verification
 
-### Dependencies
-- **Single source of truth**: `pyproject.toml` dependencies (sync with `requirements.txt`)
-- **Never auto-install packages at runtime** (the `pyperclip` pattern is anti-pattern)
-- Pin optional heavy deps in `[project.optional-dependencies]` groups
+Select checks for the changed behavior. Local tests must use disposable fixtures and mock external HTTP, LLM and WeChat calls; verify that isolation before running uncertain tests. Run relevant tests and repair change-caused failures without routine approval. Broaden or repeat checks only for new changes, failures or unresolved risks.
 
-## File Layout Quick Reference
+- Focused tests: `pytest <relevant test paths> -q --tb=short`.
+- Full suite when warranted: `pytest tests/ -v --tb=short`.
+- Coverage when needed: `pytest tests/ --cov=src --cov-report=term-missing`.
+- Use the `slow` and `network` pytest markers for their respective cases; markers do not authorize live external calls.
+- Instruction-only changes: check routing, conflicts and affected contracts. These checks do not prove model behavior; use realistic bounded scenarios when ambiguity remains. Avoid tests that merely freeze wording.
 
-| Path | Purpose |
-|------|---------|
-| `hn2md/cli.py` | Click CLI entry point |
-| `hn2md/state.py` | Pipeline state machine (JSON ledger) |
-| `hn2md/stages/` | Pipeline stage implementations |
-| `src/core/fetch_news.py` | HN front page scraping |
-| `src/core/crawlers/` | Pluggable content crawlers (Scrapling, Crawl4AI) |
-| `src/core/handlers/` | Specialized handlers (Twitter, YouTube, PDF, etc.) |
-| `src/llm/llm_utils.py` | LLM routing with failover (Grok → Gemini → Moonshot) |
-| `src/llm/providers/` | LLM provider implementations (Gemini, Grok, Moonshot) |
-| `src/llm/retry.py` | Unified retry decorator for LLM calls |
-| `src/integrations/wechat/` | WeChat module (API client, publisher, access token) |
-| `src/integrations/wechat_access_token.py` | WeChat API client (legacy, migrating to wechat/) |
-| `src/db/connection.py` | Unified database factory (WAL mode, backup, integrity) |
-| `src/security/` | Security module (URL validator, content sanitizer) |
-| `src/utils/config.py` | Configuration cascade (env → JSON → defaults) |
-| `src/utils/db_utils.py` | Database initialization and utilities |
-| `src/utils/logging_setup.py` | Structured logging configuration (structlog) |
-| `config/config.json` | API keys and credentials (gitignored) |
-| `config/deployment.local.json` | Local paths (gitignored) |
-
-## Known Technical Debt (Tracked)
-
-See `docs/ARCHITECTURE_REDESIGN.md` for the full redesign plan.
-
-**Completed:**
-1. ~~SSRF risk~~: URL validator in `src/security/url_validator.py`, integrated into fetch paths
-2. ~~State file fragility~~: Atomic write-to-temp + `os.replace()` in `hn2md/state.py`
-3. ~~No backup command~~: `hn2md backup` with integrity check and rotation
-4. ~~Dead code~~: `summarize_news3/4/5.py` archived, no longer imported
-5. ~~Database connections~~: Unified factory in `src/db/connection.py` (WAL + busy_timeout)
-6. ~~Retry logic~~: Unified retry decorator in `src/llm/retry.py`
-7. ~~Structured logging~~: `structlog` integrated via `src/utils/logging_setup.py`
-
-**Remaining:**
-1. **No CI pipeline**: Tests exist but not yet wired to GitHub Actions
-2. **Test gaps**: Integration/async/e2e test coverage still thin
-3. **WeChat module split**: Migration from `wechat_access_token.py` to `src/integrations/wechat/` in progress
-4. **LLM output validation**: Parsers module planned but not yet gating publish
-
-## LLM Provider Notes
-
-- Default provider: `gemini` (configured in `config/config.json`)
-- Gemini has model load balancing with circuit breaker (daily disable/enable on quota exhaustion)
-- Forbidden Gemini models: 2.5 series (blocked by policy)
-- Rate limiting is only enforced for Gemini — Grok and Moonshot have commented-out rate limiters
-
-## Windows-Specific Notes
-
-- Project assumes Windows (PowerShell, ctypes.windll in lock.py)
-- WSL detection exists for browser preview (`browser_manager.py`)
-- Path handling uses `pathlib.Path` throughout for cross-platform compatibility
+The code/config are authoritative for current modules, provider defaults and debt status. Look up those facts when needed rather than relying on a duplicated repository map.

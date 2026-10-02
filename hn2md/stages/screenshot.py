@@ -22,4 +22,6 @@ class CaptureScreenshotsStage(BaseStage):
         concurrency: int = 4,
     ) -> dict[str, object]:
         progress_path = ctx.job_dir / f"capture_progress_{machine.job.date}.json"
-        return capture_missing_screenshots(ctx, concurrency=concurrency, progress_path=progress_path)
+        return capture_missing_screenshots(
+            ctx, concurrency=concurrency, progress_path=progress_path, period=machine.job.date
+        )

@@ -5,6 +5,7 @@ from pathlib import Path
 import json as json_mod
 import re
 import sqlite3
+import subprocess
 from urllib.parse import urlsplit
 
 import click
@@ -86,6 +87,53 @@ def _run_single_stage(
     return result
 
 
+def _aggregate_capture_receipts(machine: JobStateMachine) -> dict[str, int | str] | None:
+    """Return cumulative capture progress across partial reruns."""
+    history = machine.job.receipts.get(Stage.CAPTURING.value)
+    receipts = history if isinstance(history, list) else []
+    if not receipts:
+        latest = machine.job.stages.get(Stage.CAPTURING.value)
+        receipts = [latest] if isinstance(latest, dict) else []
+
+    requested_items: set[str] = set()
+    captured_items: set[str] = set()
+    fallback_requested = 0
+    fallback_captured = 0
+    status_value = "unknown"
+    for receipt in receipts:
+        if not isinstance(receipt, dict):
+            continue
+        output = receipt.get("output_summary")
+        if not isinstance(output, dict):
+            continue
+        status_value = str(output.get("status") or status_value)
+        fallback_requested = max(fallback_requested, int(output.get("requested") or 0))
+        fallback_captured = max(fallback_captured, int(output.get("captured") or 0))
+        for index, item in enumerate(output.get("items") or []):
+            if not isinstance(item, dict):
+                continue
+            identity = item.get("id") or item.get("url") or item.get("news_url")
+            key = str(identity) if identity is not None else f"receipt-{id(receipt)}-{index}"
+            requested_items.add(key)
+            if item.get("captured") is True:
+                captured_items.add(key)
+
+    if requested_items:
+        captured = len(captured_items)
+        requested = len(requested_items)
+    elif receipts:
+        captured = fallback_captured
+        requested = fallback_requested
+    else:
+        return None
+    return {
+        "status": "completed" if requested and captured == requested else status_value,
+        "completed": captured,
+        "requested": requested,
+        "captured": captured,
+    }
+
+
 def _date_where_clause() -> str:
     return "id = ? AND strftime('%Y%m%d', created_at) = ?"
 
@@ -149,20 +197,27 @@ def status(source_name: str, date_value: str | None, year: int | None, month: in
     machine, _ = JobStateMachine.load_or_create(ctx.job_dir, period)
     click.echo(f"Status: {machine.job.status}")
     progress_path = ctx.job_dir / f"capture_progress_{period}.json"
+    progress = None
     if progress_path.exists():
         try:
             progress = json_mod.loads(progress_path.read_text(encoding="utf-8"))
         except (OSError, json_mod.JSONDecodeError):
             progress = None
-        if isinstance(progress, dict) and progress.get("stage") == "CAPTURING":
-            click.echo(
-                "Capture: {status} ({completed}/{requested}, captured {captured})".format(
-                    status=progress.get("status", "unknown"),
-                    completed=progress.get("completed", 0),
-                    requested=progress.get("requested", 0),
-                    captured=progress.get("captured", 0),
-                )
+    if not (
+        isinstance(progress, dict)
+        and progress.get("stage") == "CAPTURING"
+        and progress.get("status") == "running"
+    ):
+        progress = _aggregate_capture_receipts(machine)
+    if isinstance(progress, dict):
+        click.echo(
+            "Capture: {status} ({completed}/{requested}, captured {captured})".format(
+                status=progress.get("status", "unknown"),
+                completed=progress.get("completed", 0),
+                requested=progress.get("requested", 0),
+                captured=progress.get("captured", 0),
             )
+        )
 
 
 @main.command("unlock")
@@ -299,7 +354,9 @@ def audit(
     effective_phase = phase
     if phase == "auto":
         effective_phase = "strict" if machine.stage_completed_successfully(Stage.APPLYING) else "pre-plan"
-    report = run_audit(_hn_runtime_context(ctx), include_summaries=effective_phase == "strict")
+    report = run_audit(
+        _hn_runtime_context(ctx), include_summaries=effective_phase == "strict", period=ctx.period
+    )
     report["phase"] = effective_phase
     machine.record_audit_report(report)
     if json_output:
@@ -324,6 +381,7 @@ def review_run(source_name: str, date_value: str | None, json_output: bool, verb
         job_dir=ctx.job_dir,
         db_path=ctx.db_path,
         output_dir=ctx.output_dir,
+        date_str=ctx.period,
         dry_run=False,
         verbose=verbose,
     )
@@ -334,8 +392,133 @@ def review_run(source_name: str, date_value: str | None, json_output: bool, verb
         for finding in result["findings"]:
             click.echo(f"  [{finding['severity']}] {finding['check']}: {finding['message']}")
         click.echo(f"JSONL trail: {result['jsonl_path']}")
+        daily_summary = result.get("daily_summary", {})
+        if daily_summary:
+            click.echo(
+                "Daily summary: "
+                f"status={daily_summary.get('status')}, "
+                f"stories={daily_summary.get('story_count')}, "
+                f"warnings={daily_summary.get('warning_count')}"
+            )
+        for recommendation in result.get("recommendations", []):
+            click.echo(
+                f"  [{recommendation.get('status')}] {recommendation.get('code')}: "
+                f"{recommendation.get('title')} ({recommendation.get('occurrence_count')} run(s))"
+            )
+        if daily_summary.get("compact_safe"):
+            click.echo(daily_summary.get("compact_message"))
     if result.get("blocking_count", 0):
         raise click.ClickException("run review found blocking follow-up item(s)")
+
+
+def _run_git(repo: Path, *arguments: str, check: bool = True) -> subprocess.CompletedProcess[str]:
+    """Run one read-only Git inspection command for publication evidence."""
+    return subprocess.run(
+        ["git", "-C", str(repo), *arguments],
+        check=check,
+        capture_output=True,
+        text=True,
+    )
+
+
+@main.command("record-astro")
+@click.argument("source_name")
+@click.option("--date", "date_value", default=None, help="YYYY-MM-DD or YYYYMMDD")
+def record_astro(source_name: str, date_value: str | None) -> None:
+    """Verify the rendered Astro article is on origin, then record durable evidence."""
+    ctx = _ensure_hackernews(source_name, date_value)
+    machine, _ = JobStateMachine.load_or_create(ctx.job_dir, ctx.period)
+    rendering = machine.job.stages.get(Stage.RENDERING.value)
+    output = rendering.get("output_summary", {}) if isinstance(rendering, dict) else {}
+    astro_value = output.get("astro_file") if isinstance(output, dict) else None
+    if not isinstance(astro_value, str) or not astro_value:
+        raise click.ClickException("RENDERING did not record an Astro file")
+
+    from src.utils.deployment import load_deployment_settings
+
+    settings = load_deployment_settings(project_root=ctx.project_root)
+    repo = settings.astro_repo.resolve() if settings.astro_repo else None
+    if not settings.astro_enabled or repo is None or not repo.is_dir():
+        raise click.ClickException("Astro repository is not enabled or available")
+    astro_file = Path(astro_value).resolve()
+    if not astro_file.is_file():
+        raise click.ClickException(f"Rendered Astro file does not exist: {astro_file}")
+    try:
+        relative_file = astro_file.relative_to(repo)
+    except ValueError as exc:
+        raise click.ClickException("Rendered Astro file is outside the configured repository") from exc
+
+    try:
+        head = _run_git(repo, "rev-parse", "HEAD").stdout.strip()
+        branch = _run_git(repo, "rev-parse", "--abbrev-ref", "HEAD").stdout.strip()
+        file_commit = _run_git(repo, "log", "-1", "--format=%H", "--", str(relative_file)).stdout.strip()
+        remote_line = _run_git(repo, "ls-remote", "origin", f"refs/heads/{branch}").stdout.strip()
+    except subprocess.CalledProcessError as exc:
+        raise click.ClickException((exc.stderr or str(exc)).strip()) from exc
+    remote_head = remote_line.split()[0] if remote_line else ""
+    if not file_commit:
+        raise click.ClickException("Astro file has not been committed")
+    if not remote_head or remote_head != head:
+        raise click.ClickException("Local Astro HEAD is not verified on origin; push it before recording evidence")
+    ancestor = _run_git(repo, "merge-base", "--is-ancestor", file_commit, head, check=False)
+    if ancestor.returncode != 0:
+        raise click.ClickException("The Astro file commit is not contained in the pushed branch")
+
+    evidence = {
+        "status": "pushed",
+        "repo": str(repo),
+        "file": str(astro_file),
+        "commit": file_commit,
+        "remote": f"origin/{branch}",
+        "remote_head": remote_head,
+        "remote_verified": True,
+        "verified_at": datetime.now().isoformat(),
+    }
+    machine.record_manual_astro(evidence)
+    click.echo(f"Astro evidence recorded: {file_commit} on origin/{branch}")
+
+
+@main.command("record-keyword-review")
+@click.argument("source_name")
+@click.option("--date", "date_value", default=None, help="YYYY-MM-DD or YYYYMMDD")
+@click.option("--keyword", required=True)
+@click.option("--sentence", required=True)
+@click.option(
+    "--classification",
+    required=True,
+    type=click.Choice(["positive", "neutral", "negative"], case_sensitive=False),
+)
+@click.option("--decision", required=True, help="User or editorial decision, for example 保留并发布")
+def record_keyword_review(
+    source_name: str,
+    date_value: str | None,
+    keyword: str,
+    sentence: str,
+    classification: str,
+    decision: str,
+) -> None:
+    """Record the contextual review decision for one keyword-bearing sentence."""
+    ctx = _ensure_hackernews(source_name, date_value)
+    machine, _ = JobStateMachine.load_or_create(ctx.job_dir, ctx.period)
+    rendering = machine.job.stages.get(Stage.RENDERING.value)
+    output = rendering.get("output_summary", {}) if isinstance(rendering, dict) else {}
+    markdown_value = output.get("markdown_file") if isinstance(output, dict) else None
+    markdown_path = Path(markdown_value).resolve() if isinstance(markdown_value, str) else None
+    if markdown_path is None or not markdown_path.is_file():
+        raise click.ClickException("RENDERING did not produce a readable Markdown file")
+    markdown_text = markdown_path.read_text(encoding="utf-8")
+    if keyword not in sentence or sentence not in markdown_text:
+        raise click.ClickException("The reviewed keyword sentence does not exactly match the rendered article")
+    machine.record_keyword_decision(
+        {
+            "keyword": keyword,
+            "sentence": sentence,
+            "classification": classification.lower(),
+            "decision": decision,
+            "reviewed_at": datetime.now().isoformat(),
+        }
+    )
+    click.echo(f"Keyword review recorded: {keyword} ({classification.lower()}) -> {decision}")
 
 
 @main.command("export-context")
@@ -524,7 +707,7 @@ def set_content(
     from hn2md.stages.collect import write_collection_context
     from publisher.pipeline.runner import _hn_runtime_context
 
-    context_file = write_collection_context(_hn_runtime_context(ctx))
+    context_file = write_collection_context(_hn_runtime_context(ctx), period=ctx.period)
     machine, _ = JobStateMachine.load_or_create(ctx.job_dir, ctx.period)
     machine.refresh_collection_context(context_file, news_id)
     machine.invalidate_audit()
@@ -532,6 +715,65 @@ def set_content(
         f"Updated story {news_id} content from {content_file}; refreshed collection context "
         f"without re-crawling other stories: {context_file}"
     )
+
+
+@main.command("record-screenshot-waiver")
+@click.argument("source_name")
+@click.argument("news_id", type=int)
+@click.option("--date", "date_value", default=None, help="YYYY-MM-DD or YYYYMMDD")
+@click.option("--url", "news_url", required=True, help="Exact source URL for the waived story")
+@click.option("--reason", required=True, help="Why the screenshot cannot be obtained")
+@click.option("--user-confirmed", is_flag=True, help="Record explicit user approval for this one-off omission")
+def record_screenshot_waiver(
+    source_name: str,
+    news_id: int,
+    date_value: str | None,
+    news_url: str,
+    reason: str,
+    user_confirmed: bool,
+) -> None:
+    """Record a user-approved, story-specific missing-screenshot exception."""
+    if not user_confirmed:
+        raise click.ClickException("An explicit user decision is required: --user-confirmed")
+    if not reason.strip():
+        raise click.ClickException("A nonempty reason is required")
+    ctx = _ensure_hackernews(source_name, date_value)
+    machine, _ = JobStateMachine.load_or_create(ctx.job_dir, ctx.period)
+    with get_db(str(ctx.db_path)) as conn:
+        conn.row_factory = sqlite3.Row
+        row = conn.execute(
+            "SELECT news_url, screenshot FROM news WHERE " + _date_where_clause(),
+            (news_id, ctx.period),
+        ).fetchone()
+    if row is None or row["news_url"] != news_url:
+        raise click.ClickException("Story ID, date and exact source URL do not match")
+    if row["screenshot"]:
+        raise click.ClickException("Story already has a screenshot; no waiver is needed")
+    receipts = machine.job.receipts.get(Stage.CAPTURING.value, [])
+    if isinstance(receipts, dict):
+        receipts = [receipts]
+    attempted = any(
+        item.get("id") == news_id and item.get("captured") is False
+        for receipt in receipts
+        for item in receipt.get("output_summary", {}).get("items", [])
+    )
+    if not attempted:
+        raise click.ClickException("No failed screenshot attempt is recorded for this story")
+    waiver = {
+        "period": ctx.period,
+        "run_id": machine.job.run_id,
+        "news_id": news_id,
+        "news_url": news_url,
+        "reason": reason.strip(),
+        "approved_by": "user",
+        "recorded_at": datetime.now().isoformat(),
+    }
+    machine.job.screenshot_waivers = [
+        existing for existing in machine.job.screenshot_waivers
+        if not (existing.get("period") == ctx.period and existing.get("news_id") == news_id)
+    ] + [waiver]
+    machine._save()
+    click.echo(f"Screenshot waiver recorded for {ctx.period}/{news_id}: {news_url}")
 
 
 @main.command("repair-story")
@@ -749,6 +991,7 @@ def cover(
 @click.option("--target", "targets", multiple=True, type=click.Choice(["wechat", "astro"]))
 @click.option("--dry-run", is_flag=True)
 @click.option("--rerun", is_flag=True)
+@click.option("--new-draft", is_flag=True, help="Explicitly create another WeChat draft after a prior success")
 @click.option("--year", type=int, default=None)
 @click.option("--month", type=int, default=None)
 def publish(
@@ -759,6 +1002,7 @@ def publish(
     targets: tuple[str, ...],
     dry_run: bool,
     rerun: bool,
+    new_draft: bool,
     year: int | None,
     month: int | None,
 ) -> None:
@@ -769,7 +1013,8 @@ def publish(
         stages=(GenericStage.PUBLISHING,),
         dry_run=dry_run,
         targets=targets or source.default_publish_targets,
-        rerun=rerun,
+        rerun=rerun or new_draft,
+        allow_duplicate_publish=new_draft,
         stage_kwargs={GenericStage.PUBLISHING: {"markdown_file": markdown_file, "cover_image": cover_image}},
     )
     click.echo(f"{GenericStage.PUBLISHING.value} complete: {result}")
@@ -782,6 +1027,7 @@ def publish(
 @click.option("--from-stage", default=None, help="Start from a declared stage, e.g. PUBLISHING")
 @click.option("--target", "targets", multiple=True, type=click.Choice(["wechat", "astro"]))
 @click.option("--rerun", is_flag=True, help="Run selected stages even if the ledger says they already succeeded")
+@click.option("--new-draft", is_flag=True, help="Explicitly create another WeChat draft after a prior success")
 @click.option("--year", type=int, default=None)
 @click.option("--month", type=int, default=None)
 def release(
@@ -791,6 +1037,7 @@ def release(
     from_stage: str | None,
     targets: tuple[str, ...],
     rerun: bool,
+    new_draft: bool,
     year: int | None,
     month: int | None,
 ) -> None:
@@ -827,7 +1074,8 @@ def release(
         stages=stages,
         dry_run=dry_run,
         targets=effective_targets,
-        rerun=rerun,
+        rerun=rerun or new_draft,
+        allow_duplicate_publish=new_draft,
     )
     click.echo(f"Release complete: {result}")
 

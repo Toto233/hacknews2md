@@ -1,32 +1,27 @@
 ---
 name: publish-hacknews-codex
-description: Use when publishing the daily HackNews Chinese recap with publisher, Codex manual planning, WeChat drafts, Astro sync, cover images, post-run review, or manual content repair.
+description: Prepare, publish or resume the daily Chinese HackerNews recap with WeChat drafts and an Astro mirror.
 ---
 
 # Publish HackNews with Codex
 
-For every command below, use the repository wrapper `./scripts/publisher.ps1`; do not depend on a globally activated virtual environment.
+Follow [AGENTS.md](../../AGENTS.md) for execution scope. Run commands from `D:/python/hacknews2md_re` using `./scripts/publisher.ps1`. Codex writes the manual plan; 导入 manual plan 时不得调用 Gemini/Grok/Moonshot。
 
-Run every command from the repository root. `publisher` is the only publishing entry point; Codex is the manual-plan content model. 导入 manual plan 时不得调用 Gemini/Grok/Moonshot。默认完整发布必须同时完成 WeChat 和 Astro；只有用户明确要求“只发微信”“不要 Astro”“重发微信草稿”时，才使用 `--target wechat`。
+## Scope and resumption
 
-## Run Safety
-
-- `publisher` serializes each source/period with an atomic daily lock. Do not start a second daily command while another is running; retain the returned `run_id` when reporting or auditing a run.
-- A dead process or lock older than one hour is recovered automatically by the next command. For explicit recovery, run:
-
-```powershell
-.\scripts\publisher.ps1 unlock hackernews
-```
-
-- If the lock holder is still alive, do not delete the lock file. Confirm that the run is stuck, then terminate its process tree and release the lock explicitly:
+- “发布今天新闻” authorizes preparing, auditing, rendering, covering, creating a WeChat draft, attempting Astro sync, and reviewing the result. No routine stage confirmation. 默认完整发布同时尝试 WeChat 和 Astro; only an 明确要求 such as “只发微信” or “重发微信草稿” narrows the target.
+- First inspect status and existing artifacts. “继续” resumes unfinished work, not a fresh collection or duplicate upload. For an already-completed identical release, report its existing receipt unless the user requests another draft.
+- Enter at the first unfinished or invalidated dependency. The sections below describe stage contracts, not a requirement to replay completed stages. A local edit follows AGENTS.md's artifact-only boundary unless publication is still authorized and unfinished.
 
 ```powershell
-.\scripts\publisher.ps1 unlock hackernews --terminate
+.\scripts\publisher.ps1 status hackernews
 ```
 
-- Never force-delete a lock file. It can make two runs overwrite the same ledger and Astro artifact.
+Keep the `run_id` and one state writer. For a stale lock, missing source, audit exception, explicit resend or incomplete Astro mirror, read the applicable section of [recovery commands](references/recovery.md) before acting on that branch.
 
-## 1. Collect
+## 1. Collect and resolve sources
+
+For a new daily run:
 
 ```powershell
 .\scripts\publisher.ps1 fetch hackernews
@@ -34,258 +29,128 @@ Run every command from the repository root. `publisher` is the only publishing e
 .\scripts\publisher.ps1 capture-screenshots hackernews --concurrency 3
 ```
 
-Every story with a source URL must have a saved screenshot before WeChat publication. Capture remains concurrent and does not block collection; if publishing reports missing screenshots, retry just the missing rows:
+Use collection receipts/`context_file` to inspect today's IDs, source types, article and discussion lengths. A standalone `sqlite3` executable is not required; any necessary database inspection uses the repository connection factory.
 
-```powershell
-.\scripts\publisher.ps1 capture-screenshots hackernews --rerun --concurrency 4
-```
+- 正文为空、登录页、只有标题/图片说明/推荐链接，或明显截断，都不算已取得正文。不得用公开知识猜正文。Use captured text, an attributed alternate source, or `human_supplied` content.
+- `action_required=human_input_or_handler` requires source recovery, not an immediate whole-task pause; use the recovery reference. A nonempty extract or passing length check does not prove the source is complete.
+- Keep HN comments distinct from article/site comments. For Show HN, the author's submission can be an attributed `hn_submission` fallback; community comments cannot substitute for the article.
+- Each source URL needs its screenshot before WeChat upload by default. Missing screenshots do not block planning. Retry failed captures with `capture-screenshots hackernews --rerun --concurrency 4`; if unresolved, report affected IDs/URLs and withhold upload. Only an explicit user decision to omit a specific failed screenshot permits a one-run exception: record the exact date, ID, URL and reason with `record-screenshot-waiver hackernews <id> --date YYYY-MM-DD --url "<exact URL>" --reason "<reason>" --user-confirmed`, then report the omission in the final handoff. Never fabricate a screenshot or remove a source merely to evade this gate.
 
-If retries still fail, report each story ID and URL to the user. Do not create the WeChat draft until screenshots are present or the source is deliberately resolved.
+When 用户说“补齐了”, use `set-content` as documented in the recovery reference; it refreshes context locally. Audit next without recrawling unrelated sources.
 
-Completion criterion: collection returns a `context_file`, DB rows exist for today, and content/discussion lengths have been checked:
-
-```powershell
-sqlite3 -header -column ".\data\hacknews.db" "select id, length(coalesce(article_content,'')) article_len, length(coalesce(discussion_content,'')) discussion_len, title, news_url from news where date(created_at)=date('now','localtime') order by id;"
-```
-
-Collect triage:
-
-- 正文为空、登录页或明显截断时，报告 ID、标题、URL。
-- 不得用公开知识猜正文；只允许使用抓取到的 `full_text`、明确标记的替代来源，或用户提供的 `human_supplied` 内容。
-- `content_warnings` 中有 `action_required=human_input_or_handler` 时，暂停并报告 ID、URL、domain、reason、failure_count；让用户选择人工补全、增加 handler、加入 filter 或跳过。
-- `scraper_failures` 同一 domain 失败 2 次时提示可能需要 handler；3 次及以上时强提示建议新增 handler 或加入 filter，但不自动加入 filter。
-- 稳定 401/403、订阅墙、付费墙要报告，不自动删除。
-
-Manual repair uses publisher commands, not handwritten SQL:
-
-```powershell
-.\scripts\publisher.ps1 review-missing hackernews
-.\scripts\publisher.ps1 set-content hackernews <id> --file ".\path\to\body.txt" --source-type human_supplied --source-url "<url>"
-.\scripts\publisher.ps1 mark-source hackernews <id> --type human_supplied --url "<url>"
-.\scripts\publisher.ps1 filter-domain hackernews <domain-or-url> --reason "paywall"
-.\scripts\publisher.ps1 skip-story hackernews <id> --filter-domain --reason "403"
-```
-
-When 用户说“补齐了”, refresh the collection receipt before planning:
+## 2. Pre-plan audit and writing
 
 ```powershell
 .\scripts\publisher.ps1 audit hackernews --phase pre-plan --json
-```
-
-Use `filter-domain` to block future stories from a confirmed paywall or unusable domain while keeping today's story. Only use `skip-story --filter-domain` after the user confirms the current story should also be dropped.
-
-## 2. Plan
-
-First run the gate:
-
-```powershell
-.\scripts\publisher.ps1 audit hackernews --json
-```
-
-If `blocking_count > 0`, summarize the blocking issues and wait for user confirmation. If the user accepts the risk, record the exemption:
-
-```powershell
-.\scripts\publisher.ps1 audit hackernews --approve
-```
-
-Then export compact plan material to save context:
-
-```powershell
 .\scripts\publisher.ps1 draft-plan hackernews
 ```
 
-`draft-plan` writes `output/codex/hacknews_plan_draft_YYYYMMDD_HHMMSS.json` with titles, URLs, source fields, existing summaries, total content lengths, and short article/discussion excerpts. Use it first. Read the full `context_file` or DB content only when excerpts are insufficient, content looks missing, source provenance needs verification, or the user asks for deep reading.
+Raw `blocking_count > 0` and command exit status do not establish whether an exception is approved. Check the issues and ledger fingerprint; repair what is in scope and reuse only an unchanged recorded exemption. New eligible exceptions use the recovery reference; non-exemptible issues require repair.
+
+Use `draft-plan` for navigation and bounded input. Read full `context_file` entries whenever excerpts do not support the proposed title or summary. Context saving must not replace evidence. If useful, delegate independent story batches or a targeted source check to native subagents; they return drafts/evidence, not DB changes or uploads. The main agent owns integration and final verification.
 
 Create `output/codex/hacknews_plan_YYYYMMDD_HHMMSS.json`:
 
 ```json
 {
   "tags": ["标签1", "标签2", "标签3", "标签4"],
-  "ordered_ids": [2870, 2869],
-  "items": [
-    {
-      "id": 2870,
-      "title_chs": "中文标题",
-      "content_summary": "约 300-400 字正文摘要",
-      "discuss_summary": "约 200-250 字讨论摘要",
-      "discuss_summary_source_type": "external_hn_snippet",
-      "discuss_summary_source_url": "https://news.ycombinator.com/item?id=2870"
-    }
-  ]
+  "ordered_ids": [2870],
+  "items": [{
+    "id": 2870,
+    "title_chs": "中文标题",
+    "content_summary": "约 300–400 字正文摘要",
+    "discuss_summary": "约 200–250 字讨论摘要"
+  }]
 }
 ```
 
-Plan contract:
+- Four unique tags; `ordered_ids` covers all retained items exactly once.
+- Required fields: `title_chs`, `content_summary`, `discuss_summary`. Targets are 300–400 and 200–250 Chinese characters; non-exemptible minima are 280 and 180. Do not pad scarce source material with invented facts or generic prose: obtain more evidence or report the specific content blocker.
+- If `discussion_content 为空` but an attributed HN snippet/human text supports the discussion, include `discuss_summary_source_type` (e.g. `external_hn_snippet`) and `discuss_summary_source_url`.
 
-- Four unique tags and `ordered_ids` covering every item exactly once.
-- Every item has `title_chs`, `content_summary`, and `discuss_summary`.
-- If `discussion_content 为空` but `discuss_summary` uses an external HN snippet or human text, include `discuss_summary_source_type` and `discuss_summary_source_url`.
-- If validation fails, fix the JSON; do not switch to an external LLM.
+Before import, check the complete draft against its evidence and read it as one article:
 
-Before importing the plan, run an adapted `khazix-writer` four-layer review over every `title_chs`, `content_summary`, and `discuss_summary`:
+- Verify the subject, action, numerical comparisons, causal direction, and uncertainty in each title and lead claim. Explicitly resolve contradictions between the article and HN corrections; do not simply adopt whichever version is more dramatic.
+- Ground discussion summaries in actual HN comments. Preserve the concrete disagreement; distinguish commenter claims from verified facts and your own interpretation. Never turn one opinion into “社区共识” or attribute an article author's/site commenters' arguments to HN.
+- Keep Chinese clear, varied, and product/story-specific. Remove unsupported judgments and repeated filler. Automated lengths/schema checks do not certify factual fidelity.
 
-- L1: remove generic AI prose, textbook openings, empty transitions, vague product names, and repetitive report language.
-- L2: check readable spoken Chinese, sentence rhythm, natural transitions, and a clear lead sentence.
-- L3: ensure every factual claim, judgment, quote, and number is supported by the collected article or discussion material.
-- L4: read the complete daily recap as a reader and repair passages that feel mechanical, inflated, repetitive, or disconnected.
+Record material discrepancies and their resolution in the existing plan/run notes.
 
-This is an editorial review, not identity imitation. Do not add Khazix's name, signature, personal history, profanity, fixed catchphrases, or fabricated first-person experience. HackerNews is a concise multi-story digest, so its required headings, source links, colons, and summary length are explicit exceptions to the long-form formatting rules.
-
-## 3. Render
+## 3. Apply, strict audit, render
 
 ```powershell
 .\scripts\publisher.ps1 plan hackernews --manual-plan ".\output\codex\hacknews_plan_YYYYMMDD_HHMMSS.json"
 .\scripts\publisher.ps1 apply hackernews
+.\scripts\publisher.ps1 audit hackernews --phase strict --json
 .\scripts\publisher.ps1 render hackernews
 ```
 
-Completion criterion: command output records `markdown_file`, `html_file`, and, for a normal full publish, a non-empty `astro_file`. Rendering must preserve Codex `ordered_ids` and four tags.
+`summary_too_short` and `discussion_summary_too_short` cannot use `--approve`; revise the plan and rerun plan/apply/strict audit. Proceed only with no unapproved blockers and no non-exemptible issues. An unchanged, fingerprint-approved source exception may leave raw `blocking_count` nonzero; check the ledger and let the application enforce exemption validity.
 
-For a WeChat-only rerun:
-
-```powershell
-.\scripts\publisher.ps1 render hackernews --target wechat --rerun
-```
+Inspect generated `markdown_file` and `html_file`: order, four tags, links, paragraphs and source attribution must match the accepted plan; final HTML image references must resolve and preserve the intended image count. For full publication, inspect `astro_file` or the explicit skip reason. For a WeChat-only rerender use `render hackernews --target wechat --rerun`.
 
 ## 4. Cover
 
-Pick a 10-15 Chinese-character display title from the first item in the manual plan's `ordered_ids`: “主体 + 事件”. Do not select a lower-ranked story for visual appeal; the cover receipt records both the article title and the exact display title.
-
-Use the `wechat-cover-imagegen` skill and native ImageGen/Image2 to create the cover directly. Save the accepted 21:9 bitmap under `output/images/YYYYMMDD/`, then register that exact file with `publisher`:
+Use [wechat-cover-imagegen](../../.codex/skills/wechat-cover-imagegen/SKILL.md) when creating or revising the cover; it owns copy, crop, generation and recovery. Reuse an accepted cover when its article subject and requested wording are unchanged. For an unfinished authorized release, register the verified artifact; a local cover-only edit ends without changing the release ledger:
 
 ```powershell
-.\scripts\publisher.ps1 cover hackernews "<markdown_file>" --mode external --cover-image "<cover_image>" --display-title "<short-title>" --rerun
+.\scripts\publisher.ps1 cover hackernews "<markdown_file>" --mode external --cover-image "<cover_image>" --display-title "<exact-title>" --rerun
 ```
 
-The display title must describe the first `ordered_ids` item, remain in the central 1:1 crop, and contain no subtitle or small text. Do not call `--mode ai` in the daily workflow: it is only a legacy wrapper compatibility mode. If native ImageGen is unavailable, use the deterministic fallback:
+## 5. WeChat draft
+
+Review keyword warnings in context before upload. 关键词命中仅提醒，不硬阻止发布 means a match alone is not rejection, but the existing editorial approval rule still applies: inspect 整句话; clearly 褒义 proceeds with reporting; 中性或贬义 requires showing the sentence and 确认后再发布. Reuse prior explicit acceptance of the unchanged sentence/context; only rewrite it if requested. A new or materially changed warned sentence needs fresh review.
+
+After review, persist the exact keyword-bearing sentence and decision so later audits do not ask again for unchanged text:
 
 ```powershell
-.\scripts\publisher.ps1 cover hackernews "<markdown_file>" --mode pillow --rerun
+.\scripts\publisher.ps1 record-keyword-review hackernews --date YYYY-MM-DD --keyword "<keyword>" --sentence "<exact sentence>" --classification <positive|neutral|negative> --decision "<decision>"
 ```
-
-Completion criterion: the cover is readable, matches the first article, has a 2.45:1 layout, and its receipt contains the center `1:1` share preview.
-
-## 5. Publish WeChat
 
 ```powershell
 .\scripts\publisher.ps1 publish hackernews "<markdown_file>" --cover-image "<cover_image>" --target wechat
 ```
 
-Dry-run:
+For preview only, add `--dry-run --rerun`. Preview is not a live draft.
 
-```powershell
-.\scripts\publisher.ps1 publish hackernews "<markdown_file>" --cover-image "<cover_image>" --target wechat --dry-run --rerun
-```
+Require a returned draft Media ID. For uncertain outcomes or an explicit request for another draft, use the recovery reference. When remote readback is available, compare the draft's article text, cover and image count to the local artifact; WeChat may expose image URLs as `data-src`. Preserve older drafts.
 
-Completion criterion: report the draft Media ID and any oversized-image skip list.
+## 6. Astro and completion
 
-The publish stage checks screenshots before it requests a WeChat token or uploads anything. A missing screenshot is a hard stop, not a warning; use the capture retry command above and rerun publish only after it is clean.
+A full run attempts Astro, but unavailable repo/preflight or Astro 仓库已有 staged changes must not block WeChat (2026-07-12 decision). Record `astro_skip_reason`; 不要删除文件，不要 reset, and do not unstage unrelated files. 无关未跟踪文件 remain untouched. Continue unaffected work and report the outstanding mirror accurately; do not claim full publication succeeded.
 
-Keyword review:
-
-- 关键词命中仅提醒，不硬阻止发布。
-- For each `keyword_warnings` item, inspect `keyword`, `line`, and `sentence`.
-- If 整句话 is clearly 褒义, continue and report the sentence.
-- If 整句话 is 中性或贬义, show the sentence to the user and wait.
-- 用户确认后再发布；only rewrite the sentence if the user asks.
-
-To republish today's WeChat draft without writing another Astro article:
-
-```powershell
-.\scripts\publisher.ps1 release hackernews --from-stage PUBLISHING --target wechat --rerun
-```
-
-## 6. Publish Astro
-
-Normal full publish requires Astro. Commit only the generated article:
+When preflight is clear, commit only this run's generated article and push:
 
 ```powershell
 git -C "<astro仓库>" status --short
 git -C "<astro仓库>" add -- "<本次文件相对路径>"
 git -C "<astro仓库>" commit -m "YYYYMMDD: 更新 HackNews 博客"
 git -C "<astro仓库>" push
+.\scripts\publisher.ps1 record-astro hackernews --date YYYY-MM-DD
 ```
 
-If `publisher render hackernews` reports Astro 仓库已有 staged changes:
+Do not run Astro build or include unrelated changes. Use command success/remote evidence for push status; a local commit alone is insufficient. `record-astro` verifies the rendered file's commit against the pushed branch before saving durable ledger evidence. A null automatic Astro field is not evidence of failure or success.
 
-- Run `git -C "<astro仓库>" status --short` and report staged/untracked files.
-- 不要删除文件，不要 reset。
-- If the user confirms old articles should be included, first unstage old articles so render can pass:
+After a successful draft, open today's image directory with Explorer if available. A UI failure is a reported convenience failure, not a publishing failure.
 
-```powershell
-git -C "<astro仓库>" restore --staged -- "<旧文章相对路径>"
-.\scripts\publisher.ps1 render hackernews
-```
+## 7. Daily review and stable improvements
 
-- After render succeeds, stage only user-confirmed old articles and the new article.
-- 无关未跟踪文件, such as `SPEC.md`, are not touched.
-
-Do not run Astro build. Do not process unrelated dirty files.
-
-## 7. Open Images
-
-After a successful publish, open today's image directory:
+Run once after the requested publication attempts reach their final outcome:
 
 ```powershell
-$imgDir = Join-Path (Get-Location) ("output\images\" + (Get-Date -Format yyyyMMdd))
-Start-Process explorer.exe -ArgumentList $imgDir
-```
-
-## 8. Review Run
-
-Always run post-run review after publishing:
-
-```powershell
-.\scripts\publisher.ps1 review-run hackernews
 .\scripts\publisher.ps1 review-run hackernews --json
 ```
 
-Completion criterion: the append-only history is written to `output/reviews/run_review_{YYYYMMDD}.jsonl`, the current conclusion is written to `output/reviews/run_review_latest_{YYYYMMDD}.json`, and blocking findings are explained. `review-run` is not content audit; it reviews the publishing process.
+It writes `output/reviews/run_review_{YYYYMMDD}.jsonl` and `output/reviews/run_review_latest_{YYYYMMDD}.json`. Inspect direct causes, summary ranges, story completeness, screenshots/images, keyword decisions, WeChat Media ID, and Astro evidence. Separate previews, user-requested revisions, content repairs and failure retries. Generic rerun counts do not establish repeated causes; explain conclusions that conflict with direct evidence.
 
-Trace each finding to its stage and direct cause:
+If a later continuation only repairs a target such as Astro push, append its new evidence to the same day's run notes; reuse the unchanged article review. A materially changed article needs an updated review, not another counted observation day.
 
-| check | severity | response |
-|---|---|---|
-| `wechat_media_id` | blocking | non-dry-run publish must return a media ID |
-| `image_preflight` | warning/info | explain skipped or compressed image counts |
-| `keyword_review` | warning | confirm how keyword hits were reviewed |
-| `completeness` | warning | compare DB stories with rendered markdown stories |
-| `astro_output` | warning | verify Astro output exists |
-| `stage_retry` | warning | identify the retried stage and cause |
-| `stage_warning` | warning/blocking | inspect image/content/discussion warnings |
-| `resolution` | info | historical warning was repaired, intentionally skipped, or recovered |
+Final handoff: draft ID/link, artifact paths, Astro status/commit or outstanding reason, story count and summary ranges, unresolved issues, and concise optimization advice when supported. Do not dump empty counters. Do not end with a compulsory `/compact` message or wait for compaction to continue; preserve plans/receipts so context can be compacted when needed.
 
-Trend checks:
+Recommendations use one promotion path:
 
-```powershell
-Get-Content output/reviews/run_review_*.jsonl | Select-String '"blocking"'
-Get-Content output/reviews/run_review_*.jsonl |
-  ForEach-Object { ($_ | ConvertFrom-Json).check } |
-  Group-Object | Sort-Object Count -Descending
-Get-Content output/reviews/run_review_latest_*.json |
-  ConvertFrom-Json |
-  Select-Object date, blocking_count, generated_at
-```
+- `observation`: one or two distinct daily runs within the latest seven.
+- `candidate`: at least three distinct daily runs with the same cause. Repeated reviews of one day do not count as more days.
+- `accepted change`: the user authorizes implementation and an accepted entry in `docs/DECISIONS.md` records rationale. An explicit fix request can be implemented now; it need not wait for three occurrences.
 
-## 9. Improve
-
-When the user asks what can be optimized after a run:
-
-- One-off content issue: report it in run feedback.
-- Repeated scraper, gate, state-machine, target, or skill-flow issue: suggest or create a GitHub Issue.
-- Strategy, quality-gate, fallback, or default-target change: inspect `docs/DECISIONS.md` before editing.
-- If changing an existing decision, append a new decision with `Supersedes`; 不要直接改回旧行为。
-- Every decision must fill `Failure mode of alternative`: write why 另一条路为什么走不通.
-
-Issue templates:
-
-- `.github/ISSUE_TEMPLATE/publish-bug.yml`
-- `.github/ISSUE_TEMPLATE/quality-gate.yml`
-- `.github/ISSUE_TEMPLATE/workflow-improvement.yml`
-- `.github/ISSUE_TEMPLATE/decision.yml`
-
-## Safety
-
-- Single stages may be rerun: `publisher collect`, `publisher capture-screenshots --rerun`, `publisher render`, `publisher cover`, `publisher publish`.
-- Confirm before deleting files, rewriting Git history, force pushing, or reverting user changes.
-- Do not commit config, databases, output artifacts, or unrelated worktree changes.
+Daily review alone authorizes recommendations, not code/skill changes or external GitHub Issue creation. Suggest an issue for recurring failures; create it only when authorized. A local decision may use `Issue: N/A` with a reason when issue tooling/authority is absent. Never turn A into B and back solely on daily variance: 不要直接改回旧行为. A reversal records `Supersedes` and `Failure mode of alternative` (另一条路为什么走不通), explaining new evidence and a practical validation criterion. Preserve security, provenance, screenshot and summary gates.

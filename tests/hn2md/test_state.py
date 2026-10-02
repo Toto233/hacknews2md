@@ -293,6 +293,24 @@ class TestJobStateMachine:
         assert persisted.audit_report is None
         assert persisted.audit_exemption is None
 
+    def test_summary_length_blockers_cannot_be_approved(self, job_dir):
+        job_dir.mkdir(parents=True)
+        machine, _ = JobStateMachine.load_or_create(job_dir, "20260620")
+        machine.record_audit_report(
+            {
+                "issues": [
+                    {
+                        "code": "summary_too_short",
+                        "severity": "blocking",
+                    }
+                ],
+                "blocking_count": 1,
+            }
+        )
+
+        with pytest.raises(ValueError, match="must be repaired"):
+            machine.approve_audit()
+
     def test_record_receipt_preserves_stage_history(self, job_dir):
         """record_receipt should retain every execution while exposing the latest receipt."""
         job_dir.mkdir(parents=True)
@@ -392,3 +410,33 @@ class TestJobStateMachine:
         job_dir.mkdir(parents=True)
         machine, _ = JobStateMachine.load_or_create(job_dir, "20260620")
         assert machine.can_retry(Stage.FETCHING)
+
+    def test_operational_evidence_fields_roundtrip_and_update(self, job_dir):
+        job_dir.mkdir(parents=True)
+        machine, ledger_path = JobStateMachine.load_or_create(job_dir, "20260620")
+        machine.job.continuation_notes = [{"note": "resume after network switch"}]
+        machine.job.review_assessment = {"status": "reviewed"}
+        machine.job.remote_readback = {"matched": True}
+        machine.job.publish_intent = {
+            "requested_targets": ["wechat"],
+            "completed_targets": ["wechat"],
+        }
+        machine.record_manual_astro(
+            {"status": "pushed", "commit": "abc123", "remote_verified": True}
+        )
+        machine.record_keyword_decision(
+            {
+                "keyword": "中国",
+                "sentence": "中国的新功能仍待监管要求落实。",
+                "classification": "neutral",
+                "decision": "保留并发布",
+            }
+        )
+
+        loaded = PublishJob.from_json(ledger_path)
+        assert loaded.manual_astro["commit"] == "abc123"
+        assert loaded.publish_intent["completed_targets"] == ["wechat", "astro"]
+        assert loaded.keyword_decisions[0]["decision"] == "保留并发布"
+        assert loaded.continuation_notes == [{"note": "resume after network switch"}]
+        assert loaded.review_assessment == {"status": "reviewed"}
+        assert loaded.remote_readback == {"matched": True}

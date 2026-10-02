@@ -23,6 +23,7 @@ from selenium.webdriver.support import expected_conditions as EC
 from selenium.webdriver.support.ui import WebDriverWait
 
 from src.security.url_validator import SecurityError, validate_url
+from src.utils.filename import sanitize_filename_stem
 from src.utils.http_constants import DEFAULT_HEADERS
 
 logger = logging.getLogger(__name__)
@@ -352,8 +353,7 @@ async def _screenshot_x_tweet(url: str, title: str) -> str | None:
         date_dir = os.path.join("output/images", f"{today.year:04d}{today.month:02d}{today.day:02d}")
         if not os.path.exists(date_dir):
             os.makedirs(date_dir)
-        clean_title = re.sub(r'[<>:"/\\|?*]', "", title).replace(" ", "_")
-        clean_title = re.sub(r"_{2,}", "_", clean_title)[:50]
+        clean_title = sanitize_filename_stem(title)
         image_save_path = os.path.join(date_dir, f"{clean_title}_screenshot.png")
 
         options = ChromeOptions()

@@ -1,6 +1,6 @@
-# Image2 Prompt Template
+# Standard ImageGen Prompt Template
 
-Use this template for direct ImageGen/Image2 generation of a WeChat Official Account title image. The caller should first compress the article headline into `DISPLAY_TITLE`, then pass this prompt to image generation.
+Use this template with standard built-in ImageGen. The caller selects the exact `DISPLAY_TITLE` first and supplies `TITLE` as context only. Adapt the style to the requested cover; keep the central-visual, side-title composition and crop tolerance unless the user chooses another direction. The style catalogue below is a set of alternatives, not a requirement to combine them.
 
 ```text
 你是一位擅长中文商业视觉设计、杂志封面设计和社交媒体封面设计的资深艺术总监。
@@ -14,14 +14,15 @@ Use this template for direct ImageGen/Image2 generation of a WeChat Official Acc
 - 横向封面
 - 宽高比：21:9，接近 2.35:1
 - 推荐尺寸：2100 x 900 像素
-- 所有重要文字和主体必须位于画面中央安全区域
-- 中心 1:1 安全裁剪区也必须能作为独立分享缩略图使用
-- 同时考虑公众号分享缩略图被裁切后的可读性
+- 以完整 21:9 宽图为主要观看形态：主题图像或核心视觉位于画面中间区域，标题安排在左侧或右侧
+- 中间附近保留一个完整、可辨识的核心元素，方便截取 1:1 分享缩略图；裁剪框可以适当左右调整，不必严格锁死在几何正中心
+- 1:1 区域可以只保留主题图像、一个短关键词或两者，不强制容纳全部标题
 
 【标题处理】
-1. 理解原标题的主题、情绪和核心冲突。
-2. 在不改变原意的前提下，将标题压缩成适合封面的视觉标题。
-3. 主标题优先控制在 4-12 个汉字。
+标题文字需要清晰描述主题，并且要吸引人。读者应能迅速看懂“谁发生了什么”，并被有事实依据的变化、结果或悬念吸引。保留有辨识度的主体及必要的不确定性限定，避免空泛概念或夸大结论。以下 DISPLAY_TITLE 已由写作模型选定，ImageGen 只准确排版，不自行改写。
+1. 理解原标题的主体、事件及其新闻价值。
+2. 准确呈现下方指定的视觉标题，使用字号、分行与层级增强吸引力。
+3. 标题长度由写作模型确定，以清晰表意为先，不为凑字数删去主体或关键限定。
 4. 标题较长时，拆成 2-3 行，不要缩小字体硬塞进一行。
 5. 默认只保留一个主标题；除非用户明确要求，不要增加副标题。
 6. 图片中必须准确显示以下文字，不得增字、漏字、错字或使用近似字符：
@@ -29,10 +30,10 @@ Use this template for direct ImageGen/Image2 generation of a WeChat Official Acc
 “{{DISPLAY_TITLE}}”
 
 【文字视觉要求】
-- 中文标题必须是整个画面的第一视觉焦点
-- 主标题占画面宽度的 45%-70%
-- 完整主标题必须落在中心 1:1 安全裁剪区内，不能依赖画面最左或最右边缘才能读懂
-- 使用超大号、粗体、清晰、具有高级感的中文字体
+- 中文标题与主题图像共同构成主要视觉层级，读者能快速看到标题，也能立即认出新闻主题
+- 主标题放在画面左侧或右侧的独立文字区，不遮挡中间主体，不铺满整张图
+- 使用较大号、粗体、清晰、具有高级感的中文字体；字号不能过小，也不必夸张到挤压主题图像
+- 1:1 裁剪区不必包含完整标题；若裁入文字，留下的关键词必须完整、可识别，避免残缺半字
 - 字体笔画完整，边缘锐利，字距经过设计
 - 标题在手机缩略图中仍然清晰可读
 - 可以将一个核心关键词使用强调色突出
@@ -41,11 +42,15 @@ Use this template for direct ImageGen/Image2 generation of a WeChat Official Acc
 
 【构图要求】
 - 使用成熟的商业海报构图，而不是普通插画加一行文字
-- 明确区分标题区、主视觉区和留白区
+- 明确区分侧边标题区、中间主视觉区和留白区
+- 中间主视觉必须能够独立表达新闻最重要的主体或事件含义，不只是抽象装饰
+- 标题靠左或靠右排版，并保留安全内边距；文字与图像各有空间，整体有图有文、比例协调
 - 标题与背景之间具有强烈明暗或色彩对比
-- 背景服务于标题，不能抢夺标题注意力
+- 背景同时服务于标题和中间主体，不抢夺两者注意力
 - 视觉元素数量克制，最多保留一个主要视觉隐喻
-- 21:9 全图看起来像完整公众号头图；从中心裁出 1:1 时也像完整封面，不得裁掉文字
+- 忠实表现主体关系；不对立的两个主体不要用红蓝阵营、对撞或战斗构图制造对立
+- 21:9 全图首先看起来像完整公众号头图，左右空间参与叙事，不把文字和图形堆成一团
+- 在中间附近能找到一块包含核心主体或关键词的 1:1 区域即可；允许后续手动左右微调裁剪，不为像素级居中牺牲宽图构图
 - 避免堆满图标、装饰线、数据、按钮和小标签
 - 画面精致但不复杂，具有编辑设计和品牌设计质感
 
@@ -77,20 +82,21 @@ premium editorial design, refined typography, strong visual hierarchy, sophistic
 - 禁止过度渐变和霓虹发光
 - 禁止背景过于杂乱
 - 禁止标题字体太小
+- 禁止主标题占据大部分画面、遮住主体或让封面变成满版文字
 - 禁止将标题放在容易被裁切的边缘
 - 禁止生成与文章主题无关的人物
 - 禁止出现品牌 Logo、二维码、水印和版权标记
 - 禁止生成除指定标题以外的任何文字
 - 禁止生成除指定标题以外的任何小字、装饰文字或说明文字
 
-最终输出应像由专业设计工作室制作的微信公众号头图，第一眼先看到标题，第二眼理解文章主题，缩小到手机屏幕尺寸后仍然清晰、有质感、有辨识度。
+最终输出应像由专业设计工作室制作的微信公众号头图：中间有能够表达新闻含义的主题图像，侧边有清楚但不过量的标题文字；缩小到手机屏幕尺寸后仍然清晰、有质感、有辨识度。
 
 【微信草稿箱裁剪说明】
 发布脚本会把同一张封面作为 `thumb_media_id` 上传，并同时提交：
 - `pic_crop_235_1`：2.35:1 公众号大图裁剪
 - `pic_crop_1_1`：1:1 分享缩略图裁剪
 
-因此不要为分享缩略图生成第二张独立图片；请让中心方形裁剪区域天然可用。
+因此不要为分享缩略图生成第二张独立图片。让中间附近存在一个可用的方形核心区域即可，发布者可以手动微调裁剪位置；不要仅因轻微偏心或裁剪框需要移动而反复重新生成整张封面。
 ```
 
 ## Title Compression Examples
@@ -99,20 +105,18 @@ premium editorial design, refined typography, strong visual hierarchy, sophistic
 Original title:
 我研究了十几个自我进化 Agent，发现大多数根本没有形成真正的闭环
 
-DISPLAY_TITLE options:
-自我进化，是个骗局吗？
-多数 Agent
-根本不会进化
+DISPLAY_TITLE:
+自进化 Agent
+闭环仍缺位
 ```
 
 ```text
 Original title:
 John Deere owners will get the right to repair equipment under FTC settlement
 
-DISPLAY_TITLE options:
-维修权
-重大胜利
-维修权回来了
+DISPLAY_TITLE:
+迪尔车主
+获维修权
 ```
 
 ## Optional Subtitle Variant

@@ -11,7 +11,7 @@ from typing import Any
 from urllib.parse import urlparse
 
 from hn2md.context import RuntimeContext
-from hn2md.state import JobStateMachine, _audit_exemption_matches
+from hn2md.state import NON_EXEMPTIBLE_AUDIT_CODES, JobStateMachine, _audit_exemption_matches
 from src.core.content_quality import is_paywall_or_shell_content
 from src.db.connection import get_db
 from src.security.content_sanitizer import contains_hallucination_markers
@@ -77,8 +77,8 @@ def _collect_warning_issue(warning: dict[str, Any]) -> dict[str, Any]:
     }
 
 
-def _load_collect_content_warnings(ctx: RuntimeContext) -> list[dict[str, Any]]:
-    ledger_path = ctx.job_dir / f"publish_job_{datetime.now().strftime('%Y%m%d')}.json"
+def _load_collect_content_warnings(ctx: RuntimeContext, period: str) -> list[dict[str, Any]]:
+    ledger_path = ctx.job_dir / f"publish_job_{period}.json"
     if not ledger_path.exists():
         return []
     try:
@@ -125,8 +125,10 @@ def run_audit(
     interactive: bool = False,
     llm_type: str | None = None,
     include_summaries: bool = True,
+    period: str | None = None,
 ) -> dict[str, Any]:
-    """Return a structured quality report for today's news."""
+    """Return a structured quality report for the requested publishing period."""
+    period = period or datetime.now().strftime("%Y%m%d")
     if interactive:
         from src.core.audit_news import run_audit_one
 
@@ -157,13 +159,14 @@ def run_audit(
         ]
         rows = conn.execute(
             f"SELECT {', '.join(select_exprs)} "
-            "FROM news WHERE date(created_at)=date('now','localtime') ORDER BY id"
+            "FROM news WHERE strftime('%Y%m%d', created_at) = ? ORDER BY id",
+            (period,),
         ).fetchall()
 
     rows_by_id = {row["id"]: row for row in rows}
     issues: list[dict[str, Any]] = [
         _collect_warning_issue(warning)
-        for warning in _load_collect_content_warnings(ctx)
+        for warning in _load_collect_content_warnings(ctx, period)
         if _warning_is_still_actionable(warning, rows_by_id)
     ]
     items: list[dict[str, Any]] = []
@@ -230,8 +233,22 @@ def run_audit(
             issues.append(_issue(row, "hallucination_marker", "摘要包含模型拒答或幻觉标记"))
         if include_summaries and summary and len(summary) < MIN_SUMMARY_LENGTH:
             short_summaries.append(row)
+            issues.append(
+                _issue(
+                    row,
+                    "summary_too_short",
+                    f"正文摘要过短（{len(summary)} 字符，最低 {MIN_SUMMARY_LENGTH}）",
+                )
+            )
         if include_summaries and discussion_summary and len(discussion_summary) < MIN_DISCUSSION_SUMMARY_LENGTH:
             short_discussion_summaries.append(row)
+            issues.append(
+                _issue(
+                    row,
+                    "discussion_summary_too_short",
+                    f"讨论摘要过短（{len(discussion_summary)} 字符，最低 {MIN_DISCUSSION_SUMMARY_LENGTH}）",
+                )
+            )
         lowered = article.lower()
         if any(marker in lowered for marker in SHELL_CONTENT_MARKERS):
             if _has_substantive_body_beyond_shell_marker(article):
@@ -284,6 +301,14 @@ def require_audit_clear_or_exempt(machine: JobStateMachine) -> bool:
     if report is None:
         raise RuntimeError("audit required before planning or publishing")
     if report.get("blocking_count", 0):
+        non_exemptible = [
+            issue
+            for issue in report.get("issues", [])
+            if isinstance(issue, dict) and issue.get("code") in NON_EXEMPTIBLE_AUDIT_CODES
+        ]
+        if non_exemptible:
+            code = non_exemptible[0].get("code", "unknown")
+            raise RuntimeError(f"audit blocked: issue must be repaired ({code})")
         if not _audit_exemption_matches(machine.job.audit_exemption, report):
             first = report.get("issues", [{}])[0]
             code = first.get("code", "unknown")

@@ -8,7 +8,6 @@ generates an LLM summary from the screenshot image.
 import base64
 import logging
 import os
-import re
 import time
 from dataclasses import dataclass
 from datetime import datetime
@@ -18,6 +17,7 @@ from src.core.handlers.browser_page_prep import dismiss_cookie_consent
 from src.core.handlers.browser_support import build_headless_chrome_options
 from src.llm.llm_business import generate_summary_from_image
 from src.security.url_validator import SecurityError, validate_url
+from src.utils.filename import sanitize_filename_stem
 
 logger = logging.getLogger(__name__)
 
@@ -49,10 +49,7 @@ def capture_page_screenshot(url: str, title: str) -> ScreenshotCapture:
     if not os.path.exists(date_dir):
         os.makedirs(date_dir)
 
-    clean_title = re.sub(r'[<>:"/\\|?*]', "", title)
-    clean_title = clean_title.replace(" ", "_")
-    clean_title = re.sub(r"_{2,}", "_", clean_title)
-    clean_title = clean_title[:50]
+    clean_title = sanitize_filename_stem(title)
     ext = ".png"
 
     index = 1

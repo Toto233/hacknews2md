@@ -101,7 +101,11 @@ class DraftManager:
             return None
 
     def add_draft_smart(
-        self, articles: list, default_thumb_media_id: str = None, thumb_image_path: str = None
+        self,
+        articles: list,
+        default_thumb_media_id: str = None,
+        thumb_image_path: str = None,
+        strict_images: bool = False,
     ) -> str | None:
         """Add articles with automatic local-image upload and thumb selection."""
         if not articles or not isinstance(articles, list):
@@ -121,8 +125,12 @@ class DraftManager:
                     logger.info(f"[OK] Preferred thumb media ID: {forced_thumb_media_id}")
                 else:
                     logger.warning("[WARN] Preferred thumb upload failed, falling back")
+                    if strict_images:
+                        return None
             else:
                 logger.warning(f"[WARN] Preferred thumb image not found: {thumb_image_path}")
+                if strict_images:
+                    return None
         for i, article in enumerate(articles):
             if not article.get("title"):
                 logger.error(f"Article {i + 1} missing required field 'title'")
@@ -142,6 +150,8 @@ class DraftManager:
                     if os.path.exists(lp):
                         if os.path.getsize(lp) > 1024 * 1024:
                             logger.warning(f"[SKIP] Oversize image (>1MB): {lp}")
+                            if strict_images:
+                                return None
                             continue
                         logger.info(f"Uploading: {lp}")
                         uploaded_url = self._mm.upload_image_for_article(lp)
@@ -156,8 +166,12 @@ class DraftManager:
                                     logger.info(f"[OK] Thumb media ID: {first_thumb_media_id}")
                         else:
                             logger.warning(f"[WARN] Skipped or failed: {lp}")
+                            if strict_images:
+                                return None
                     else:
                         logger.warning(f"[WARN] Image file not found: {lp}")
+                        if strict_images:
+                            return None
             else:
                 logger.info(f"No local images found in article {i + 1}")
                 if i == 0:

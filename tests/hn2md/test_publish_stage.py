@@ -88,6 +88,91 @@ def test_publish_blocks_when_a_story_has_no_screenshot(tmp_path) -> None:
         PublishStage().execute(ctx, machine, markdown_file=str(md), dry_run=True)
 
 
+def test_publish_accepts_only_exact_user_approved_screenshot_waiver(tmp_path) -> None:
+    db_path = tmp_path / "data" / "hacknews.db"
+    init_database(str(db_path))
+    with sqlite3.connect(db_path) as conn:
+        conn.execute(
+            "INSERT INTO news (id, title, news_url, created_at) "
+            "VALUES (1, 'Story', 'https://example.com/story', '2000-01-02 10:00:00')"
+        )
+    ctx = RuntimeContext(
+        project_root=tmp_path,
+        db_path=db_path,
+        output_dir=tmp_path / "output",
+        job_dir=tmp_path / "output" / "jobs",
+        markdown_dir=tmp_path / "output" / "markdown",
+        images_dir=tmp_path / "output" / "images",
+        codex_dir=tmp_path / "output" / "codex",
+        config_path=tmp_path / "config" / "config.json",
+    )
+    md = tmp_path / "article.md"
+    md.write_text("# safe", encoding="utf-8")
+    waiver = {
+        "period": "20000102",
+        "run_id": "run-1",
+        "news_id": 1,
+        "news_url": "https://example.com/story",
+        "reason": "User waived unreachable source screenshot",
+        "approved_by": "user",
+    }
+    job = type("J", (), {
+        "date": "20000102",
+        "run_id": "run-1",
+        "stages": {},
+        "screenshot_waivers": [waiver],
+    })()
+    machine = type("M", (), {"job": job})()
+
+    with patch("src.utils.db_utils.get_illegal_keywords", return_value=[]):
+        result = PublishStage().execute(ctx, machine, markdown_file=str(md), dry_run=True)
+    assert result["screenshot_waivers_applied"] == [waiver]
+
+    job.screenshot_waivers = [{**waiver, "news_url": "https://example.com/other"}]
+    with pytest.raises(NonRetryableStageError, match="https://example.com/story"):
+        PublishStage().execute(ctx, machine, markdown_file=str(md), dry_run=True)
+
+    job.screenshot_waivers = [{**waiver, "run_id": "another-run"}]
+    with pytest.raises(NonRetryableStageError, match="https://example.com/story"):
+        PublishStage().execute(ctx, machine, markdown_file=str(md), dry_run=True)
+
+
+def test_publish_screenshot_gate_uses_run_date_after_midnight(tmp_path) -> None:
+    db_path = tmp_path / "data" / "hacknews.db"
+    init_database(str(db_path))
+    with sqlite3.connect(db_path) as conn:
+        conn.execute(
+            "INSERT INTO news (id, title, news_url, created_at) VALUES (1, 'Old', 'https://example.com/old', '2000-01-02 10:00:00')"
+        )
+        conn.execute(
+            "INSERT INTO news (id, title, news_url, screenshot, created_at) "
+            "VALUES (2, 'Current', 'https://example.com/current', 'current.png', datetime('now', 'localtime'))"
+        )
+    ctx = RuntimeContext(
+        project_root=tmp_path,
+        db_path=db_path,
+        output_dir=tmp_path / "output",
+        job_dir=tmp_path / "output" / "jobs",
+        markdown_dir=tmp_path / "output" / "markdown",
+        images_dir=tmp_path / "output" / "images",
+        codex_dir=tmp_path / "output" / "codex",
+        config_path=tmp_path / "config" / "config.json",
+    )
+    md = tmp_path / "article.md"
+    md.write_text("# safe", encoding="utf-8")
+    machine = type("M", (), {"job": type("J", (), {"date": "20000102", "stages": {}})()})()
+
+    with pytest.raises(NonRetryableStageError, match="https://example.com/old"):
+        PublishStage().execute(ctx, machine, markdown_file=str(md), dry_run=True)
+
+    with sqlite3.connect(db_path) as conn:
+        conn.execute("UPDATE news SET screenshot='old.png' WHERE id=1")
+        conn.execute("UPDATE news SET screenshot=NULL WHERE id=2")
+    with patch("src.utils.db_utils.get_illegal_keywords", return_value=[]):
+        result = PublishStage().execute(ctx, machine, markdown_file=str(md), dry_run=True)
+    assert result["dry_run"] is True
+
+
 def test_publish_fails_when_wechat_returns_no_media_id(tmp_path) -> None:
     md = tmp_path / "article.md"
     md.write_text("# safe", encoding="utf-8")
@@ -269,6 +354,49 @@ def test_publish_keyword_gate_warns_with_full_sentence_without_blocking(tmp_path
             "context": "This sentence has a blocked keyword here. Next sentence.",
         }
     ]
+
+
+def test_keyword_review_groups_duplicate_image_alt_text_without_paths(tmp_path) -> None:
+    from hn2md.stages.publish import _keyword_locations
+
+    title = "“间谍水印”概念：隐藏的追踪信号"
+    content = "\n".join(
+        [
+            f"## 8. {title} (Spymarks, not Watermarks)",
+            *(f"![{title}](C:/images/Spymarks_{index}.png)" for index in range(4)),
+            "作者把这种隐藏信号称为间谍水印。",
+            "HN 读者争论间谍水印与隐写术的区别。",
+        ]
+    )
+
+    warnings = _keyword_locations(content, ["间谍"], str(tmp_path / "article.md"))
+
+    assert len(warnings) == 4
+    image_warning = warnings[1]
+    assert image_warning["sentence"] == title
+    assert [location["line"] for location in image_warning["locations"]] == [2, 3, 4, 5]
+    assert len(image_warning["legacy_sentences"]) == 4
+    assert all(".png" not in warning["sentence"] for warning in warnings)
+
+
+def test_keyword_review_keeps_identical_text_in_separate_stories(tmp_path) -> None:
+    from hn2md.stages.publish import _keyword_locations
+
+    content = "\n".join(
+        [
+            "## 1. 第一条",
+            "![间谍水印](C:/images/first.png)",
+            "![间谍水印](C:/images/first-2.png)",
+            "## 2. 第二条",
+            "![间谍水印](C:/images/second.png)",
+        ]
+    )
+
+    warnings = _keyword_locations(content, ["间谍"], str(tmp_path / "article.md"))
+
+    assert len(warnings) == 2
+    assert [warning["line"] for warning in warnings] == [2, 5]
+    assert [location["line"] for location in warnings[0]["locations"]] == [2, 3]
 
 
 def test_publish_loads_project_script_when_project_root_not_on_sys_path(tmp_path, monkeypatch) -> None:

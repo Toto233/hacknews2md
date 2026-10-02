@@ -276,8 +276,9 @@ async def _collect_rows(rows: list[sqlite3.Row], concurrency: int, db_path: str 
     return await asyncio.gather(*(_collect_item(row, semaphore, db_path) for row in rows))
 
 
-def write_collection_context(ctx: RuntimeContext) -> str:
+def write_collection_context(ctx: RuntimeContext, period: str | None = None) -> str:
     """Write a fresh planning context from persisted records without crawling."""
+    period = period or datetime.now().strftime("%Y%m%d")
     with get_db(str(ctx.db_path)) as conn:
         conn.row_factory = sqlite3.Row
         rows = conn.execute(
@@ -286,9 +287,10 @@ def write_collection_context(ctx: RuntimeContext) -> str:
                    discussion_content, screenshot, largest_image, image_2, image_3,
                    content_source_type, content_source_url, content_source_doi
             FROM news
-            WHERE date(created_at)=date('now','localtime')
+            WHERE strftime('%Y%m%d', created_at) = ?
             ORDER BY id
-            """
+            """,
+            (period,),
         ).fetchall()
     ctx.codex_dir.mkdir(parents=True, exist_ok=True)
     context_path = ctx.codex_dir / f"hacknews_context_{datetime.now().strftime('%Y%m%d_%H%M%S')}.json"
@@ -318,6 +320,7 @@ class CollectStage(BaseStage):
         concurrency: int = 3,
     ) -> dict[str, Any]:
         concurrency = max(1, concurrency)
+        period = getattr(getattr(machine, "job", None), "date", None) or datetime.now().strftime("%Y%m%d")
         with get_db(str(ctx.db_path)) as conn:
             conn.row_factory = sqlite3.Row
             columns = {row[1] for row in conn.execute("PRAGMA table_info(news)").fetchall()}
@@ -341,7 +344,8 @@ class CollectStage(BaseStage):
             ]
             rows = conn.execute(
                 f"SELECT {', '.join(select_columns)} "
-                "FROM news WHERE date(created_at)=date('now','localtime') ORDER BY id"
+                "FROM news WHERE strftime('%Y%m%d', created_at) = ? ORDER BY id",
+                (period,),
             ).fetchall()
 
         items = asyncio.run(_collect_rows(rows, concurrency, str(ctx.db_path)))

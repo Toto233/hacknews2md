@@ -194,6 +194,85 @@ def test_post_publish_audit_returns_followup_recommendations(tmp_path: Path) -> 
     assert "unsupported_gif_images" in codes
     snapshot = json.loads(Path(result["snapshot_path"]).read_text(encoding="utf-8"))
     assert {item["code"] for item in snapshot["recommendations"]} == codes
+    assert {item["status"] for item in result["recommendations"]} == {"observation"}
+    assert result["daily_summary"]["candidates"] == []
+
+
+def test_recommendation_requires_three_distinct_runs_before_candidate(tmp_path: Path) -> None:
+    from hn2md.stages.post_publish_audit import _classify_recommendation_maturity
+
+    reviews = tmp_path / "output" / "reviews"
+    reviews.mkdir(parents=True)
+    for date_str in ("20260827", "20260828"):
+        (reviews / f"run_review_latest_{date_str}.json").write_text(
+            json.dumps(
+                {
+                    "date": date_str,
+                    "recommendations": [{"code": "stable-example"}],
+                }
+            ),
+            encoding="utf-8",
+        )
+
+    result = _classify_recommendation_maturity(
+        tmp_path / "output",
+        "20260829",
+        [
+            {
+                "code": "stable-example",
+                "title": "Example",
+                "reason": "Repeated evidence",
+                "action": "Consider a durable change",
+            }
+        ],
+    )
+
+    assert result[0]["status"] == "candidate"
+    assert result[0]["occurrence_count"] == 3
+    assert result[0]["occurrence_dates"] == ["20260827", "20260828", "20260829"]
+    assert "DECISIONS.md" in result[0]["policy"]
+
+
+def test_stage_retry_creates_observation_recommendation() -> None:
+    from hn2md.stages.post_publish_audit import _recommendations_from_findings
+
+    recommendations = _recommendations_from_findings(
+        [
+            {
+                "check": "stage_retry",
+                "severity": "warning",
+                "message": "PLANNING retried 1 time(s)",
+                "details": {"stage": "PLANNING", "retry_count": 1},
+            }
+        ]
+    )
+
+    assert recommendations[0]["code"] == "stage_retry_overhead"
+
+
+def test_post_publish_summary_quality_blocks_short_final_text(tmp_path: Path) -> None:
+    import sqlite3
+    from hn2md.stages.post_publish_audit import _check_summary_quality
+    from src.utils.db_utils import init_database
+
+    db_path = tmp_path / "data" / "hacknews.db"
+    init_database(str(db_path))
+    with sqlite3.connect(db_path) as conn:
+        conn.execute(
+            """
+            INSERT INTO news (
+                id, title, news_url, content_summary, discuss_summary, created_at
+            ) VALUES (?, ?, ?, ?, ?, '2026-08-29 10:00:00')
+            """,
+            (1, "Short", "https://example.com", "太短", "也太短"),
+        )
+
+    findings = _check_summary_quality(db_path, "20260829")
+
+    assert findings[0]["severity"] == "blocking"
+    assert findings[0]["check"] == "summary_quality"
+    assert findings[0]["details"]["short_content_ids"] == [1]
+    assert findings[0]["details"]["short_discussion_ids"] == [1]
 
 
 def test_post_publish_audit_clean_publish(tmp_path: Path) -> None:
@@ -259,7 +338,7 @@ def test_post_publish_audit_with_keyword_warnings(tmp_path: Path) -> None:
     kw_findings = [f for f in result["findings"] if f["check"] == "keyword_review"]
     assert len(kw_findings) == 1
     assert kw_findings[0]["severity"] == "warning"
-    assert "1 keyword hit" in kw_findings[0]["message"]
+    assert "1 keyword context" in kw_findings[0]["message"]
 
 
 def test_post_publish_audit_jsonl_deduplicates_repeated_findings(tmp_path: Path) -> None:
@@ -788,14 +867,15 @@ def test_post_publish_review_deduplicates_rerun_receipt_warnings(tmp_path: Path)
 
     result = run_post_publish_audit(job_dir, db_path, output_dir, dry_run=False)
 
-    retries = [finding for finding in result["findings"] if finding["check"] == "stage_retry"]
+    revisions = [finding for finding in result["findings"] if finding["check"] == "stage_revision"]
     warnings = [
         finding
         for finding in result["findings"]
         if finding["check"] == "stage_warning" and finding["details"]["warning_key"] == "content_warnings"
     ]
-    assert retries[0]["details"]["retry_count"] == 2
-    assert len(retries) == 1
+    assert revisions[0]["details"]["rerun_count"] == 2
+    assert revisions[0]["details"]["resolution"] == "content_revision"
+    assert len(revisions) == 1
     assert len(warnings) == 1
 
 
@@ -990,8 +1070,9 @@ def test_post_publish_review_downgrades_resolved_content_warning(tmp_path: Path)
         conn.execute(
             """
             INSERT INTO news (
-                id, title, news_url, article_content, content_source_url, created_at
-            ) VALUES (?, ?, ?, ?, ?, datetime('now', 'localtime'))
+                id, title, news_url, article_content, content_source_url,
+                content_summary, discuss_summary, created_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, datetime('now', 'localtime'))
             """,
             (
                 42,
@@ -999,6 +1080,8 @@ def test_post_publish_review_downgrades_resolved_content_warning(tmp_path: Path)
                 "https://hy.tencent.com/research/hy3",
                 "Resolved Hy3 article body. " * 160,
                 "https://hy.tencent.com/research/hy3",
+                "合格正文摘要" * 50,
+                "合格讨论摘要" * 40,
             ),
         )
 
@@ -1065,8 +1148,9 @@ def test_post_publish_review_downgrades_resolved_discussion_warning(tmp_path: Pa
         conn.execute(
             """
             INSERT INTO news (
-                id, title, news_url, discuss_url, discussion_content, created_at
-            ) VALUES (?, ?, ?, ?, ?, datetime('now', 'localtime'))
+                id, title, news_url, discuss_url, discussion_content,
+                content_summary, discuss_summary, created_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, datetime('now', 'localtime'))
             """,
             (
                 43,
@@ -1074,6 +1158,8 @@ def test_post_publish_review_downgrades_resolved_discussion_warning(tmp_path: Pa
                 "https://example.com/running-train",
                 "https://news.ycombinator.com/item?id=48876505",
                 "HN discussion body. " * 80,
+                "合格正文摘要" * 50,
+                "合格讨论摘要" * 40,
             ),
         )
 
@@ -1267,3 +1353,155 @@ def test_post_publish_review_flags_environment_compatibility_errors(tmp_path: Pa
             },
         }
     ]
+
+
+def test_historical_review_uses_requested_date_and_durable_evidence(tmp_path: Path) -> None:
+    from hn2md.stages.post_publish_audit import run_post_publish_audit
+
+    date_str = "20260914"
+    job_dir = tmp_path / "jobs"
+    job_dir.mkdir()
+    output_dir = tmp_path / "output"
+    markdown = output_dir / "hacknews_20260914.md"
+    markdown.parent.mkdir(parents=True)
+    sentence = "中国的新功能仍待监管要求落实。"
+    markdown.write_text(f"# 标题\n\n{sentence}\n", encoding="utf-8")
+    ledger = {
+        "date": date_str,
+        "status": "DONE",
+        "stories": [{"id": value} for value in range(10)],
+        "manual_astro": {
+            "status": "pushed",
+            "commit": "abc123",
+            "remote_verified": True,
+        },
+        "keyword_decisions": [
+            {
+                "keyword": "中国",
+                "sentence": sentence,
+                "classification": "neutral",
+                "decision": "保留并发布",
+            }
+        ],
+        "stages": {
+            "PLANNING": {"success": True, "output_summary": {"story_count": 9}},
+            "RENDERING": {
+                "success": True,
+                "output_summary": {"markdown_file": str(markdown)},
+            },
+            "PUBLISHING": {
+                "success": True,
+                "output_summary": {
+                    "wechat_media_id": "wx1",
+                    "markdown_file": str(markdown),
+                    "keyword_warnings": [{"keyword": "中国", "sentence": sentence}],
+                },
+            },
+        },
+    }
+    (job_dir / f"publish_job_{date_str}.json").write_text(
+        json.dumps(ledger, ensure_ascii=False), encoding="utf-8"
+    )
+
+    result = run_post_publish_audit(
+        job_dir,
+        tmp_path / "missing.db",
+        output_dir,
+        date_str=date_str,
+    )
+
+    assert Path(result["snapshot_path"]).name == "run_review_latest_20260914.json"
+    assert result["daily_summary"]["story_count"] == 9
+    assert result["daily_summary"]["astro_status"] == "pushed"
+    assert result["daily_summary"]["astro_commit"] == "abc123"
+    keyword = next(item for item in result["findings"] if item["check"] == "keyword_review")
+    assert keyword["severity"] == "info"
+    astro = next(item for item in result["findings"] if item["check"] == "astro_publish")
+    assert astro["severity"] == "info"
+
+
+def test_post_publish_review_detects_multiple_successful_wechat_drafts() -> None:
+    from hn2md.stages.post_publish_audit import (
+        _check_stage_receipts,
+        _recommendations_from_findings,
+    )
+
+    receipts = {
+        "PUBLISHING": [
+            {"success": True, "output_summary": {"wechat_media_id": "wx1"}},
+            {"success": True, "output_summary": {"wechat_media_id": "wx2"}},
+        ]
+    }
+    findings = _check_stage_receipts(
+        {"PUBLISHING": receipts["PUBLISHING"][-1]},
+        "20260910",
+        receipt_history=receipts,
+    )
+
+    risk = next(item for item in findings if item["check"] == "duplicate_draft_risk")
+    assert risk["details"]["media_ids"] == ["wx1", "wx2"]
+    recommendations = _recommendations_from_findings(findings)
+    assert {item["code"] for item in recommendations} == {"duplicate_wechat_draft"}
+
+
+def test_successful_bulk_image_compression_is_informational() -> None:
+    from hn2md.stages.post_publish_audit import _check_image_preflight
+
+    findings = _check_image_preflight(
+        {"compressed_images": [{"original_path": f"image-{i}.png"} for i in range(4)]},
+        "20260923",
+    )
+
+    assert len(findings) == 1
+    assert findings[0]["severity"] == "info"
+    assert "4 image(s) auto-compressed" in findings[0]["message"]
+
+
+def test_keyword_review_reuses_legacy_image_alt_decision() -> None:
+    from hn2md.stages.post_publish_audit import _check_keyword_warnings
+
+    warning = {
+        "keyword": "间谍",
+        "sentence": "间谍水印",
+        "legacy_sentences": ["[间谍水印](C:/images/Spymarks_0."],
+    }
+    findings = _check_keyword_warnings(
+        {"keyword_warnings": [warning]},
+        "20260923",
+        [{"keyword": "间谍", "sentence": "[间谍水印](C:/images/Spymarks_0."}],
+    )
+
+    assert findings[0]["severity"] == "info"
+
+
+def test_historical_recommendation_maturity_ignores_future_snapshots(tmp_path: Path) -> None:
+    from hn2md.stages.post_publish_audit import _classify_recommendation_maturity
+
+    reviews = tmp_path / "reviews"
+    reviews.mkdir()
+    for snapshot_date in ("20260913", "20260915", "20260916"):
+        (reviews / f"run_review_latest_{snapshot_date}.json").write_text(
+            json.dumps(
+                {
+                    "date": snapshot_date,
+                    "recommendations": [{"code": "same-cause"}],
+                }
+            ),
+            encoding="utf-8",
+        )
+
+    result = _classify_recommendation_maturity(
+        tmp_path,
+        "20260914",
+        [
+            {
+                "code": "same-cause",
+                "title": "Example",
+                "reason": "Example",
+                "action": "Example",
+            }
+        ],
+    )
+
+    assert result[0]["status"] == "observation"
+    assert result[0]["occurrence_dates"] == ["20260913", "20260914"]

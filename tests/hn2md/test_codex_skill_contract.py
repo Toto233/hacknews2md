@@ -48,16 +48,18 @@ def test_codex_skill_prefers_compact_draft_plan_material() -> None:
 
 def test_codex_skill_defaults_to_wechat_and_astro_publish() -> None:
     skill = Path("skills/publish-hacknews-codex/SKILL.md").read_text(encoding="utf-8")
-    assert "默认完整发布必须同时完成 WeChat 和 Astro" in skill
+    assert "默认完整发布同时尝试 WeChat 和 Astro" in skill
     assert "只发微信" in skill
     assert "明确要求" in skill
 
 
 def test_codex_skill_forbids_guessing_missing_article_content() -> None:
     skill = Path("skills/publish-hacknews-codex/SKILL.md").read_text(encoding="utf-8")
+    recovery = Path("skills/publish-hacknews-codex/references/recovery.md").read_text(encoding="utf-8")
     assert "不得用公开知识猜正文" in skill
     assert "human_input_or_handler" in skill
-    assert "scraper_failures" in skill
+    assert "references/recovery.md" in skill
+    assert "scraper_failures" in recovery
 
 
 def test_codex_skill_refreshes_context_without_recrawling_after_human_backfill() -> None:
@@ -98,7 +100,8 @@ def test_codex_skill_handles_existing_astro_staged_changes_without_deleting_file
     skill = Path("skills/publish-hacknews-codex/SKILL.md").read_text(encoding="utf-8")
     assert "Astro 仓库已有 staged changes" in skill
     assert "不要删除文件，不要 reset" in skill
-    assert "restore --staged" in skill
+    assert "do not unstage unrelated files" in skill
+    assert "restore --staged" not in skill
     assert "无关未跟踪文件" in skill
 
 
@@ -110,18 +113,33 @@ def test_codex_skill_post_run_review_uses_dedicated_publisher_command() -> None:
     assert "publisher audit hackernews --post-publish" not in skill
 
 
+def test_codex_skill_enforces_stable_daily_improvement_loop() -> None:
+    skill = Path("skills/publish-hacknews-codex/SKILL.md").read_text(encoding="utf-8")
+
+    assert "summary_too_short" in skill
+    assert "discussion_summary_too_short" in skill
+    assert "cannot use `--approve`" in skill
+    assert "observation" in skill
+    assert "candidate" in skill
+    assert "latest seven" in skill
+    assert "three distinct daily runs" in skill
+    assert "Never turn A into B" in skill
+    assert "Do not end with a compulsory `/compact` message" in skill
+
+
 def test_codex_skill_uses_publisher_for_future_domain_filters() -> None:
     skill = Path("skills/publish-hacknews-codex/SKILL.md").read_text(encoding="utf-8")
+    recovery = Path("skills/publish-hacknews-codex/references/recovery.md").read_text(encoding="utf-8")
+    assert "references/recovery.md" in skill
+    assert ".\\scripts\\publisher.ps1 filter-domain hackernews" in recovery
 
-    assert ".\\scripts\\publisher.ps1 filter-domain hackernews" in skill
 
-
-def test_codex_skill_requires_adapted_khazix_writer_review_before_plan_import() -> None:
+def test_codex_skill_requires_source_grounded_editorial_review_before_plan_import() -> None:
     skill = Path("skills/publish-hacknews-codex/SKILL.md").read_text(encoding="utf-8")
 
-    review = skill.index("adapted `khazix-writer` four-layer review")
+    review = skill.index("Before import, check the complete draft against its evidence")
     plan_import = skill.index(".\\scripts\\publisher.ps1 plan hackernews --manual-plan")
     assert review < plan_import
-    assert "Do not add Khazix's name" in skill
-    assert "fabricated first-person experience" in skill
-    assert "explicit exceptions" in skill
+    assert "numerical comparisons, causal direction, and uncertainty" in skill
+    assert "Ground discussion summaries in actual HN comments" in skill
+    assert "Automated lengths/schema checks do not certify factual fidelity" in skill

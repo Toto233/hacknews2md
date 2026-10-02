@@ -1,319 +1,78 @@
-# HackNews 中文摘要发布器
+# 新闻与月榜发布器
 
-从 Hacker News 抓取热门新闻和讨论，由 Codex 生成中文标题、摘要、排序与标签，并发布到微信公众号草稿箱。可选将同一份内容同步到独立 Astro 博客仓库。
+本仓库负责 Hacker News 中文日报的采集、编辑门禁与发布，也提供 Product Hunt 月报的 Codex 编辑规范和微信上传组件。默认“发布到微信”是创建公众号**草稿**，不是群发。
 
-## 仓库职责
+## 项目边界
 
-本仓库是抓取和发布系统的唯一源码仓库，包括 Codex skill：
+| 位置 | 职责 |
+| --- | --- |
+| `publisher/` | 按来源编排阶段、状态和回执；日报从这里进入。 |
+| `hn2md/`、`src/` | Hacker News 阶段、抓取、数据库和微信集成。 |
+| `skills/publish-hacknews-codex/` | 日报的 Codex 编辑与恢复流程。 |
+| `skills/publish-producthunt-monthly/` | 月报的编辑标准，指向独立的 `producthunt-monthly` 兼容项目。 |
+| `D:\python\producthunt-monthly` | 月榜抓取、数据、Top 10 计划、审计和渲染；微信发布目前调用本仓库的上传脚本与配置。 |
 
-```text
-hacknews/
-├─ skills/publish-hacknews-codex/  # Codex 发布 skill
-├─ src/                            # 抓取、数据库和内容处理
-├─ scripts/                        # 微信发布与题图生成
-├─ prompts/                        # AI 题图提示词
-├─ config/                         # 配置模板
-├─ tests/                          # 部署与安装测试
-└─ install.ps1                     # Codex skill 安装器
-```
+Astro 博客是独立仓库。Hacker News 完整发布会尝试同步 Astro；Product Hunt 月报默认仅创建微信草稿。两个来源的数据库和发布回执不混用。
 
-`hacknews_recap` 是独立且可选的 Astro 部署仓库。未配置它时，本地 Markdown、HTML、题图和微信公众号发布仍可正常工作。
+## 安装与配置
 
-## 环境要求
-
-- Windows PowerShell
-- Python 3.11 或更高版本
-- SQLite CLI
-- Codex
-- 微信公众号 AppID/AppSecret（仅公众号发布需要）
-- `gpt-image-2-skill`（可选；缺失时封面回退到头条原图）
-
-## 安装
+需要 Windows PowerShell、Python 3.11+ 和 Codex。SQLite 由 Python 使用，不要求单独安装 `sqlite3` 命令行工具。
 
 ```powershell
-git clone <repository-url> hacknews
-cd hacknews
-
 python -m venv .venv
-.\.venv\Scripts\Activate.ps1
-pip install -r requirements.txt
-
+.\.venv\Scripts\python.exe -m pip install -e .
 Copy-Item .\config\config.json.example .\config\config.json
 Copy-Item .\config\deployment.example.json .\config\deployment.local.json
-
 powershell -ExecutionPolicy Bypass -File .\install.ps1
 ```
 
-`install.ps1` 将仓库里的 skill 以 Junction 安装到：
+`install.ps1` 安装本仓库的 Hacker News skill。把微信公众号 AppID/AppSecret 放在忽略的 `config/config.json`，也可使用 `WECHAT_APPID`、`WECHAT_APPSEC`；本机 Astro 路径等放在 `config/deployment.local.json`。不要提交凭据、`data/` 或 `output/`。
 
-```text
-%CODEX_HOME%\skills\publish-hacknews-codex
-```
+运行命令优先使用 `scripts/publisher.ps1`，它会选择已配置的 Python 环境。`hn2md` 是内部兼容 CLI；新的日报流程以 `publisher` 为准。
 
-未设置 `CODEX_HOME` 时使用 `~/.codex`。如果目标已有旧 skill，安装器会先创建时间戳备份，不会删除旧版本。如果目录正被 Codex 占用，请关闭或重启 Codex 后重新运行安装器。
+## Hacker News 日报
 
-## 配置
-
-### 主配置
-
-编辑不纳入 Git 的 `config/config.json`：
-
-```json
-{
-  "wechat": {
-    "appid": "your-appid",
-    "appsec": "your-app-secret"
-  }
-}
-```
-
-也可以使用环境变量：
-
-```text
-WECHAT_APPID
-WECHAT_APPSEC
-```
-
-仓库还保留 Grok、Gemini 和 Moonshot 的旧接口配置，但 Codex 发布流程不会调用这些模型生成标题和摘要。
-
-### 部署配置
-
-`config/deployment.local.json` 用于保存本机路径，并已加入 `.gitignore`：
-
-```json
-{
-  "astro": {
-    "enabled": false,
-    "repo_path": "../hacknews_recap",
-    "blog_subdir": "src/data/blog"
-  },
-  "image_generator": {
-    "wrapper_path": ""
-  }
-}
-```
-
-路径和开关可通过环境变量覆盖：
-
-- `HACKNEWS_ROOT`
-- `HACKNEWS_DB_PATH`
-- `HACKNEWS_ASTRO_ENABLED`
-- `HACKNEWS_ASTRO_REPO`
-- `HACKNEWS_IMAGE_WRAPPER`
-- `HACKNEWS_DEPLOYMENT_CONFIG`
-
-题图 wrapper 未显式配置时，按顺序检查：
-
-```text
-~/.claude/skills/gpt-image-2-skill/scripts/gpt_image_2_skill.cjs
-~/.codex/skills/gpt-image-2-skill/scripts/gpt_image_2_skill.cjs
-```
-
-## 日常发布
-
-在 Codex 中执行：
-
-```text
-Publish HackNews Codex 开始今天的
-```
-
-Skill 会完成：
-
-1. 按本地自然日将旧新闻移入数据库 `news_history`。
-2. 获取当天 Hacker News 新闻。
-3. 抓取正文、讨论、图片和截图。
-4. 对空正文、短正文、付费墙和防抓取内容做检查。
-5. 由 Codex 生成中文标题、正文摘要、讨论摘要、排序和标签。
-6. 生成 Markdown、HTML，以及可选 Astro Markdown。
-7. 生成并检查 900×383 微信题图。
-8. 发布微信公众号草稿。
-9. 可选提交并推送 Astro 文章。
-10. 打开当天图片目录。
-
-正文为空或明显过短时，流程会停下来等待人工补充；其他正常发布步骤不会重复要求确认。
-
-## 主要命令
-
-### 抓取新闻
+先检查当天状态：
 
 ```powershell
-python .\src\core\fetch_news.py
-python .\skills\publish-hacknews-codex\scripts\collect_news_context.py --concurrency 3
+.\scripts\publisher.ps1 status hackernews
 ```
 
-### 检查正文和讨论
+在 Codex 中请求“发布今天新闻”会进入 [日报技能](skills/publish-hacknews-codex/SKILL.md)的人工计划流程：获取新闻与正文、捕获截图、审查来源、编写并导入中文计划、严格审计、渲染、封面、微信草稿、可用时的 Astro 同步，以及发布后复核。`release hackernews` 的自动计划不能替代这条编辑流程。未完成的运行按回执续跑，不重复创建已确认的草稿。
+
+需要恢复某个阶段或排查失败时，先看 [运行手册](docs/RUNBOOK.md)和技能里的条件性恢复指引。每条有源 URL 的新闻在微信上传前须有截图，除非用户对该条明确同意并记录一次性豁免；正文来源和摘要也有独立门禁。
+
+当内容与封面已准备好、但当前网络不在微信 IP 白名单时，可在切换网络后运行桌面快捷方式或：
 
 ```powershell
-sqlite3 -header -column ".\data\hacknews.db" "select id, length(coalesce(article_content,'')) as article_len, length(coalesce(discussion_content,'')) as discussion_len, title, news_url from news where date(created_at)=date('now','localtime') order by id;"
+python .\scripts\publish_today_wechat.py --check --no-pause
+python .\scripts\publish_today_wechat.py --no-pause
 ```
 
-### 补抓空讨论
+这只读取台北时间当天已生成的文章和封面，并通过规范的 `publisher` 路径创建微信草稿，不生成正文或推送 Astro。`--check` 仅检查回执、文件和已知白名单失败；实际上传仍须通过 publisher 的发布审计。若上次被拒绝的出口 IP 未变化，它会在本地停下；同一 IP 已加入白名单时可显式加 `--whitelist-updated`。已有 Media ID 时不会重传。
+
+## Product Hunt 月报
+
+默认月报要求 Top 10 的逐条观察、风险和图片，以及完整榜单和原月榜链接。当前这条编辑流程在独立的 `producthunt-monthly` 项目中实现；本仓库的 `publisher producthunt` 是基础榜单路线，**不等同于已审计的编辑月报**。入口和审核边界见 [月报技能](skills/publish-producthunt-monthly/SKILL.md)。
+
+在月报项目中，先抓榜、导出并补完 Top 10 计划，运行严格审计和渲染；使用以下命令做本地预检或创建草稿：
 
 ```powershell
-python .\skills\publish-hacknews-codex\scripts\refetch_empty_discussions.py --ids 1234 --attempts 2 --delay 8
+python -m scripts.publish_producthunt_editorial --year YEAR --month MONTH --cover-image "<已验收封面>" --preview
+python -m scripts.publish_producthunt_editorial --year YEAR --month MONTH --cover-image "<已验收封面>"
+python -m ph2md.cli status --year YEAR --month MONTH
 ```
 
-### 应用 Codex 计划并渲染
+上传命令会记录 Media ID 和月报状态；已确认成功或结果不明的上传不会自动重复。月榜数据和渲染文件仍在月报项目内，微信上传脚本及配置目前在本仓库，因此月报的**生成可独立运行，微信发布尚不能单仓库独立运行**。详细命令以月报项目的 README/运行手册为准。
+
+## 微信预检与验证
+
+低层微信工具的 `--preview` 会转换 Markdown，检查正文、本地图片格式及 1 MB 自动上传限制、封面可读性和两种裁剪；它不调用微信接口，也不创建草稿。直接调用此工具不会替代日报/月报各自的来源与编辑门禁。见 [微信发布指南](docs/WECHAT_PUBLISH.md)。
+
+针对改动运行相关测试；例如：
 
 ```powershell
-python .\skills\publish-hacknews-codex\scripts\apply_news_edits.py ".\output\codex\hacknews_plan_YYYYMMDD_HHMMSS.json"
-python .\skills\publish-hacknews-codex\scripts\render_manual_markdown.py ".\output\codex\hacknews_plan_YYYYMMDD_HHMMSS.json"
+pytest tests/test_publish_today_wechat.py tests/test_publish_wechat_preview.py -q --tb=short
 ```
 
-### 生成题图
-
-```powershell
-python .\scripts\generate_wechat_cover_ai.py `
-  ".\output\markdown\hacknews_summary_YYYYMMDD_HHMM.md" `
-  --target-word "主体加事件" `
-  -o ".\output\images\YYYYMMDD\hacknews_cover_ai_YYYYMMDD.png"
-```
-
-题图文字应控制在 10–15 字，保留新闻主体和事件，不能用过度泛化的概念替代原标题。
-
-### 发布公众号草稿
-
-```powershell
-python .\scripts\publish_wechat.py `
-  ".\output\markdown\hacknews_summary_YYYYMMDD_HHMM.md" `
-  --cover-image ".\output\images\YYYYMMDD\hacknews_cover_ai_YYYYMMDD.png"
-```
-
-更多说明见 [微信公众号发布指南](docs/WECHAT_PUBLISH.md)。
-
-## 输出与本地数据
-
-以下内容不纳入 Git：
-
-```text
-config/config.json
-config/deployment.local.json
-data/
-output/
-tmp/
-```
-
-主要输出：
-
-```text
-data/hacknews.db
-output/codex/hacknews_context_*.json
-output/codex/hacknews_plan_*.json
-output/markdown/hacknews_summary_*.md
-output/markdown/hacknews_summary_*.html
-output/images/YYYYMMDD/
-```
-
-## Publisher CLI
-
-Daily operations use the source-driven `publisher` interface. On Windows, use the repository wrapper so the virtual environment does not need to be activated first:
-
-```powershell
-.\scripts\publisher.ps1 release hackernews
-.\scripts\publisher.ps1 collect hackernews
-.\scripts\publisher.ps1 capture-screenshots hackernews
-.\scripts\publisher.ps1 review-run hackernews
-```
-
-`hn2md` remains an internal/compatibility CLI for the HackerNews implementation. New daily publishing workflow features belong in `publisher`.
-
-## Legacy hn2md CLI
-
-项目提供统一的 `hn2md` 命令行工具，支持全流程一键发布和断点续跑。
-
-### 安装 CLI
-
-```powershell
-pip install -e .
-```
-
-### 环境检查
-
-```powershell
-hn2md doctor          # 彩色终端输出
-hn2md doctor --json   # CI/自动化 JSON 输出（exit code 表示通过/失败）
-```
-
-检查 Python 版本、SQLite 数据库完整性、配置文件、LLM API Key、网络连通性。
-
-### 数据库备份
-
-```powershell
-hn2md backup                        # 备份到默认路径，带完整性检查
-hn2md backup --dest D:\backups\     # 备份到自定义路径
-hn2md backup --max-backups 14       # 保留最近 14 份
-hn2md backup --no-check             # 跳过完整性检查
-```
-
-`release` 命令默认在管道开始前自动备份（`--backup`），可用 `--no-backup` 关闭。
-
-### 一键发布
-
-```powershell
-# 完整流程（自动备份 + 发布）
-hn2md release
-
-# 预览模式：运行全流程但不实际发布到微信
-hn2md release --dry-run
-
-# 跳过封面生成和微信发布
-hn2md release --skip-cover --skip-publish
-
-# 从指定阶段恢复
-hn2md release --from-stage PLANNING
-
-# 指定日期
-hn2md release --date 20260620
-
-# 跳过自动备份（已有近期备份时）
-hn2md release --no-backup
-
-# 强制覆盖过期锁
-hn2md release --force
-```
-
-### 单步执行
-
-```powershell
-hn2md fetch                # 抓取 HN 新闻
-hn2md collect              # 抓取正文和讨论
-hn2md plan                 # LLM 生成摘要
-hn2md apply                # 写入数据库
-hn2md render               # 生成 Markdown/HTML
-hn2md cover                # 生成封面
-hn2md publish              # 发布微信草稿
-hn2md status               # 查看当前任务状态
-hn2md audit                # 质量检查
-```
-
-### 状态机特性
-
-- **幂等阶段**：已完成阶段自动跳过，支持 `--from-stage` 从任意阶段恢复
-- **运行账本**：每个阶段记录 `StageReceipt`（时间、成功/失败、重试次数、产物路径）
-- **每日锁**：防止并发运行，1 小时过期自动释放
-- **重试预算**：fetch=3, collect=2, plan=2, 其他=1
-
-## 测试
-
-```powershell
-# 运行所有测试
-pytest tests/ -v
-
-# 运行带覆盖率报告
-pytest tests/ -v --cov=src --cov-report=term-missing
-
-# 运行特定模块
-pytest tests/core/ -v
-pytest tests/llm/ -v
-
-# PowerShell 安装器测试
-powershell -NoProfile -ExecutionPolicy Bypass -File .\tests\test_install_skill.ps1
-```
-
-## 项目指令
-
-根目录的 `AGENT.md` 是 Codex 自动读取的项目级操作约束，必须留在根目录，不能移动到 `docs`。
-
-## License
-
-MIT
+发布规则的已接受取舍见 [决策记录](docs/DECISIONS.md)。

@@ -54,6 +54,8 @@ CLAUDE.md
 QWEN.md
 docs/*
 !/docs/DECISIONS.md
+!/docs/RUNBOOK.md
+!/docs/INSTRUCTION_AUDIT_20260906.md
 /docs/superpowers/
 
 # ─── Codex / Skills ─────────────────────────────────────────────

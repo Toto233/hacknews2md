@@ -69,7 +69,7 @@ def repair_story_content(
     content_file = repair_dir / f"story_{story_id}_{timestamp}.txt"
     content_file.write_text(normalized_content + "\n", encoding="utf-8")
 
-    context_file = write_collection_context(_hn_runtime_context(ctx))
+    context_file = write_collection_context(_hn_runtime_context(ctx), period=ctx.period)
     machine, _ = JobStateMachine.load_or_create(ctx.job_dir, ctx.period)
     machine.refresh_collection_context(context_file, story_id)
     machine.invalidate_audit()

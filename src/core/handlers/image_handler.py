@@ -17,6 +17,7 @@ import certifi
 import requests
 
 from src.security.url_validator import SecurityError, validate_url
+from src.utils.filename import sanitize_filename_stem
 from src.utils.http_constants import IMAGE_HEADERS
 
 logger = logging.getLogger(__name__)
@@ -133,8 +134,7 @@ def is_low_signal_article_image_url(image_url: str) -> bool:
 def _reserve_image_path(date_dir: str, title: str | None, extension: str, image_url: str) -> str:
     """Reserve a unique final filename before concurrent download work starts."""
     if title:
-        stem = re.sub(r'[<>:"/\\|?*]', "", title).replace(" ", "_")
-        stem = re.sub(r"_{2,}", "_", stem)[:50] or "image"
+        stem = sanitize_filename_stem(title)
     else:
         stem = hashlib.md5(image_url.encode()).hexdigest()
 

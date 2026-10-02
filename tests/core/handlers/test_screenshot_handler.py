@@ -31,3 +31,29 @@ def test_capture_waits_for_delayed_consent_before_screenshot() -> None:
         capture_page_screenshot("https://www.africanews.com/example", "Africanews")
 
     assert events == ["navigate", "render_wait", "consent", "screenshot"]
+
+
+def test_capture_uses_a_markdown_safe_filename() -> None:
+    driver = MagicMock()
+
+    with (
+        patch("src.core.handlers.screenshot_handler.datetime") as mocked_datetime,
+        patch("src.core.handlers.screenshot_handler.os.path.exists", side_effect=[True, False]),
+        patch("src.core.handlers.screenshot_handler.webdriver.Chrome", return_value=driver),
+        patch("src.core.handlers.screenshot_handler.validate_url"),
+        patch("src.core.handlers.screenshot_handler.time.sleep"),
+        patch(
+            "src.core.handlers.screenshot_handler.dismiss_cookie_consent",
+            return_value=CookieConsentResult(action="not_found"),
+        ),
+    ):
+        mocked_datetime.now.return_value = datetime(2026, 9, 7)
+        capture_page_screenshot(
+            "https://example.com/article",
+            "Your intellectual fly is open (2025)",
+        )
+
+    saved_path = driver.save_screenshot.call_args.args[0]
+    assert saved_path.endswith("Your_intellectual_fly_is_open_2025.png")
+    assert "(" not in saved_path
+    assert ")" not in saved_path

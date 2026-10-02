@@ -11,6 +11,7 @@ from typing import Any
 from hn2md.constants import Stage
 from hn2md.context import RuntimeContext
 from hn2md.state import JobStateMachine
+from hn2md.stages.audit import MIN_DISCUSSION_SUMMARY_LENGTH, MIN_SUMMARY_LENGTH
 from hn2md.stages.base import BaseStage
 from src.db.connection import get_db
 from src.security.content_sanitizer import (
@@ -70,11 +71,18 @@ def _validate_manual_plan(plan: object) -> dict[str, Any]:
 
         length_errors = validate_summary_length(
             normalized["content_summary"],
-            min_length=20,
+            min_length=MIN_SUMMARY_LENGTH,
             field_name=f"items[{index}].content_summary",
         )
         if length_errors:
             raise ValueError("content_summary: " + "; ".join(length_errors))
+        discussion_length_errors = validate_summary_length(
+            normalized["discuss_summary"],
+            min_length=MIN_DISCUSSION_SUMMARY_LENGTH,
+            field_name=f"items[{index}].discuss_summary",
+        )
+        if discussion_length_errors:
+            raise ValueError("discuss_summary: " + "; ".join(discussion_length_errors))
 
         item_ids.append(news_id)
         normalized_items.append(normalized)
@@ -131,13 +139,15 @@ class PlanStage(BaseStage):
         from src.llm.llm_business import generate_summary, translate_title
         from src.llm.llm_evaluator import evaluate_news_attraction
         from src.llm.llm_tag_extractor import extract_tags_with_llm
+        period = getattr(getattr(machine, "job", None), "date", None) or datetime.now().strftime("%Y%m%d")
         with get_db(str(ctx.db_path)) as conn:
             conn.row_factory = sqlite3.Row
             cur = conn.cursor()
             cur.execute(
                 "SELECT id, title, title_chs, news_url, discuss_url, "
                 "article_content, discussion_content, content_summary, discuss_summary "
-                "FROM news WHERE date(created_at)=date('now','localtime') ORDER BY id"
+                "FROM news WHERE strftime('%Y%m%d', created_at) = ? ORDER BY id",
+                (period,),
             )
             rows = cur.fetchall()
 
@@ -162,7 +172,18 @@ class PlanStage(BaseStage):
                 item_warnings.append(f"ID {row['id']}: summary contains hallucination markers")
             if contains_hallucination_markers(title_chs):
                 item_warnings.append(f"ID {row['id']}: title_chs contains hallucination markers")
-            length_errors = validate_summary_length(summary, min_length=20, field_name=f"ID {row['id']} summary")
+            length_errors = validate_summary_length(
+                summary,
+                min_length=MIN_SUMMARY_LENGTH,
+                field_name=f"ID {row['id']} summary",
+            )
+            length_errors.extend(
+                validate_summary_length(
+                    d_summary,
+                    min_length=MIN_DISCUSSION_SUMMARY_LENGTH,
+                    field_name=f"ID {row['id']} discussion summary",
+                )
+            )
             item_warnings.extend(length_errors)
 
             if item_warnings:
@@ -189,7 +210,20 @@ class PlanStage(BaseStage):
             for it in items
         )
         short_content = any(
-            bool(validate_summary_length(it["content_summary"], min_length=20, field_name="tmp"))
+            bool(
+                validate_summary_length(
+                    it["content_summary"],
+                    min_length=MIN_SUMMARY_LENGTH,
+                    field_name="tmp",
+                )
+            )
+            or bool(
+                validate_summary_length(
+                    it["discuss_summary"],
+                    min_length=MIN_DISCUSSION_SUMMARY_LENGTH,
+                    field_name="tmp discussion",
+                )
+            )
             for it in items
         )
 

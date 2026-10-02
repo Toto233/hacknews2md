@@ -256,6 +256,92 @@ def test_run_release_can_rerun_publishing_from_done_without_prior_stages(tmp_pat
     fake_stage.run.assert_called_once()
 
 
+def test_run_release_blocks_duplicate_wechat_draft_without_explicit_intent(tmp_path) -> None:
+    fake_stage = FakePublishStage()
+    source = SourceDefinition(
+        name="hackernews",
+        period_kind="date",
+        stages={GenericStage.PUBLISHING: lambda: fake_stage},
+    )
+    ctx = PublisherContext.create(tmp_path, source="hackernews", period="20260627")
+    machine, _ = JobStateMachine.load_or_create(ctx.job_dir, ctx.period)
+    machine.job.status = HnStage.DONE.value
+    successful_publish = {
+        "success": True,
+        "output_summary": {"wechat_media_id": "existing-media"},
+    }
+    machine.job.stages[HnStage.PUBLISHING.value] = successful_publish
+    machine.job.receipts[HnStage.PUBLISHING.value] = [successful_publish]
+    machine._save()
+
+    with pytest.raises(click.ClickException, match="--new-draft"):
+        run_release(
+            ctx,
+            source,
+            stages=[GenericStage.PUBLISHING],
+            targets=("wechat",),
+            rerun=True,
+        )
+
+    fake_stage.run.assert_not_called()
+
+
+def test_run_release_allows_explicit_new_wechat_draft(tmp_path) -> None:
+    fake_stage = FakePublishStage()
+    source = SourceDefinition(
+        name="hackernews",
+        period_kind="date",
+        stages={GenericStage.PUBLISHING: lambda: fake_stage},
+    )
+    ctx = PublisherContext.create(tmp_path, source="hackernews", period="20260627")
+    machine, _ = JobStateMachine.load_or_create(ctx.job_dir, ctx.period)
+    machine.job.status = HnStage.DONE.value
+    machine.job.stages[HnStage.PUBLISHING.value] = {
+        "success": True,
+        "output_summary": {"wechat_media_id": "existing-media"},
+    }
+    machine._save()
+
+    result = run_release(
+        ctx,
+        source,
+        stages=[GenericStage.PUBLISHING],
+        targets=("wechat",),
+        rerun=True,
+        allow_duplicate_publish=True,
+    )
+
+    assert result["completed_stages"] == ["PUBLISHING"]
+    fake_stage.run.assert_called_once()
+
+
+def test_run_release_can_rerun_planning_from_done(tmp_path) -> None:
+    fake_stage = FakePlanStage()
+
+    def run_plan(_ctx, machine, **_kwargs):
+        machine.transition(HnStage.PLANNING)
+        return fake_stage.run.return_value
+
+    fake_stage.run.side_effect = run_plan
+    source = SourceDefinition(
+        name="hackernews",
+        period_kind="date",
+        stages={GenericStage.PLANNING: lambda: fake_stage},
+        audit_required_stages=(),
+    )
+    ctx = PublisherContext.create(tmp_path, source="hackernews", period="20260627")
+    machine, _ = JobStateMachine.load_or_create(ctx.job_dir, ctx.period)
+    machine.job.status = HnStage.DONE.value
+    machine._save()
+
+    result = run_release(ctx, source, stages=[GenericStage.PLANNING], rerun=True)
+
+    assert result["completed_stages"] == ["PLANNING"]
+    reloaded, _ = JobStateMachine.load_or_create(ctx.job_dir, ctx.period)
+    assert reloaded.job.status == HnStage.PLANNING.value
+    fake_stage.run.assert_called_once()
+
+
 def test_run_release_passes_publish_targets_to_publish_stage(tmp_path) -> None:
     fake_stage = FakePublishStage()
     source = SourceDefinition(

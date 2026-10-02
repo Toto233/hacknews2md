@@ -1,87 +1,43 @@
 ---
 name: wechat-cover-imagegen
-description: Generate WeChat Official Account 21:9 cover images with the standard built-in ImageGen tool, especially for HackNews daily posts; use when the user asks for 微信公众号头图, 21:9 头图, 微信封面, article cover, or wants typography-first baoyu/guizang-style prompts without HTML/CSS rendering.
+description: Generate or edit WeChat 21:9 article covers with standard ImageGen, a central visual, clear side-set Chinese typography, and an adjustable square crop.
 ---
 
 # WeChat Cover ImageGen
 
-Create a WeChat Official Account main cover with the standard built-in `image_gen.imagegen` tool. The default output is a `21:9` typography-first title image: a compressed Chinese display title, refined editorial composition, one restrained supporting visual, and a center `1:1` safe crop for sharing previews.
+Deliver a balanced image-and-type WeChat cover using the standard built-in `image_gen.imagegen` tool. The publishing workflow owns registration and upload; this skill owns the visual artifact.
 
-## Workflow
+## Choose the copy
 
-1. Identify the article's cover hook.
-   - For HackNews daily posts, use the first story in the manual plan's `ordered_ids` unless the user explicitly specifies another topic. Do not select a lower-ranked story for visual appeal.
-   - Compress the hook into `DISPLAY_TITLE`, usually 4-12 Chinese characters for maximum impact.
-   - Preserve the original meaning, emotion, and core conflict.
-   - If the title is long, split it into 2-3 short lines; do not shrink the font to force one line.
-   - Do not add subtitles, dates, labels, tags, or footers unless the user explicitly asks for them.
+For daily HackNews, use the first story in the manual plan's `ordered_ids`, unless the user chooses another topic.
 
-2. Choose the cover type.
-   - Default: `typography`, `title-only`, `bold`.
-   - Use `typography` when the user says the text主体要突出, 文字主体, 标题醒目, or the previous visual was too illustration-heavy.
-   - Use `metaphor` only when the user asks for a more visual/less text-heavy cover.
+标题文字需要清晰描述主题，并且要吸引人。先选定让读者看懂“谁发生了什么”的 `DISPLAY_TITLE`，用有来源支持的变化、结果或悬念吸引读者。保留有辨识度的主体和必要的“疑似”等限定；问号不能代替事实依据。用户指定文字时准确沿用，不为凑字数删去主体或限定。
 
-3. Build the prompt from [references/prompt-template.md](references/prompt-template.md).
-   - Fill `TITLE` with the original article title.
-   - Fill `DISPLAY_TITLE` with the compressed visual title.
-   - Keep visible text to the exact `DISPLAY_TITLE` only by default.
-   - Make the title occupy roughly `45-70%` of the canvas width.
-   - Keep the complete `DISPLAY_TITLE` inside the center `1:1` safe crop because WeChat draft publishing uses the same cover image plus `pic_crop_1_1` coordinates for sharing previews.
-   - Keep all important text and visual subjects inside the central safe area for WeChat thumbnail cropping.
+Choose copy before generation; ImageGen renders it exactly. Preserve the actual relationship between subjects, including when two models are not adversaries.
 
-4. Generate directly with the standard built-in `image_gen.imagegen` tool.
-   - Do not create HTML for the cover.
-   - Do not repair text by drawing over the bitmap with Pillow, SVG, Canvas, or HTML. If text is wrong or weak, regenerate with a stricter prompt.
-   - Do not call `publisher cover --mode image2`; that is the retired cover path.
-   - If built-in ImageGen fails, stop and report the error. Use the CLI/API fallback or Pillow only after the user explicitly approves that fallback.
+## Generate or edit
 
-5. Save the accepted image into the project output folder.
-   - For daily HackNews: `output/images/YYYYMMDD/wechat_cover_YYYYMMDD_<slug>.png`.
-   - Keep the original generated image in place; copy it to the project path.
-   - Do not generate a separate square share image by default. The publish step will pass `pic_crop_235_1` and `pic_crop_1_1` crop coordinates so WeChat can derive both previews from the same image.
+Read [the prompt template](references/prompt-template.md) when composing the image prompt. Fill `TITLE` for context and `DISPLAY_TITLE` for visible text. Select one appropriate style; the default is a recognizable central visual with bold editorial typography placed to one side. User-selected style takes priority. Use a more illustration-led cover when requested.
 
-6. If the user asks to publish, pass the saved file to:
+The output contract is:
 
-```powershell
-.\scripts\publisher.ps1 publish hackernews `
-  '<absolute-path-to-today-markdown>' `
-  --cover-image '<absolute-path-to-accepted-cover>'
-```
+- 21:9 horizontal cover; 2100 × 900 is a prompt target, not a guaranteed tool output size.
+- Exact `DISPLAY_TITLE` is the only visible text unless the user requests more.
+- Design the full 21:9 image as the primary composition. Put the recognizable subject or visual metaphor in the middle region and the title in a left or right text zone, with enough inner margin to remain legible.
+- Keep image and text in balance: the title is large enough for mobile reading but does not cover the subject or turn the whole cover into a wall of type.
+- A centered or horizontally adjusted 1:1 crop can retain one complete core cue: preferably the main subject, otherwise a short key phrase or both. The full title may sit outside that crop.
+- Clear Chinese letterforms and strong contrast remain readable as a mobile thumbnail. Supporting imagery expresses the subject without invented conflict.
 
-## Prompt Rules
+For an edit, inspect the existing image and use it as the edit target, preserving accepted elements. Use the current tool's documented reference mechanism. Correct obvious defects through a targeted ImageGen edit or regeneration; keep the user's approved composition where possible. Accept a broadly attractive, legible result without repeated generation solely to perfect small alignment or a fixed center crop when a nearby adjustable 1:1 crop captures the core cue.
 
-- Use the standard built-in `image_gen.imagegen` tool. No HTML-based composition and no legacy Image2 wrapper.
-- Mention the exact aspect: `WeChat Official Account title image, 21:9, 2100 x 900`.
-- Generate or choose `DISPLAY_TITLE` before image generation; do not put a 20-30 character raw headline directly on the image.
-- State that visible text must be exactly `DISPLAY_TITLE` by default and nothing else.
-- Say `Do NOT add any other visible text, labels, numbers, English slogans, fake UI text, brand logos, QR codes, watermarks, or random annotations`.
-- For text-first covers, require the Chinese title to be the first visual focus and remain readable as a mobile thumbnail.
-- Require the center square crop, roughly the middle 42-43% of the width and full height, to still contain the complete readable title.
-- Use a mature commercial poster or magazine-cover composition, not a generic illustration with text placed on top.
-- Use supporting visuals as quiet metaphors, not as the hero.
-- Avoid clutter: no subtitles, footers, dates, decorative blobs, excessive gradients, neon glow, rounded SaaS cards, fake dashboards, buttons, dense icons, or tiny issue labels unless the user asks.
+If generation fails, use bounded recovery with the same standard tool and continue independent authorized work. CLI/API, Pillow or drawn-text replacement requires explicit user approval; ordinary size/path control is not a reason to switch. The legacy Image2 wrapper is not the daily generation path.
 
-## Style Defaults
+## Verify and hand off
 
-Use a Baoyu-style five-dimension framing:
+Inspect the actual output for exact wording, factual meaning, wide-layout balance, legibility, and a recognizable central subject or meaningful adjustable 1:1 crop. Regenerate for wrong text, unreadable type, missing topic imagery, or an unusable composition; do not regenerate only for minor crop positioning the user can adjust.
 
-- Type: `typography`
-- Palette: high-contrast editorial tech palette, off-white base, deep black text, one vivid accent
-- Rendering: polished digital editorial cover, clean vector or subtle print texture
-- Text: `title-only`
-- Mood: `bold`
+Copy the selected image into the project, preserving the generated original. Daily HackNews path: `output/images/YYYYMMDD/wechat_cover_YYYYMMDD_<slug>.png`; use a sibling version for revisions unless replacement is requested. Return the saved absolute path and selected display title.
 
-Select one style family from the prompt template based on the title:
+WeChat derives wide and square previews from the same uploaded cover using `pic_crop_235_1` and `pic_crop_1_1`. Optimize first for the wide cover most readers see; treat the square as a compact, adjustable preview that preserves the core cue rather than a container for every element. A separate generated square image is unnecessary; a local crop preview for verification is not a second cover.
 
-- Deep commentary / social observation
-- Tech / AI / programming
-- Business / workplace / methodology
-- People / story / culture
-- Emotion / life / growth
-
-Use Guizang-style restraint:
-
-- One strong visual argument.
-- Generous whitespace.
-- Clear hierarchy.
-- Visual elements support meaning; they are not decoration.
+A cover-only request ends with the verified image. For an unfinished authorized release, return the artifact to its publishing workflow and continue.

@@ -4,6 +4,7 @@ import logging
 import re
 import sqlite3
 import subprocess
+from datetime import datetime
 from pathlib import Path
 from typing import Any
 
@@ -42,30 +43,57 @@ _WECHAT_IMAGE_LIMIT_BYTES = 1024 * 1024
 _WECHAT_SUPPORTED_IMAGE_SUFFIXES = {".jpg", ".jpeg", ".png", ".webp"}
 
 
-def _require_screenshots_for_publish(ctx: RuntimeContext) -> None:
-    """Stop before WeChat work when the mandatory visual fallback is incomplete."""
+def _require_screenshots_for_publish(
+    ctx: RuntimeContext,
+    period: str | None = None,
+    *,
+    waivers: list[dict[str, Any]] | None = None,
+    run_id: str | None = None,
+) -> list[dict[str, Any]]:
+    """Stop before WeChat work unless each missing capture has an exact user waiver."""
+    period = period or datetime.now().strftime("%Y%m%d")
     with get_db(str(ctx.db_path)) as conn:
         conn.row_factory = sqlite3.Row
         has_news_table = conn.execute(
             "SELECT 1 FROM sqlite_master WHERE type='table' AND name='news'"
         ).fetchone()
         if has_news_table is None:
-            return
+            return []
         missing = conn.execute(
             """
             SELECT id, news_url
             FROM news
-            WHERE date(created_at)=date('now','localtime')
+            WHERE strftime('%Y%m%d', created_at) = ?
               AND coalesce(news_url, '') != ''
               AND coalesce(screenshot, '') = ''
             ORDER BY id
-            """
+            """,
+            (period,),
         ).fetchall()
-    if missing:
-        details = "; ".join(f"{row['id']}: {row['news_url']}" for row in missing)
+    applicable = {
+        (entry.get("period"), entry.get("news_id"), entry.get("news_url")): entry
+        for entry in (waivers or [])
+        if entry.get("approved_by") == "user"
+        and entry.get("run_id") == run_id
+        and entry.get("reason")
+    }
+    waived = [
+        applicable[(period, row["id"], row["news_url"])]
+        for row in missing
+        if (period, row["id"], row["news_url"]) in applicable
+    ]
+    unresolved = [
+        row for row in missing
+        if (period, row["id"], row["news_url"]) not in applicable
+    ]
+    if unresolved:
+        details = "; ".join(f"{row['id']}: {row['news_url']}" for row in unresolved)
         raise NonRetryableStageError(
             f"Mandatory screenshot fallback is incomplete. Rerun capture-screenshots for: {details}"
         )
+    if waived:
+        logger.warning("[PUBLISH] User-approved screenshot waiver(s): %s", waived)
+    return waived
 
 
 def _sentence_for_keyword(line: str, keyword: str) -> str:
@@ -90,22 +118,54 @@ def _sentence_for_keyword(line: str, keyword: str) -> str:
     return stripped[start:end].strip()[:500]
 
 
+def _visible_keyword_line(line: str) -> tuple[str, bool]:
+    """Exclude Markdown image paths and heading syntax from review text."""
+    stripped = line.strip()
+    image = re.fullmatch(r"!\[(.*?)\]\(.*\)", stripped)
+    if image:
+        return image.group(1), True
+    if stripped.startswith("#"):
+        return re.sub(r"^\d+\.\s*", "", re.sub(r"^#{1,6}\s*", "", stripped)), False
+    return stripped, False
+
+
 def _keyword_locations(markdown_content: str, keywords: list[str], markdown_file: str) -> list[dict[str, Any]]:
-    """Return line-level keyword warnings with the full sentence for review."""
+    """Group identical visible keyword contexts while retaining every location."""
     lines = markdown_content.splitlines()
     locations: list[dict[str, Any]] = []
+    by_context: dict[tuple[int, str, str], dict[str, Any]] = {}
+    section_line = 0
     for line_number, line in enumerate(lines, 1):
+        if re.match(r"^#{1,6}\s", line.strip()):
+            section_line = line_number
+        visible, is_image = _visible_keyword_line(line)
         for keyword in keywords:
-            if keyword in line:
-                locations.append(
-                    {
-                        "keyword": keyword,
-                        "path": markdown_file,
-                        "line": line_number,
-                        "sentence": _sentence_for_keyword(line, keyword),
-                        "context": line.strip()[:240],
-                    }
-                )
+            if keyword not in visible:
+                continue
+            sentence = _sentence_for_keyword(visible, keyword)
+            key = (section_line, keyword, sentence)
+            location = {"line": line_number, "context": visible[:240]}
+            legacy_sentence = _sentence_for_keyword(line, keyword)
+            if is_image and key in by_context:
+                warning = by_context[key]
+                warning.setdefault("locations", [
+                    {"line": warning["line"], "context": warning["context"]}
+                ]).append(location)
+            else:
+                warning = {
+                    "keyword": keyword,
+                    "path": markdown_file,
+                    "line": line_number,
+                    "sentence": sentence,
+                    "context": location["context"],
+                }
+                locations.append(warning)
+                if is_image:
+                    by_context[key] = warning
+            if legacy_sentence != sentence:
+                legacy = warning.setdefault("legacy_sentences", [])
+                if legacy_sentence not in legacy:
+                    legacy.append(legacy_sentence)
     return locations
 
 
@@ -351,8 +411,14 @@ class PublishStage(BaseStage):
         if not md_file:
             raise RuntimeError("No markdown file")
 
+        screenshot_waivers_applied: list[dict[str, Any]] = []
         if isinstance(ctx, RuntimeContext):
-            _require_screenshots_for_publish(ctx)
+            screenshot_waivers_applied = _require_screenshots_for_publish(
+                ctx,
+                getattr(machine.job, "date", None),
+                waivers=getattr(machine.job, "screenshot_waivers", []),
+                run_id=getattr(machine.job, "run_id", None),
+            )
 
         # --- Content safety gate ---
         # Check markdown content for illegal keywords before publishing
@@ -405,6 +471,7 @@ class PublishStage(BaseStage):
                 "compressed_images": compressed_images,
                 "converted_images": converted_images,
                 "keyword_warnings": keyword_warnings,
+                "screenshot_waivers_applied": screenshot_waivers_applied,
                 "astro": {"status": "dry_run"} if "astro" in targets else None,
                 "requested_targets": list(targets),
                 "completed_targets": [],
@@ -434,6 +501,7 @@ class PublishStage(BaseStage):
             "compressed_images": compressed_images,
             "converted_images": converted_images,
             "keyword_warnings": keyword_warnings,
+            "screenshot_waivers_applied": screenshot_waivers_applied,
             "astro": astro,
             "requested_targets": list(targets),
             "completed_targets": completed_targets,

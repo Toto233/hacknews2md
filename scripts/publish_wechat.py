@@ -8,8 +8,9 @@ import os
 import argparse
 import re
 import platform
-from datetime import datetime
+from pathlib import Path
 from typing import Dict, Optional
+from urllib.parse import urlsplit
 
 # 添加项目根目录到 Python 路径
 script_dir = os.path.dirname(os.path.abspath(__file__))
@@ -237,12 +238,195 @@ def extract_html_content(html_content: str) -> Dict:
     }
 
 
+def _preview_cover(cover_path: Path) -> tuple[list[str], list[str]]:
+    """Check the cover and both WeChat crops at thumbnail viewing size."""
+    from PIL import Image, ImageOps, ImageStat
+
+    errors: list[str] = []
+    details: list[str] = []
+    try:
+        with Image.open(cover_path) as image:
+            image.load()
+            width, height = image.size
+            if width < 900 or height < 383:
+                errors.append(f"封面尺寸偏小: {width}x{height}（预检建议至少 900x383）")
+
+            fields = build_cover_crop_fields(str(cover_path))
+            if not fields:
+                errors.append("无法计算封面裁剪参数")
+                return errors, details
+
+            for label, field in (("2.35:1", "pic_crop_235_1"), ("1:1", "pic_crop_1_1")):
+                crop = fields[field]
+                x1, y1, x2, y2 = (float(value) for value in crop.split("_"))
+                box = (
+                    round(x1 * width), round(y1 * height),
+                    round(x2 * width), round(y2 * height),
+                )
+                cropped = image.crop(box)
+                crop_width, crop_height = cropped.size
+                if min(crop_width, crop_height) < 300:
+                    errors.append(f"封面 {label} 裁剪分辨率偏低: {crop_width}x{crop_height}")
+                thumbnail = ImageOps.grayscale(cropped).resize((120, 120))
+                contrast = ImageStat.Stat(thumbnail).stddev[0]
+                if contrast < 3:
+                    errors.append(f"封面 {label} 缩略图对比度过低（{contrast:.1f}）")
+                details.append(f"{label}={crop} ({crop_width}x{crop_height}, 缩略图对比度 {contrast:.1f})")
+    except (OSError, ValueError) as exc:
+        errors.append(f"封面无法读取: {cover_path} ({exc})")
+    return errors, details
+
+
+def preview_wechat_article(
+    md_file_path: str,
+    author: str | None = None,
+    digest: str | None = None,
+    cover_image: str | None = None,
+    auto_cover: bool = True,
+) -> bool:
+    """Validate the locally prepared draft without constructing a WeChat client."""
+    from bs4 import BeautifulSoup
+    from PIL import Image
+
+    md_path = Path(md_file_path)
+    errors: list[str] = []
+    warnings: list[str] = []
+    if not md_path.is_file():
+        print(f"[ERROR] Markdown 文件不存在: {md_path}")
+        return False
+
+    try:
+        parsed = parse_markdown_frontmatter(str(md_path))
+        frontmatter = parsed["frontmatter"]
+        title = frontmatter.get("title", "未命名文章").strip()
+        final_author = (author or frontmatter.get("author", "hacknews")).strip()
+        final_digest = (digest or frontmatter.get("digest", "") or title[:120]).strip()
+        source_url = frontmatter.get("source_url", "").strip()
+        html_content = convert_markdown_to_html(parsed["raw_content"])
+        soup = BeautifulSoup(html_content, "html.parser")
+        content_element = soup.body or soup
+        visible_text = content_element.get_text(" ", strip=True)
+
+        if not title or title == "未命名文章":
+            errors.append("缺少文章标题")
+        if not final_author:
+            errors.append("缺少作者")
+        if not final_digest:
+            errors.append("缺少摘要")
+        if not visible_text:
+            errors.append("转换后的文章正文为空")
+        parsed_source_url = urlsplit(source_url)
+        if source_url and (parsed_source_url.scheme not in {"http", "https"} or not parsed_source_url.netloc):
+            errors.append("来源链接不是 HTTP(S) URL")
+        if content_element.find(["script", "iframe", "object", "embed"]):
+            errors.append("文章正文包含不可发布的主动内容标签")
+
+        image_tags = content_element.find_all("img")
+        markdown_images = re.findall(r"!\[[^\]]*\]\([^)]+\)", parsed["content"])
+        if len(image_tags) < len(markdown_images):
+            errors.append(f"Markdown 图片有 {len(markdown_images)} 张，但仅转换出 {len(image_tags)} 张")
+        local_count = 0
+        remote_count = 0
+        for image_tag in image_tags:
+            src = image_tag.get("src", "").strip()
+            if not src:
+                errors.append("正文图片缺少 src")
+                continue
+            if src.startswith(("http://", "https://", "//", "data:")):
+                remote_count += 1
+                continue
+            local_count += 1
+            # The publish path resolves paths from the process cwd, not the
+            # Markdown directory. Keep this check aligned with that behavior.
+            path = Path(smart_path_convert(src))
+            if not path.is_file():
+                hint = "（请改为绝对路径）" if not path.is_absolute() and (md_path.parent / path).is_file() else ""
+                errors.append(f"正文图片不存在: {src}{hint}")
+                continue
+            if path.suffix.lower() not in {".jpg", ".jpeg", ".png", ".webp"}:
+                errors.append(f"正文图片格式不受微信自动上传支持: {src}")
+            if path.stat().st_size > 1024 * 1024:
+                errors.append(f"正文图片超过微信自动上传 1MB 限制: {src}")
+            try:
+                with Image.open(path) as image:
+                    image.load()
+            except (OSError, ValueError) as exc:
+                errors.append(f"正文图片无法读取: {src} ({exc})")
+
+        cover_details: list[str] = []
+        if cover_image:
+            cover_path = Path(smart_path_convert(cover_image))
+            if not cover_path.is_file():
+                errors.append(f"指定封面不存在: {cover_path}")
+            else:
+                cover_errors, cover_details = _preview_cover(cover_path)
+                errors.extend(cover_errors)
+        elif auto_cover:
+            warnings.append("发布时会自动生成封面；此预检无法验证尚未生成的封面")
+        elif local_count:
+            warnings.append("发布时将使用第一篇新闻图片作封面；如需检查封面裁剪，请指定 --cover-image")
+        else:
+            warnings.append("发布时将使用默认封面；本地无封面可检查")
+
+        print("=== 微信草稿本地预检 ===")
+        print(f"文件: {md_path.resolve()}")
+        print(f"文章: {title} | 作者: {final_author} | 摘要: {final_digest}")
+        print(f"正文: {len(visible_text)} 字符，{len(content_element.find_all('h2'))} 个二级标题；图片: {local_count} 本地 / {remote_count} 远程")
+        if cover_details:
+            print("封面裁剪: " + "; ".join(cover_details))
+        for warning in warnings:
+            print(f"[WARN] {warning}")
+        for error in errors:
+            print(f"[ERROR] {error}")
+        print(f"预检结果: {'通过' if not errors else '失败'}（{len(errors)} 个错误，{len(warnings)} 个提醒）")
+        return not errors
+    except (OSError, ValueError) as exc:
+        print(f"[ERROR] 预检失败: {exc}")
+        return False
+
+
+def verify_wechat_draft(wechat, media_id: str, expected_title: str, expected_images: int) -> bool:
+    """Read the created draft and confirm its cover and remote body images."""
+    from bs4 import BeautifulSoup
+
+    data = wechat.get_draft_list(offset=0, count=20, no_content=0)
+    if not isinstance(data, dict):
+        return False
+    items = data.get("item", [])
+    if not isinstance(items, list):
+        return False
+    for item in items:
+        if not isinstance(item, dict) or item.get("media_id") != media_id:
+            continue
+        content = item.get("content", {})
+        news_items = content.get("news_item", []) if isinstance(content, dict) else []
+        if not isinstance(news_items, list) or not news_items:
+            return False
+        article = news_items[0]
+        if not isinstance(article, dict):
+            return False
+        if article.get("title") != expected_title or not article.get("thumb_media_id"):
+            return False
+        soup = BeautifulSoup(str(article.get("content", "")), "html.parser")
+        images = soup.find_all("img")
+        if len(images) != expected_images:
+            return False
+        return all(
+            str(image.get("data-src") or image.get("src") or "").startswith(
+                ("https://", "http://")
+            )
+            for image in images
+        )
+    return False
+
+
 def publish_to_wechat(
     md_file_path: str,
     author: str = None,
     digest: str = None,
     cover_image: str = None,
     auto_cover: bool = True,
+    strict_images: bool = False,
 ) -> Optional[str]:
     """
     发布 Markdown 文件到微信公众号草稿箱
@@ -349,11 +533,30 @@ def publish_to_wechat(
 
     # 上传到草稿箱
     print("\n正在上传到微信公众号草稿箱...")
-    media_id = wechat.add_draft_smart([article], thumb_media_id_to_use, thumb_image_path=cover_image)
+    media_id = wechat.add_draft_smart(
+        [article],
+        thumb_media_id_to_use,
+        thumb_image_path=cover_image,
+        strict_images=strict_images,
+    )
 
     if media_id:
-        print("\n[OK] 成功上传到草稿箱!")
-        print(f"  Media ID: {media_id}")
+        if strict_images:
+            print(f"  Media ID: {media_id}")
+            from bs4 import BeautifulSoup
+
+            expected_images = len(
+                BeautifulSoup(extracted["content"], "html.parser").find_all("img")
+            )
+            if not verify_wechat_draft(wechat, media_id, title, expected_images):
+                print("[ERROR] 草稿已创建，但回读未确认封面和正文图片；请检查草稿箱后再重试")
+                return None
+            print("PUBLISH_IMAGE_UPLOADS_OK=1")
+        if strict_images:
+            print("\n[OK] 成功上传并核验草稿箱图片!")
+        else:
+            print("\n[OK] 成功上传到草稿箱!")
+            print(f"  Media ID: {media_id}")
         print(f"  你可以在微信公众号后台找到这篇草稿")
         return media_id
     else:
@@ -383,18 +586,20 @@ def main():
     parser.add_argument('--digest', help='文章摘要（覆盖 YAML 中的值）')
     parser.add_argument('--cover-image', help='指定微信题图路径；默认会自动生成题图')
     parser.add_argument('--no-auto-cover', action='store_true', help='禁用自动题图，回退到第一篇新闻图片')
-    parser.add_argument('--preview', '-p', action='store_true', help='预览模式，只显示信息不上传')
+    parser.add_argument('--preview', '-p', action='store_true', help='本地预检正文、图片和封面，不上传')
+    parser.add_argument('--strict-images', action='store_true', help='要求所有本地图片上传并回读草稿成功')
 
     args = parser.parse_args()
 
     if args.preview:
-        print("=== 预览模式 ===")
-        parsed = parse_markdown_frontmatter(args.md_file)
-        print(f"\n文件: {args.md_file}")
-        print(f"\nYAML 元数据:")
-        for key, value in parsed['frontmatter'].items():
-            print(f"  {key}: {value}")
-        print(f"\n正文长度: {len(parsed['content'])} 字符")
+        if not preview_wechat_article(
+            args.md_file,
+            args.author,
+            args.digest,
+            cover_image=args.cover_image,
+            auto_cover=not args.no_auto_cover,
+        ):
+            sys.exit(1)
         return
 
     # 发布到微信
@@ -404,6 +609,7 @@ def main():
         args.digest,
         cover_image=args.cover_image,
         auto_cover=not args.no_auto_cover,
+        strict_images=args.strict_images,
     )
 
     if media_id:

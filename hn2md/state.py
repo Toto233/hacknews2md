@@ -17,6 +17,11 @@ from hn2md.constants import RETRY_BUDGETS, Stage
 
 logger = logging.getLogger(__name__)
 
+NON_EXEMPTIBLE_AUDIT_CODES = {
+    "summary_too_short",
+    "discussion_summary_too_short",
+}
+
 
 def _audit_issue_fingerprint(report: dict[str, Any]) -> str:
     """Return a stable fingerprint for the actionable issues in an audit report."""
@@ -138,6 +143,12 @@ class PublishJob:
     audit_report: dict[str, Any] | None = None
     audit_exemption: dict[str, Any] | None = None
     publish_intent: dict[str, Any] | None = None
+    manual_astro: dict[str, Any] | None = None
+    continuation_notes: list[dict[str, Any]] | dict[str, Any] | None = None
+    review_assessment: dict[str, Any] | None = None
+    keyword_decisions: list[dict[str, Any]] = field(default_factory=list)
+    screenshot_waivers: list[dict[str, Any]] = field(default_factory=list)
+    remote_readback: dict[str, Any] | None = None
     run_id: str = ""
 
     def to_json(self, path: Path) -> None:
@@ -301,11 +312,54 @@ class JobStateMachine:
         self.job.updated_at = datetime.now().isoformat()
         self._save()
 
+    def record_manual_astro(self, evidence: dict[str, Any]) -> None:
+        """Persist verified Astro push evidence without reopening publication."""
+        self.job.manual_astro = dict(evidence)
+        intent = self.job.publish_intent
+        if isinstance(intent, dict):
+            requested = intent.setdefault("requested_targets", [])
+            completed = intent.setdefault("completed_targets", [])
+            if isinstance(requested, list) and "astro" not in requested:
+                requested.append("astro")
+            if isinstance(completed, list) and "astro" not in completed:
+                completed.append("astro")
+        self.job.updated_at = datetime.now().isoformat()
+        self._save()
+
+    def record_keyword_decision(self, decision: dict[str, Any]) -> None:
+        """Persist one contextual keyword review, replacing the same sentence review."""
+        keyword = str(decision.get("keyword") or "").strip()
+        sentence = str(decision.get("sentence") or "").strip()
+        if not keyword or not sentence:
+            raise ValueError("keyword and sentence are required")
+        self.job.keyword_decisions = [
+            item
+            for item in self.job.keyword_decisions
+            if not (
+                str(item.get("keyword") or "").strip() == keyword
+                and str(item.get("sentence") or "").strip() == sentence
+            )
+        ]
+        self.job.keyword_decisions.append(dict(decision))
+        self.job.updated_at = datetime.now().isoformat()
+        self._save()
+
     def approve_audit(self) -> None:
         """Approve the current blocking audit snapshot for this daily job."""
         report = self.job.audit_report
         if not report or not report.get("blocking_count"):
             raise ValueError("no blocking audit report to approve")
+        non_exemptible = sorted(
+            {
+                str(issue.get("code"))
+                for issue in report.get("issues", [])
+                if isinstance(issue, dict) and issue.get("code") in NON_EXEMPTIBLE_AUDIT_CODES
+            }
+        )
+        if non_exemptible:
+            raise ValueError(
+                "audit issues must be repaired and cannot be approved: " + ", ".join(non_exemptible)
+            )
         self.job.audit_exemption = {
             "approved_at": datetime.now().isoformat(),
             "issue_snapshot": report.get("issues", []),

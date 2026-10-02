@@ -179,7 +179,11 @@ def test_save_article_image_converts_from_temp_file_and_keeps_unique_paths(monke
     with ThreadPoolExecutor(max_workers=3) as executor:
         paths = list(
             executor.map(
-                lambda _: save_article_image("https://example.com/article.webp", "https://example.com", "Same title"),
+                lambda _: save_article_image(
+                    "https://example.com/article.webp",
+                    "https://example.com",
+                    "Same title (2026)",
+                ),
                 range(3),
             )
         )
@@ -187,4 +191,5 @@ def test_save_article_image_converts_from_temp_file_and_keeps_unique_paths(monke
     assert all(paths)
     assert len(set(paths)) == 3
     assert all(path.endswith(".png") for path in paths)
+    assert all("(" not in path and ")" not in path for path in paths)
     assert not list((tmp_path / "output" / "images").rglob("*.part"))

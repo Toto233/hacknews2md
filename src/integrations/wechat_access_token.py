@@ -79,10 +79,17 @@ class WeChatAccessToken:
         return self._draft_mgr.add_draft(articles)
 
     def add_draft_smart(
-        self, articles: list, default_thumb_media_id: str = None, thumb_image_path: str = None
+        self,
+        articles: list,
+        default_thumb_media_id: str = None,
+        thumb_image_path: str = None,
+        strict_images: bool = False,
     ) -> str | None:
         return self._draft_mgr.add_draft_smart(
-            articles, default_thumb_media_id=default_thumb_media_id, thumb_image_path=thumb_image_path
+            articles,
+            default_thumb_media_id=default_thumb_media_id,
+            thumb_image_path=thumb_image_path,
+            strict_images=strict_images,
         )
 
     def format_draft_list(self, draft_data: dict, show_content: bool = False) -> str:

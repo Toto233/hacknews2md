@@ -126,19 +126,22 @@ def capture_missing_screenshots(
     ctx: RuntimeContext,
     concurrency: int = 4,
     progress_path: Path | None = None,
+    period: str | None = None,
 ) -> dict[str, Any]:
     """Capture missing screenshots after collection; failures remain non-blocking."""
+    period = period or time.strftime("%Y%m%d")
     with get_db(str(ctx.db_path)) as conn:
         conn.row_factory = sqlite3.Row
         rows = conn.execute(
             """
             SELECT id, title, news_url
             FROM news
-            WHERE date(created_at)=date('now','localtime')
+            WHERE strftime('%Y%m%d', created_at) = ?
               AND coalesce(screenshot, '') = ''
               AND coalesce(news_url, '') != ''
             ORDER BY id
-            """
+            """,
+            (period,),
         ).fetchall()
 
     batch_started_at = time.monotonic()
