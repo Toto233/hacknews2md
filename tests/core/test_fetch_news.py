@@ -5,6 +5,7 @@ from contextlib import contextmanager
 from unittest.mock import patch, Mock
 
 import pytest
+import requests
 
 
 @pytest.fixture
@@ -82,6 +83,52 @@ class TestNormalizeDomain:
     def test_empty_string(self):
         from src.core.fetch_news import normalize_domain
         assert normalize_domain("") == ""
+
+
+def test_fetch_news_uses_honest_client_identity(fetch_news_db, sample_hn_html):
+    """The old fake Chrome UA reproducibly made HN /front return HTTP 419."""
+    from src.core.fetch_news import fetch_news
+
+    response = Mock(text=sample_hn_html)
+    response.raise_for_status.return_value = None
+    with patch("src.core.fetch_news.requests.get", return_value=response) as get:
+        assert fetch_news()
+
+    headers = get.call_args.kwargs["headers"]
+    assert headers["User-Agent"] == "hacknews2md/1.0"
+
+
+def test_fetch_news_419_is_not_retried(fetch_news_db):
+    from src.core.fetch_news import fetch_news
+
+    response = Mock(status_code=419)
+    response.raise_for_status.side_effect = requests.HTTPError("419 Client Error", response=response)
+    with patch("src.core.fetch_news.requests.get", return_value=response) as get, patch(
+        "src.core.fetch_news.time.sleep"
+    ) as sleep:
+        with pytest.raises(requests.HTTPError, match="419"):
+            fetch_news()
+
+    get.assert_called_once()
+    sleep.assert_not_called()
+
+
+def test_fetch_news_transient_http_error_still_retries(fetch_news_db, sample_hn_html):
+    from src.core.fetch_news import fetch_news
+
+    unavailable = Mock(status_code=503)
+    unavailable.raise_for_status.side_effect = requests.HTTPError(
+        "503 Service Unavailable", response=unavailable
+    )
+    recovered = Mock(text=sample_hn_html)
+    recovered.raise_for_status.return_value = None
+    with patch("src.core.fetch_news.requests.get", side_effect=[unavailable, recovered]) as get, patch(
+        "src.core.fetch_news.time.sleep"
+    ) as sleep:
+        assert fetch_news()
+
+    assert get.call_count == 2
+    sleep.assert_called_once()
 
 
 class TestExtractDomain:

@@ -26,6 +26,26 @@ This file records durable project decisions that should not be changed back and 
 
 ## Accepted decisions
 
+### 2026-10-02 — Identify the HN fetch client honestly and stop on HTTP 419
+
+- Status: Accepted
+- Issue: N/A (the user explicitly requested a fix before the next daily release)
+- Supersedes: N/A. Extends the 2026-10-02 browser-front recovery decision.
+- Context: An A/B probe of the exact `https://news.ycombinator.com/front` request returned 419 with the old fake Chrome/120 User-Agent and 200 with `hacknews2md/1.0`, twice in alternating order. The 419 body was only `Sorry`, so the server's private rule is not known. Today the nested fetch and stage retry loops repeated that unchanged rejection for minutes.
+- Decision: Use the honest `hacknews2md/1.0` User-Agent for ordinary `/front` scraping. Treat a future 419 as non-retryable and show the existing browser-observed `--front-ids` recovery route. Keep other transient-error retries and the actual `/front` selection semantics.
+- Failure mode of alternative: Reusing a fake browser identity retriggers the observed 419. Sleeping and retrying an unchanged 419 wastes the release window; silently switching to live API topstories can change the dated ranking.
+- Consequences: The normal scraper now works with the tested request identity. A changed upstream policy can still return 419, but the publisher fails promptly with an actionable, provenance-preserving recovery path rather than making duplicate attempts. See [the 419 recovery runbook](HN_FETCH_419.md).
+
+### 2026-10-02 — Recover an accessible HN browser front page without repeating HTTP 419
+
+- Status: Accepted
+- Issue: N/A (scoped recovery during the authorized daily release)
+- Supersedes: N/A
+- Context: The October 2 fetcher received HTTP 419 from `/front` while the same page was visible in the user's Edge browser. Repeating the unchanged request exhausted time without adding source evidence.
+- Decision: The publisher fetch command may accept ordered item IDs observed on the browser's actual `/front` page. It resolves each ID against the official HN item API, applies the existing history/domain and URL-safety filters, and requires ten saved stories. This explicit route leaves the normal scraper unchanged and records its provenance in the fetch receipt.
+- Failure mode of alternative: Blindly substituting the API's current top stories changes the selected period and ranking; repeated 419 attempts cannot recover an accessible browser page.
+- Consequences: An operator must first inspect the actual `/front` ranking and pass its IDs to the canonical publisher. This does not relax source, discussion, screenshot, audit, or publication gates.
+
 ### 2026-07-31 - Refresh manual repairs locally and expose capture progress
 
 - Status: Accepted

@@ -194,6 +194,7 @@ def unlock(
 @click.option("--month", type=int, default=None)
 @click.option("--limit", type=int, default=25, show_default=True)
 @click.option("--html-file", type=click.Path(exists=True, dir_okay=False), default=None)
+@click.option("--front-ids", default=None, help="Ordered HN /front item IDs observed in a browser (HackerNews recovery only)")
 def fetch(
     source_name: str,
     date_value: str | None,
@@ -201,11 +202,18 @@ def fetch(
     month: int | None,
     limit: int,
     html_file: str | None,
+    front_ids: str | None,
 ) -> None:
     source, ctx = _load_source_context(source_name, date_value, year, month)
     stage_kwargs = {}
     if source.period_kind == "month":
+        if front_ids:
+            raise click.ClickException("--front-ids is available only for hackernews")
         stage_kwargs[GenericStage.FETCHING] = {"limit": limit, "html_file": html_file}
+    elif front_ids:
+        if source.name != "hackernews":
+            raise click.ClickException("--front-ids is available only for hackernews")
+        stage_kwargs[GenericStage.FETCHING] = {"front_ids": front_ids}
     result = run_release(
         ctx,
         source,

@@ -77,7 +77,9 @@ def is_url_in_history(news_url: str, cursor: sqlite3.Cursor) -> bool:
 def fetch_news() -> list[dict[str, str]]:
     """获取HackerNews新闻列表"""
     headers = {
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+        # HN currently rejects the old fake Chrome/120 identity with HTTP 419
+        # while this honest client identity receives the same /front page.
+        "User-Agent": "hacknews2md/1.0",
         "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8",
         "Accept-Language": "zh-CN,zh;q=0.9,en;q=0.8",
         "Connection": "keep-alive",
@@ -90,6 +92,15 @@ def fetch_news() -> list[dict[str, str]]:
             response = requests.get(HACKERNEWS_URL, headers=headers, timeout=REQUEST_TIMEOUT)
             response.raise_for_status()
             break
+        except requests.HTTPError as e:
+            if e.response is not None and e.response.status_code == 419:
+                logger.error("HN /front returned HTTP 419; stopping unchanged retries")
+                raise
+            if attempt == MAX_RETRIES - 1:
+                logger.error(f"获取新闻失败: {e}")
+                return []
+            logger.warning(f"第{attempt + 1}次尝试失败，{RETRY_DELAY}秒后重试...")
+            time.sleep(RETRY_DELAY)
         except requests.RequestException as e:
             if attempt == MAX_RETRIES - 1:
                 logger.error(f"获取新闻失败: {e}")
