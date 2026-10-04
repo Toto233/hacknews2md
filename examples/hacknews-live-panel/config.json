@@ -1,0 +1,111 @@
+{
+  "meta": {"title": "Hacker News 日报发布流程", "lang": "zh-CN"},
+  "canvas": {"width": 1200, "height": 820, "duration": 15, "fps": 15, "preroll": 2},
+  "theme": {
+    "preset": "light-pastel",
+    "font": "\"Microsoft YaHei\",\"Noto Sans CJK SC\",sans-serif",
+    "fontSize": 21,
+    "lineHeight": 33,
+    "colors": {
+      "bg": "#ffffff", "bar": "#f3f6f8", "line": "#8b9dab", "line2": "#c9d5dd",
+      "dim": "#4e6372", "fg": "#182b3a", "wh": "#ffffff", "cy": "#087f99",
+      "bl": "#2b6dac", "pu": "#7952ae", "gr": "#22815c", "ye": "#946000",
+      "cyf": "#ecfaff", "blf": "#eef5ff", "puf": "#f7f1ff", "grf": "#ecfaf2", "yef": "#fff8e6",
+      "row": "#edf3f7", "dots": "#8fa3b2"
+    }
+  },
+  "clock": {"start": "00:00:15", "rate": 1},
+  "titlebar": {"text": "~/publisher — Hacker News daily — workflow demo"},
+  "credit": {
+    "text": "流程依据：本仓库 README / publish-hacknews-codex · 动画状态与时间为示意 · live-panel 方法：ythx-101",
+    "y": 804,
+    "size": 13,
+    "c": "dim"
+  },
+  "machines": {
+    "phase": {
+      "type": "cycle", "period": 2.5, "t0": 0,
+      "log": {"who": "publisher", "c": "cy"},
+      "values": [
+        {"t": "采集来源", "m": "原文、讨论与截图归属", "g": "证据"},
+        {"t": "人工编辑", "m": "标题、摘要与标签成稿", "g": "计划"},
+        {"t": "严格审计", "m": "来源、截图和篇幅核对", "g": "门禁"},
+        {"t": "微信草稿", "m": "上传封面与正文并回读", "g": "草稿"},
+        {"t": "Astro 镜像", "m": "单篇提交并推送博客", "g": "镜像"},
+        {"t": "发布复核", "m": "核查回执并记录结果", "g": "完成"}
+      ]
+    }
+  },
+  "elements": [
+    {"type": "text", "x": 40, "y": 86, "runs": [
+      {"t": "HACKER NEWS", "c": "cy", "b": 1},
+      {"t": "  日报发布链", "c": "fg", "b": 1}
+    ]},
+    {"type": "text", "x": 40, "y": 128, "size": 17, "runs": [
+      {"t": "证据进入 → 人工编辑 → 质量门禁 → 微信草稿", "c": "dim"},
+      {"t": "  ·  当前示意：", "c": "dim"},
+      {"v": "phase", "c": "ye", "b": 1}
+    ]},
+    {"type": "rule", "x": 40, "y": 153, "w": 1120},
+
+    {"type": "box", "x": 40, "y": 183, "w": 250, "h": 228, "color": "cy", "fill": "cyf", "pad": [14, 13],
+      "when": {"var": "phase.i", "eq": 0}, "then": {"border": 3, "glow": "cy"},
+      "lines": [
+        {"t": "01 采集与溯源", "c": "cy", "b": 1},
+        "状态 / 新闻 ID", "原文 + HN 讨论", "网页截图 / 来源", "受阻先补证据"
+      ]},
+    {"type": "box", "x": 330, "y": 183, "w": 250, "h": 228, "color": "bl", "fill": "blf", "pad": [14, 13],
+      "when": {"var": "phase.i", "eq": 1}, "then": {"border": 3, "glow": "bl"},
+      "lines": [
+        {"t": "02 人工中文计划", "c": "bl", "b": 1},
+        "标题 / 顺序 / 标签", "正文 ≥280 字", "讨论 ≥180 字", "据证据写摘要"
+      ]},
+    {"type": "box", "x": 620, "y": 183, "w": 250, "h": 228, "color": "pu", "fill": "puf", "pad": [14, 13],
+      "when": {"var": "phase.i", "eq": 2}, "then": {"border": 3, "glow": "pu"},
+      "lines": [
+        {"t": "03 审计与成稿", "c": "pu", "b": 1},
+        "来源 / 截图 / 长度", "Markdown + HTML", "封面 / 图片预检", "未过门禁不上传"
+      ]},
+    {"type": "box", "x": 910, "y": 183, "w": 250, "h": 228, "color": "gr", "fill": "grf", "pad": [14, 13],
+      "when": {"var": "phase.i", "eq": 3}, "then": {"border": 3, "glow": "gr"},
+      "lines": [
+        {"t": "04 微信草稿", "c": "gr", "b": 1},
+        "关键词整句核对", "图片 + 封面上传", "Media ID 回读", "草稿 ≠ 群发"
+      ]},
+
+    {"type": "path", "points": [[290, 297], [330, 297]], "color": "cy", "arrow": true},
+    {"type": "path", "points": [[580, 297], [620, 297]], "color": "bl", "arrow": true},
+    {"type": "path", "points": [[870, 297], [910, 297]], "color": "pu", "arrow": true},
+    {"type": "flow", "path": [[290, 297], [330, 297]], "period": 1.6, "offsets": [0, 0.8], "color": "cy"},
+    {"type": "flow", "path": [[580, 297], [620, 297]], "period": 1.9, "offsets": [0.3, 1.2], "color": "bl"},
+    {"type": "flow", "path": [[870, 297], [910, 297]], "period": 1.7, "offsets": [0.2, 1.0], "color": "pu"},
+
+    {"type": "box", "x": 40, "y": 484, "w": 540, "h": 130, "color": "ye", "fill": "yef", "pad": [12, 15],
+      "lines": [
+        {"t": "边界与恢复", "c": "ye", "b": 1},
+        "网页抓取失败 → 修复来源，不猜正文", "结果不明 → 先查回执，不重复建草稿"
+      ]},
+    {"type": "box", "x": 620, "y": 484, "w": 250, "h": 130, "color": "bl", "fill": "blf", "pad": [12, 13],
+      "when": {"var": "phase.i", "eq": 4}, "then": {"border": 3, "glow": "bl"},
+      "lines": [
+        {"t": "05 Astro 镜像", "c": "bl", "b": 1},
+        "单篇提交 → 推送", "可用时同步博客"
+      ]},
+    {"type": "box", "x": 910, "y": 484, "w": 250, "h": 130, "color": "cy", "fill": "cyf", "pad": [12, 13],
+      "when": {"var": "phase.i", "eq": 5}, "then": {"border": 3, "glow": "cy"},
+      "lines": [
+        {"t": "06 发布后复核", "c": "cy", "b": 1},
+        "回执 / 图片 / 完整性", "失败按阶段续跑"
+      ]},
+    {"type": "path", "points": [[745, 411], [745, 484]], "color": "bl", "arrow": true},
+    {"type": "path", "points": [[1035, 411], [1035, 484]], "color": "cy", "arrow": true},
+    {"type": "flow", "path": [[745, 411], [745, 484]], "period": 2.2, "offsets": [0], "color": "bl"},
+    {"type": "flow", "path": [[1035, 411], [1035, 484]], "period": 2.0, "offsets": [0.6], "color": "cy"},
+
+    {"type": "log", "x": 40, "y": 654, "w": 1120, "rows": 3,
+      "padTop": 14, "padBottom": 20, "padLeft": 16,
+      "title": "workflow log · simulated", "titleX": 35, "titleW": 290,
+      "cols": [{"key": "time", "x": 0}, {"key": "who", "x": 132}, {"key": "m", "x": 300}, {"key": "g", "x": 860}]
+    }
+  ]
+}

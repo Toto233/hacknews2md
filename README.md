@@ -45,7 +45,11 @@ powershell -ExecutionPolicy Bypass -File .\install.ps1
 
 ### 从 Hacker News 到微信草稿：九步流程
 
-下面是流程演示的 README 内嵌版。可播放、暂停、调速和跳转步骤的[单文件交互演示](examples/hacknews-wechat-process.html)可离线打开；演示时间与日志为模拟数据，页面不会运行命令或上传草稿。
+下面的白底动图展示日报从证据采集到微信草稿、Astro 镜像与发布后复核的完整链路；动画状态、时间和日志均为示意，并非实时发布监控。它使用 [live-panel-skill](https://github.com/ythx-101/live-panel-skill) 的配置式动态流程图方法制作，[配置文件](examples/hacknews-live-panel/config.json)留在仓库中。
+
+![Hacker News 日报发布流程动图：采集与溯源、人工计划、严格审计、微信草稿、Astro 镜像和发布后复核](assets/hacknews-publish-flow.gif)
+
+下表展开微信草稿的九个检查点。可播放、暂停、调速和跳转步骤的[单文件交互演示](examples/hacknews-wechat-process.html)也可离线打开；这些演示不会运行命令或上传草稿。
 
 | 阶段 | 步骤 | 产出与检查点 |
 | --- | --- | --- |
