@@ -42,6 +42,12 @@ def _is_youtube_url(url: str) -> bool:
     return host in {"youtube.com", "www.youtube.com", "youtu.be"}
 
 
+def _github_image_filter_url(url: str) -> str:
+    """Avoid rejecting a README image because its repository name says 'logo'."""
+    parsed = urlparse(url)
+    return parsed._replace(path=f"/{parsed.path.rsplit('/', 1)[-1]}").geturl()
+
+
 async def _fetch_discussion_with_retries(
     discuss_url: str,
     attempts: int = 2,
@@ -82,6 +88,12 @@ async def _collect_item(row: sqlite3.Row, semaphore: asyncio.Semaphore, db_path:
     from src.core.handlers.article_handler_registry import resolve_article_handler
     from src.core.handlers.fediverse_handler import get_fediverse_content, is_fediverse_url
     from src.core.handlers.image_handler import is_low_signal_article_image_url, save_article_image
+    from src.core.github_visuals import (
+        github_preview_filename,
+        has_saved_github_preview,
+        is_github_page_url,
+        is_github_social_preview_url,
+    )
     from src.core.handlers.pdf_handler import get_pdf_content, is_pdf_url
     from src.core.handlers.stackexchange_handler import build_public_summary_fallback, is_stackexchange_url
     from src.core.handlers.youtube_handler import get_youtube_content
@@ -101,18 +113,32 @@ async def _collect_item(row: sqlite3.Row, semaphore: asyncio.Semaphore, db_path:
         collected = False
 
         news_url = row["news_url"] or ""
-        if news_url and len(article_content) < MIN_ARTICLE_CONTENT_CHARS:
+        needs_content = len(article_content) < MIN_ARTICLE_CONTENT_CHARS
+        needs_github_preview = is_github_page_url(news_url) and not has_saved_github_preview(
+            image_paths[0] if image_paths else None, row["id"]
+        )
+        if news_url and (needs_content or needs_github_preview):
             collected_source_type = "full_text"
             official_handler = ""
             official_handler_reason: str | None = None
-            if _is_youtube_url(news_url):
+            if needs_github_preview and not needs_content:
+                # A prior text recovery must not prevent retrying a failed
+                # sharing-card download on a later collect --rerun.
+                content, image_urls = await _crawl_article_with_scrapling(news_url)
+            elif _is_youtube_url(news_url):
                 content, saved_images, _ = await get_youtube_content(news_url, row["title"] or "")
                 image_urls = []
                 if saved_images:
                     image_paths = saved_images[:3]
             elif is_pdf_url(news_url):
                 content = await get_pdf_content(news_url)
-                image_urls = []
+                # A GitHub-hosted PDF still has a repository sharing card on
+                # its page; PDF text extraction does not return that image.
+                _, image_urls = (
+                    await _crawl_article_with_scrapling(news_url)
+                    if is_github_page_url(news_url)
+                    else ("", [])
+                )
             elif is_fediverse_url(news_url):
                 content, fediverse_source_type = await get_fediverse_content(news_url)
                 collected_source_type = fediverse_source_type or "full_text"
@@ -126,20 +152,20 @@ async def _collect_item(row: sqlite3.Row, semaphore: asyncio.Semaphore, db_path:
             else:
                 content, image_urls = await _crawl_article_with_scrapling(news_url)
 
-            if official_handler and (
+            if needs_content and official_handler and (
                 not content
                 or len(content.strip()) < MIN_ARTICLE_CONTENT_CHARS
                 or is_paywall_or_shell_content(content)
             ):
                 content, image_urls = await _crawl_article_with_scrapling(news_url)
             unusable_content = bool(content and is_paywall_or_shell_content(content))
-            if content and len(content.strip()) >= MIN_ARTICLE_CONTENT_CHARS and not unusable_content:
+            if needs_content and content and len(content.strip()) >= MIN_ARTICLE_CONTENT_CHARS and not unusable_content:
                 article_content = content.strip()
                 content_source_type = collected_source_type
                 content_source_url = news_url
                 content_source_doi = None
                 collected = True
-            elif is_stackexchange_url(news_url):
+            elif needs_content and is_stackexchange_url(news_url):
                 article_content = build_public_summary_fallback(row["title"] or "", news_url)
                 content_source_type = "public_page_summary"
                 content_source_url = news_url
@@ -158,7 +184,7 @@ async def _collect_item(row: sqlite3.Row, semaphore: asyncio.Semaphore, db_path:
                         "action_required": "human_input_or_handler",
                     }
                 )
-            elif news_url:
+            elif needs_content:
                 domain = extract_domain(news_url)
                 failure_count = record_scraper_failure(domain, news_url, db_path)
                 warning = {
@@ -177,18 +203,31 @@ async def _collect_item(row: sqlite3.Row, semaphore: asyncio.Semaphore, db_path:
                 content_warnings.append(warning)
             if image_urls:
                 saved_images = []
+                github_page = is_github_page_url(news_url)
                 candidate_image_urls = [
                     image_url
                     for image_url in image_urls
-                    if not is_low_signal_article_image_url(image_url)
+                    if (
+                        github_page
+                        and is_github_social_preview_url(image_url)
+                    ) or not is_low_signal_article_image_url(
+                        _github_image_filter_url(image_url) if github_page else image_url
+                    )
                 ]
+                if github_page:
+                    candidate_image_urls.sort(key=lambda url: not is_github_social_preview_url(url))
                 for index, image_url in enumerate(candidate_image_urls[:3], 1):
                     try:
+                        image_name = (
+                            github_preview_filename(row["id"])
+                            if github_page and is_github_social_preview_url(image_url)
+                            else f"{row['title']}_{index}"
+                        )
                         saved = await asyncio.to_thread(
                             save_article_image,
                             image_url,
                             news_url,
-                            f"{row['title']}_{index}",
+                            image_name,
                         )
                     except Exception as exc:
                         saved = None

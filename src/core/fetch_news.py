@@ -74,7 +74,7 @@ def is_url_in_history(news_url: str, cursor: sqlite3.Cursor) -> bool:
     return cursor.fetchone() is not None
 
 
-def fetch_news() -> list[dict[str, str]]:
+def fetch_news(*, ignore_history: bool = False) -> list[dict[str, str]]:
     """获取HackerNews新闻列表"""
     headers = {
         # HN currently rejects the old fake Chrome/120 identity with HTTP 419
@@ -134,7 +134,7 @@ def fetch_news() -> list[dict[str, str]]:
                 news_url = f"{BASE_URL}{news_url}"
 
             # 检查URL是否在历史记录中
-            if is_url_in_history(news_url, cursor):
+            if not ignore_history and is_url_in_history(news_url, cursor):
                 logger.info(f"跳过已存在于历史记录中的新闻: {news_title}")
                 continue
 

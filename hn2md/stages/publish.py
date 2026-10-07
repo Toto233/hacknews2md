@@ -13,6 +13,7 @@ from hn2md.context import RuntimeContext
 from hn2md.state import JobStateMachine
 from hn2md.stages.base import BaseStage, NonRetryableStageError
 from hn2md.stages.script_loader import load_project_function
+from src.core.github_visuals import has_saved_github_preview, is_github_page_url
 from src.db.connection import get_db
 from src.utils.deployment import load_deployment_settings
 
@@ -50,7 +51,7 @@ def _require_screenshots_for_publish(
     waivers: list[dict[str, Any]] | None = None,
     run_id: str | None = None,
 ) -> list[dict[str, Any]]:
-    """Stop before WeChat work unless each missing capture has an exact user waiver."""
+    """Require a screenshot, or GitHub's saved sharing card, before WeChat work."""
     period = period or datetime.now().strftime("%Y%m%d")
     with get_db(str(ctx.db_path)) as conn:
         conn.row_factory = sqlite3.Row
@@ -61,7 +62,7 @@ def _require_screenshots_for_publish(
             return []
         missing = conn.execute(
             """
-            SELECT id, news_url
+            SELECT id, news_url, largest_image
             FROM news
             WHERE strftime('%Y%m%d', created_at) = ?
               AND coalesce(news_url, '') != ''
@@ -70,6 +71,17 @@ def _require_screenshots_for_publish(
             """,
             (period,),
         ).fetchall()
+    github_missing = [
+        row for row in missing
+        if is_github_page_url(row["news_url"])
+        and not has_saved_github_preview(row["largest_image"], row["id"])
+    ]
+    missing = [row for row in missing if not is_github_page_url(row["news_url"])]
+    if github_missing:
+        details = "; ".join(f"{row['id']}: {row['news_url']}" for row in github_missing)
+        raise NonRetryableStageError(
+            f"GitHub sharing preview image is missing. Recollect article images for: {details}"
+        )
     applicable = {
         (entry.get("period"), entry.get("news_id"), entry.get("news_url")): entry
         for entry in (waivers or [])

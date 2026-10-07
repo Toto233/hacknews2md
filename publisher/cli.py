@@ -15,7 +15,7 @@ from src.utils.console_encoding import configure_utf8_stdio
 from hn2md.constants import Stage
 from hn2md.state import JobStateMachine
 from hn2md.state import StageReceipt
-from hn2md.lock import LockError, release_daily_lock
+from hn2md.lock import LockError, daily_lock, release_daily_lock
 from hn2md.stages.audit import VALID_SOURCE_TYPES, run_audit
 from publisher.constants import GenericStage
 from publisher.context import PublisherContext, parse_date_period, parse_month_period
@@ -24,6 +24,7 @@ from publisher.sources import get_source
 from publisher.sources.base import SourceDefinition, validate_source_definition
 from src.core.fetch_news import normalize_domain
 from src.db.connection import get_db
+from src.security.url_validator import SecurityError, validate_url
 from src.utils.db_utils import init_database
 from src.utils.scraper_failures import extract_domain
 
@@ -275,6 +276,7 @@ def unlock(
 @click.option("--limit", type=int, default=25, show_default=True)
 @click.option("--html-file", type=click.Path(exists=True, dir_okay=False), default=None)
 @click.option("--front-ids", default=None, help="Ordered HN /front item IDs observed in a browser (HackerNews recovery only)")
+@click.option("--restart", is_flag=True, help="Back up and replace today's HackerNews rows, ignoring history for this fetch")
 def fetch(
     source_name: str,
     date_value: str | None,
@@ -283,8 +285,11 @@ def fetch(
     limit: int,
     html_file: str | None,
     front_ids: str | None,
+    restart: bool,
 ) -> None:
     source, ctx = _load_source_context(source_name, date_value, year, month)
+    if restart and (source.name != "hackernews" or ctx.period != datetime.now().strftime("%Y%m%d")):
+        raise click.ClickException("--restart is available only for today's hackernews run")
     stage_kwargs = {}
     if source.period_kind == "month":
         if front_ids:
@@ -294,12 +299,15 @@ def fetch(
         if source.name != "hackernews":
             raise click.ClickException("--front-ids is available only for hackernews")
         stage_kwargs[GenericStage.FETCHING] = {"front_ids": front_ids}
+    if restart:
+        stage_kwargs.setdefault(GenericStage.FETCHING, {})["restart"] = True
     result = run_release(
         ctx,
         source,
         stages=(GenericStage.FETCHING,),
         targets=source.default_publish_targets,
         stage_kwargs=stage_kwargs,
+        rerun=restart,
     )
     click.echo(f"{GenericStage.FETCHING.value} complete: {result}")
 
@@ -514,6 +522,8 @@ def record_astro(source_name: str, date_value: str | None) -> None:
     type=click.Choice(["positive", "neutral", "negative"], case_sensitive=False),
 )
 @click.option("--decision", required=True, help="User or editorial decision, for example 保留并发布")
+@click.option("--item-file", type=click.Path(exists=True, dir_okay=False, path_type=Path), default=None,
+              help="Review a single story draft before rendering")
 def record_keyword_review(
     source_name: str,
     date_value: str | None,
@@ -521,29 +531,111 @@ def record_keyword_review(
     sentence: str,
     classification: str,
     decision: str,
+    item_file: Path | None,
 ) -> None:
     """Record the contextual review decision for one keyword-bearing sentence."""
     ctx = _ensure_hackernews(source_name, date_value)
     machine, _ = JobStateMachine.load_or_create(ctx.job_dir, ctx.period)
-    rendering = machine.job.stages.get(Stage.RENDERING.value)
-    output = rendering.get("output_summary", {}) if isinstance(rendering, dict) else {}
-    markdown_value = output.get("markdown_file") if isinstance(output, dict) else None
-    markdown_path = Path(markdown_value).resolve() if isinstance(markdown_value, str) else None
-    if markdown_path is None or not markdown_path.is_file():
-        raise click.ClickException("RENDERING did not produce a readable Markdown file")
-    markdown_text = markdown_path.read_text(encoding="utf-8")
+    if item_file is not None:
+        from publisher.story_editorial import normalize_story, read_json, story_text
+
+        try:
+            item = normalize_story(read_json(item_file))
+            with get_db(str(ctx.db_path)) as conn:
+                found = conn.execute(
+                    "SELECT 1 FROM news WHERE id = ? AND strftime('%Y%m%d', created_at) = ?",
+                    (item["id"], ctx.period),
+                ).fetchone()
+            if not found:
+                raise ValueError("Story draft does not belong to this publishing period")
+            markdown_text = story_text(item)
+        except ValueError as exc:
+            raise click.ClickException(str(exc)) from exc
+    else:
+        rendering = machine.job.stages.get(Stage.RENDERING.value)
+        output = rendering.get("output_summary", {}) if isinstance(rendering, dict) else {}
+        markdown_value = output.get("markdown_file") if isinstance(output, dict) else None
+        markdown_path = Path(markdown_value).resolve() if isinstance(markdown_value, str) else None
+        if markdown_path is None or not markdown_path.is_file():
+            raise click.ClickException("RENDERING did not produce a readable Markdown file")
+        markdown_text = markdown_path.read_text(encoding="utf-8")
     if keyword not in sentence or sentence not in markdown_text:
-        raise click.ClickException("The reviewed keyword sentence does not exactly match the rendered article")
-    machine.record_keyword_decision(
-        {
-            "keyword": keyword,
-            "sentence": sentence,
-            "classification": classification.lower(),
-            "decision": decision,
-            "reviewed_at": datetime.now().isoformat(),
-        }
-    )
+        raise click.ClickException("The reviewed keyword sentence does not exactly match the rendered article or story draft")
+    try:
+        with daily_lock(ctx.job_dir / f".lock_{ctx.period}"):
+            machine, _ = JobStateMachine.load_or_create(ctx.job_dir, ctx.period)
+            machine.record_keyword_decision(
+                {
+                    "keyword": keyword,
+                    "sentence": sentence,
+                    "classification": classification.lower(),
+                    "decision": decision,
+                    "reviewed_at": datetime.now().isoformat(),
+                }
+            )
+    except LockError as exc:
+        raise click.ClickException(str(exc)) from exc
     click.echo(f"Keyword review recorded: {keyword} ({classification.lower()}) -> {decision}")
+
+
+@main.command("check-story")
+@click.argument("source_name")
+@click.option("--date", "date_value", default=None)
+@click.option("--item-file", required=True, type=click.Path(exists=True, dir_okay=False, path_type=Path))
+def check_story_command(source_name: str, date_value: str | None, item_file: Path) -> None:
+    """Check one draft before recap ordering, aggregation and cover generation."""
+    from publisher.story_editorial import check_story
+
+    ctx = _ensure_hackernews(source_name, date_value)
+    try:
+        with daily_lock(ctx.job_dir / f".lock_{ctx.period}"):
+            machine, _ = JobStateMachine.load_or_create(ctx.job_dir, ctx.period)
+            result = check_story(ctx, machine, item_file)
+        click.echo(json_mod.dumps(result, ensure_ascii=False, indent=2))
+        if not result["ready"]:
+            raise click.ClickException("Repair/review this story, then rerun check-story only for its ID")
+    except (ValueError, LockError) as exc:
+        raise click.ClickException(str(exc)) from exc
+
+
+@main.command("story-status")
+@click.argument("source_name")
+@click.option("--date", "date_value", default=None)
+def story_status_command(source_name: str, date_value: str | None) -> None:
+    """Show compact per-story readiness and the final pre-assembly gate."""
+    from publisher.story_editorial import reviewed_stories
+
+    ctx = _ensure_hackernews(source_name, date_value)
+    try:
+        with daily_lock(ctx.job_dir / f".lock_{ctx.period}"):
+            machine, _ = JobStateMachine.load_or_create(ctx.job_dir, ctx.period)
+            result = reviewed_stories(ctx, machine)
+        click.echo(json_mod.dumps(result, ensure_ascii=False, indent=2))
+        if not result["ready"]:
+            raise click.ClickException("Story gates are not ready; continue only outstanding stories")
+    except (ValueError, LockError) as exc:
+        raise click.ClickException(str(exc)) from exc
+
+
+@main.command("assemble-plan")
+@click.argument("source_name")
+@click.option("--date", "date_value", default=None)
+@click.option("--selection-file", required=True, type=click.Path(exists=True, dir_okay=False, path_type=Path))
+@click.option("--output", "output_file", required=True, type=click.Path(dir_okay=False, path_type=Path))
+def assemble_plan_command(
+    source_name: str, date_value: str | None, selection_file: Path, output_file: Path,
+) -> None:
+    """Assemble passed story drafts in the final editorial order without an LLM."""
+    from publisher.story_editorial import assemble_plan
+
+    ctx = _ensure_hackernews(source_name, date_value)
+    try:
+        with daily_lock(ctx.job_dir / f".lock_{ctx.period}"):
+            machine, _ = JobStateMachine.load_or_create(ctx.job_dir, ctx.period)
+            result = assemble_plan(ctx, machine, selection_file, output_file)
+        click.echo(json_mod.dumps(result, ensure_ascii=False, indent=2))
+    except (ValueError, KeyError, LockError) as exc:
+        raise click.ClickException(str(exc)) from exc
 
 
 @main.command("export-context")
@@ -799,6 +891,135 @@ def record_screenshot_waiver(
     ] + [waiver]
     machine._save()
     click.echo(f"Screenshot waiver recorded for {ctx.period}/{news_id}: {news_url}")
+
+
+@main.command("repair-screenshot")
+@click.argument("source_name")
+@click.argument("news_id", type=int)
+@click.option("--date", "date_value", default=None, help="YYYY-MM-DD or YYYYMMDD")
+@click.option("--url", "news_url", required=True, help="Exact URL of the story")
+@click.option("--replacement-file", type=click.Path(exists=True, dir_okay=False, path_type=Path))
+@click.option("--replacement-url", default=None, help="Source page shown in the replacement capture")
+@click.option("--omit", is_flag=True, help="Omit a captured error/verification page")
+@click.option("--reason", required=True)
+@click.option("--user-confirmed", is_flag=True)
+def repair_screenshot(
+    source_name: str,
+    news_id: int,
+    date_value: str | None,
+    news_url: str,
+    replacement_file: Path | None,
+    replacement_url: str | None,
+    omit: bool,
+    reason: str,
+    user_confirmed: bool,
+) -> None:
+    """Replace a captured error page or record one user-approved omission."""
+    if not user_confirmed:
+        raise click.ClickException("An explicit user decision is required: --user-confirmed")
+    if not reason.strip():
+        raise click.ClickException("A nonempty reason is required")
+    if omit == (replacement_file is not None):
+        raise click.ClickException("Choose exactly one of --omit or --replacement-file")
+    if not omit:
+        if not replacement_url:
+            raise click.ClickException("--replacement-url is required with --replacement-file")
+        try:
+            validate_url(replacement_url)
+        except (SecurityError, ValueError) as exc:
+            raise click.ClickException(f"Invalid replacement URL: {exc}") from exc
+
+    ctx = _ensure_hackernews(source_name, date_value)
+    replacement_path: Path | None = None
+    if replacement_file is not None:
+        replacement_path = replacement_file.resolve()
+        image_dir = (ctx.project_root / "output" / "images" / ctx.period).resolve()
+        if not replacement_path.is_relative_to(image_dir):
+            raise click.ClickException("Replacement image must be inside this period's image directory")
+        with replacement_path.open("rb") as image_file:
+            signature = image_file.read(8)
+        if not (signature.startswith(b"\x89PNG\r\n\x1a\n") or signature.startswith(b"\xff\xd8\xff")):
+            raise click.ClickException("Replacement must be a saved PNG or JPEG image")
+
+    machine, _ = JobStateMachine.load_or_create(ctx.job_dir, ctx.period)
+    with get_db(str(ctx.db_path)) as conn:
+        conn.row_factory = sqlite3.Row
+        row = conn.execute(
+            "SELECT news_url, screenshot FROM news WHERE " + _date_where_clause(),
+            (news_id, ctx.period),
+        ).fetchone()
+        if row is None or row["news_url"] != news_url:
+            raise click.ClickException("Story ID, date and exact source URL do not match")
+        if not row["screenshot"]:
+            raise click.ClickException("Story has no captured screenshot to repair")
+        original_path = str(row["screenshot"])
+        conn.execute(
+            "UPDATE news SET screenshot = ? WHERE " + _date_where_clause(),
+            (str(replacement_path) if replacement_path else None, news_id, ctx.period),
+        )
+
+    record = {
+        "period": ctx.period,
+        "run_id": machine.job.run_id,
+        "news_id": news_id,
+        "news_url": news_url,
+        "invalid_capture_path": original_path,
+        "reason": reason.strip(),
+        "approved_by": "user",
+        "recorded_at": datetime.now().isoformat(),
+    }
+    if omit:
+        machine.job.screenshot_waivers = [
+            existing for existing in machine.job.screenshot_waivers
+            if not (existing.get("period") == ctx.period and existing.get("news_id") == news_id)
+        ] + [record]
+    else:
+        notes = machine.job.continuation_notes
+        note_list = notes if isinstance(notes, list) else ([] if notes is None else [notes])
+        note_list.append({**record, "replacement_path": str(replacement_path), "replacement_url": replacement_url})
+        machine.job.continuation_notes = note_list
+    machine._save()
+    click.echo(f"Repaired screenshot for {ctx.period}/{news_id}: {'omitted' if omit else replacement_path}")
+
+
+@main.command("correct-url-escape")
+@click.argument("source_name")
+@click.argument("news_id", type=int)
+@click.option("--date", "date_value", default=None, help="YYYY-MM-DD or YYYYMMDD")
+@click.option("--old-url", required=True)
+@click.option("--new-url", required=True)
+def correct_url_escape(
+    source_name: str,
+    news_id: int,
+    date_value: str | None,
+    old_url: str,
+    new_url: str,
+) -> None:
+    """Remove a stray terminal backslash from a fetched story URL."""
+    if not old_url.endswith("\\") or old_url.rstrip("\\") != new_url:
+        raise click.ClickException("Only a terminal backslash escape can be corrected here")
+    try:
+        validate_url(new_url)
+    except (SecurityError, ValueError) as exc:
+        raise click.ClickException(f"Invalid corrected URL: {exc}") from exc
+    ctx = _ensure_hackernews(source_name, date_value)
+    with get_db(str(ctx.db_path)) as conn:
+        cursor = conn.execute(
+            "UPDATE news SET news_url = ?, "
+            "content_source_url = CASE WHEN content_source_url = ? THEN ? ELSE content_source_url END "
+            "WHERE " + _date_where_clause() + " AND news_url = ?",
+            (new_url, old_url, new_url, news_id, ctx.period, old_url),
+        )
+        if cursor.rowcount != 1:
+            raise click.ClickException("Story ID, date and old URL do not match")
+    from hn2md.stages.collect import write_collection_context
+    from publisher.pipeline.runner import _hn_runtime_context
+
+    context_file = write_collection_context(_hn_runtime_context(ctx), period=ctx.period)
+    machine, _ = JobStateMachine.load_or_create(ctx.job_dir, ctx.period)
+    machine.refresh_collection_context(context_file, news_id)
+    machine.invalidate_audit()
+    click.echo(f"Corrected terminal URL escape for {ctx.period}/{news_id}: {new_url}")
 
 
 @main.command("repair-story")

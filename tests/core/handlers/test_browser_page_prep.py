@@ -13,6 +13,11 @@ def test_cookie_dismissal_requires_an_allowlisted_reject_action_in_a_modal_conse
         consent_context=True,
         modal_context=True,
     )
+    assert is_allowed_consent_rejection(
+        "Reject all cookies",
+        consent_context=True,
+        modal_context=True,
+    )
 
 
 def test_cookie_consent_probe_includes_anchor_actions() -> None:

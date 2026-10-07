@@ -22,11 +22,15 @@ Hacker News `/front` 返回 419 时，按 [419 抓取恢复说明](HN_FETCH_419.
 .\scripts\publisher.ps1 audit hackernews --phase pre-plan --json
 ```
 
-图片和截图分别核对。微信上传前，有来源 URL 的每条新闻通常都要保存来源截图。抓取失败时可定向重试 `capture-screenshots hackernews --rerun`；只有用户明确同意省略某条失败截图，才能为该日期、故事 ID 和精确 URL 记录一次性豁免。不能用假图或删条目绕过门禁。可见的候选替代来源，应先给用户原文和替代页的直接链接以便核对。
+图片和截图分别核对。GitHub 页面在采集阶段优先保存 GitHub Open Graph 分享预览图，并只从页面 Markdown 正文取其他图片；截图阶段不再对其启动浏览器。若分享图下载失败，发布前会报出 ID 和 URL；用 `collect hackernews --rerun` 补采图片，不以头像或其他正文图片冒充分享图。其他有来源 URL 的新闻仍须保存截图；失败时可定向重试 `capture-screenshots hackernews --rerun`。只有用户明确同意省略某条失败截图，才能为该日期、故事 ID 和精确 URL 记录一次性豁免。不能用假图或删条目绕过门禁。可见的候选替代来源，应先给用户原文和替代页的直接链接以便核对。
 
 ## 计划、审计与渲染
 
-Codex 用 `draft-plan`/`export-context` 取得有来源的材料，写入手工计划，再以 `plan hackernews --manual-plan "<计划.json>"` 导入。文章摘要低于 280 字、讨论摘要低于 180 字时必须补足有依据的内容；这两项不能豁免。`audit hackernews --phase strict --json` 检查最终稿，渲染后再核对顺序、链接、图片路径和目标文件。手工修稿只重跑受影响的阶段。
+Codex 用 `draft-plan`/`export-context` 导航来源，按[技能中的逐条草稿格式](../skills/publish-hacknews-codex/SKILL.md#2-check-each-story-while-writing)写一条、核对一条，并用 `check-story hackernews --item-file "<story.json>"` 检查。检查回执保存在 `output/codex/story_checks/<日期>/<run_id>/`，绑定正文、讨论和草稿版本；正文或草稿变化只需重检查对应条目。结果只返回长度、问题和待确认句子，不重复输出全文。
+
+全部条目处理完后运行 `story-status hackernews`。只有 `ready: true` 才排序、提取四个标签，用 `assemble-plan hackernews --selection-file "<排序和标签.json>" --output "<计划.json>"` 汇总，再执行 `plan --manual-plan`、`apply`、严格审计和渲染。导入/应用会拒绝未检查、失败、过期或与回执不一致的草稿；渲染、封面和上传前仍检查当前摘要和来源。历史手工计划若需要重新导入或渲染，先拆出条目完成逐条检查，不改变已有已发布稿。
+
+文章摘要最低 280 字、讨论摘要最低 180 字，仍不可豁免。来源忠实度、标题准确性和可读性由编辑逐条实际核对，程序不能凭布尔字段验证事实。关键词可在渲染前通过 `record-keyword-review ... --item-file "<story.json>"` 记录原有上下文判断，确认后重检查该条。源码图片与截图可提前收集；生成封面须等最终内容和图片门禁通过。汇总后的复核只处理一致性、排序、链接、图片与目标文件，局部修改不重抓或重写其他条目。
 
 ## 微信草稿与 IP 白名单
 

@@ -26,6 +26,56 @@ This file records durable project decisions that should not be changed back and 
 
 ## Accepted decisions
 
+### 2026-10-07 — Check stories incrementally before recap assembly and cover
+
+- Status: Accepted
+- Issue: N/A (explicit local implementation request; no external issue creation requested)
+- Supersedes: 2026-07-18 — Keep visual fallback work outside content readiness, only its timing of final summary checks; source acquisition remains independent of capture. Existing source approvals, summary minima, visual exceptions and contextual keyword decisions remain active.
+- Context: October 7 used 248 model requests versus 119 the previous day. Late source/content defects caused three plan applications and two renders. The user requested content-level checks per story before aggregation, ordering and generated images.
+- Decision: Save and check individual manual story drafts against current source evidence before assembly. Reuse deterministic HN audit/schema rules and persist receipts bound to period, run, source and draft fingerprints, with explicit editorial attestations and pending keyword contexts. Final readiness requires every retained story's current check and existing visual gates. Only then choose order/tags, assemble unchanged text and generate the cover. Canonical manual import/apply rejects stale or missing checks; current strict checks and manual-text binding remain active before render/cover/upload. Compact diagnostics and story-local recovery replace repeated full-draft reads.
+- Failure mode of alternative: Checking only a complete rendered recap discovers source errors after ranking, tags and cover work, causing avoidable rewrites. Removing final consistency checks would allow post-review source/text edits to use stale approval. Boolean attestations alone cannot establish factual correctness.
+- Consequences: Editing still requires actual source comparison; program checks do not call an LLM or external publisher. A changed story invalidates only its receipt. Source visuals may be acquired early; the generated cover is deferred. Historical manual plans need per-story checks when rerendered, but existing publications are not mutated. Validate offline blocked-story, source/draft mutation, scoped recovery, keyword approval and no-side-effect gate scenarios; measure token/allowance changes in subsequent real releases rather than promise a fixed saving.
+
+### 2026-10-07 — Correct a terminal URL escape through the publisher
+
+- Status: Accepted
+- Issue: N/A (needed to keep the current requested release's article link usable)
+- Supersedes: N/A; this is a narrow recovery route, not a general URL rewrite policy.
+- Context: One fetched article URL ended in a stray backslash, causing the first source extraction to return a site shell and leaving the eventual article link malformed. The clean official URL was independently checked and the body was recovered from that URL.
+- Decision: Add `correct-url-escape` for an exact period/story/old URL match where the only change is removal of a terminal backslash. Validate the corrected URL, update matching source provenance, refresh context, and invalidate the prior audit.
+- Failure mode of alternative: A manual database edit would not refresh the run's collection context or audit state; rendering without correction would publish an unusable link.
+- Consequences: This narrowly scoped repair is repeatable through the canonical wrapper and tested without network calls. A future general URL correction needs separate design and authorization.
+
+### 2026-10-07 — Repair screenshots that saved a verification page as success
+
+- Status: Accepted
+- Issue: N/A (this one-run recovery was needed to complete the explicitly requested release without publishing a misleading image)
+- Supersedes: N/A; extends the 2026-09-28 one-run waiver to a captured file whose content is invalid, while preserving its user-decision and exact-story scope.
+- Context: The screenshot stage saved Cloudflare verification pages for two stories and recorded file paths as success. Mere file existence satisfied the publication gate, even though the images conveyed no news. The user supplied one blocked article's text, approved omitting that screenshot, and was asked to review an official replacement for the other.
+- Decision: Add a canonical `repair-screenshot` route for an inspected invalid capture. It requires an exact date/story/URL, explicit user confirmation, and a reason. It preserves the invalid file but either records an approved replacement page/image or clears the DB reference and records the scoped waiver. The rendered article must be checked for the actual result.
+- Failure mode of alternative: Publishing the verification image makes a formally complete article visibly wrong; silently deleting the DB reference or treating all captured files as valid conceals the exception and can break later rerenders.
+- Consequences: Future runs can repair this specific false-success state without a direct database edit or a broad screenshot-gate bypass. All other screenshot requirements remain unchanged; disposable CLI tests cover replacement, omission and confirmation.
+
+### 2026-10-06 — Make the daily recap easier to understand without expanding its default deliverables
+
+- Status: Accepted
+- Issue: N/A (explicit user request to optimize the publishing skill's output)
+- Supersedes: N/A; existing summary-length, source, image and publication gates remain active.
+- Context: Daily recaps must be both source-faithful and quick to understand. The user proposed controlled-language clarity and a progression from diagrams to interactive or narrated explainers, while the current pipeline publishes a fixed WeChat/Astro article with images.
+- Decision: Apply STE100-inspired plain-language discipline to Chinese titles and summaries, with a skim test for the event and its evidentiary limits. Use a source-grounded flow, comparison or diagram only when it materially clarifies a complex relationship and survives WeChat rendering. Treat interactive HTML and narrated video as separately requested explainers, not automatic daily output or publication.
+- Failure mode of alternative: Adding every format to every story increases review work, redundant images and unsupported claims; reducing summaries to slogans hides the mechanism, caveats and HN disagreements that readers need to assess the story.
+- Consequences: Future editorial plans gain a clearer presentation check without changing today's published draft, required summary lengths, source provenance, screenshot gates or upload commands.
+
+### 2026-10-05 — Use GitHub sharing cards instead of duplicate repository screenshots
+
+- Status: Accepted
+- Issue: N/A (the user explicitly requested this durable publishing change; no external issue was requested)
+- Supersedes: 2026-07-24 — Require a screenshot for every HackerNews story before WeChat publish, only for GitHub page URLs with a saved sharing card. The 2026-09-28 one-run waiver and ordinary-source screenshot gate remain active.
+- Context: GitHub provides a generated Open Graph card with the repository title, stars and contributors. The daily article also included a browser screenshot of the same repository, leaving the user to delete a redundant image manually.
+- Decision: For GitHub page URLs, collect the GitHub social preview first and then up to two Markdown-body images. Skip browser screenshot capture for those URLs. Before WeChat upload require the saved, story-specific social preview; if absent, retry image collection while preserving previously reviewed text. Other source URLs retain the screenshot rule.
+- Failure mode of alternative: Keeping both images adds a redundant screenshot and manual cleanup on every GitHub story. Skipping screenshots without checking that the social card was actually saved could leave a story with only an avatar, a decorative image or no useful visual.
+- Consequences: Future GitHub stories have fewer duplicate images and less browser-capture work. Existing published drafts are unchanged. Offline tests cover card-first ordering, README images, missing-card recovery, screenshot skipping and the publication gate.
+
 ### 2026-10-02 — Consolidate HN and PH in one distribution with shared WeChat transport
 
 - Status: Accepted
@@ -387,3 +437,14 @@ This file records durable project decisions that should not be changed back and 
 - Decision: Screenshot capture remains concurrent and retried independently from collection. Immediately before any HackerNews WeChat draft is created, the publish stage blocks if a story with a source URL has no saved screenshot and reports its ID and URL.
 - Failure mode of alternative: Treating screenshot failure as non-blocking through publish produces visibly incomplete articles. Blocking collection instead makes a slow browser hold up text acquisition and manual repair.
 - Consequences: Operators rerun `capture-screenshots` for the reported stories or deliberately resolve the source before publishing; no WeChat upload begins while the visual fallback is incomplete.
+
+
+### 2026-10-07 — Explicit fresh HackerNews rerun preserves history
+
+- Status: Accepted
+- Issue: N/A — user authorized a local fresh daily publishing run.
+- Supersedes: N/A
+- Context: The user requested recollection and recreation of today's article despite its completed release, allowing ignored history or SQLite deletion.
+- Decision: `publisher fetch hackernews --restart` is limited to today. Fetch first with history dedup disabled for this invocation, retain domain and URL checks, create database and ledger backups, then transactionally replace only today's news rows. Keep the run ID, historical tables, previous publish receipts and generated artifacts. Invalidate current downstream dependencies and require the normal manual editorial route and explicit `--new-draft` when uploading.
+- Failure mode of alternative: Clearing the database loses unrelated history and configuration; reusing a completed fetch receipt silently skips the requested fresh collection. Bypassing all source filters also changes scope beyond the request.
+- Consequences: Ordinary fetch behavior remains unchanged. A failed source fetch or replacement leaves today's existing rows available; the fresh release still passes content, visual and editorial gates.

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from typing import Iterable
+from pathlib import Path
 
 import click
 
@@ -117,14 +118,40 @@ def _run_release_locked(
                 _align_status_to_reused_stage(machine, stage_name)
             continue
         if stage_name in source.audit_required_stages:
-            _ensure_audit_ready(runtime_ctx, machine, strict=stage_name == GenericStage.PUBLISHING)
-        stage_factory = source.stages[stage_name]
-        stage = stage_factory()
+            _ensure_audit_ready(runtime_ctx, machine, strict=stage_name != GenericStage.PLANNING)
         kwargs: dict[str, object] = dict(
             stage_options.get(stage_name)
             or stage_options.get(stage_name.value)
             or {}
         )
+        if source.name == "hackernews" and stage_name in (
+            GenericStage.PLANNING, GenericStage.APPLYING, GenericStage.RENDERING,
+            GenericStage.COVERING, GenericStage.PUBLISHING,
+        ):
+            from publisher.story_editorial import read_json, require_applied_story_checks, require_reviewed_plan
+
+            manual_file = kwargs.get("manual_plan_file") if stage_name == GenericStage.PLANNING else None
+            if stage_name == GenericStage.APPLYING:
+                planning = machine.job.stages.get(GenericStage.PLANNING.value, {}).get("output_summary", {})
+                if planning.get("manual"):
+                    manual_file = kwargs.get("plan_file") or planning.get("plan_file")
+            if manual_file:
+                try:
+                    require_reviewed_plan(ctx, machine, read_json(Path(str(manual_file))))
+                except ValueError as exc:
+                    raise RuntimeError(str(exc)) from exc
+            if stage_name in (GenericStage.RENDERING, GenericStage.COVERING, GenericStage.PUBLISHING):
+                try:
+                    require_applied_story_checks(ctx, machine)
+                except ValueError as exc:
+                    raise RuntimeError(str(exc)) from exc
+                if stage_name != GenericStage.PUBLISHING and stage_name in source.audit_required_stages and "wechat" in publish_targets:
+                    from hn2md.stages.publish import _require_screenshots_for_publish
+
+                    _require_screenshots_for_publish(
+                        runtime_ctx, ctx.period, waivers=machine.job.screenshot_waivers,
+                        run_id=machine.job.run_id,
+                    )
         if stage_name == GenericStage.PUBLISHING:
             # Hacker News stages consume target orchestration here. Product Hunt
             # runs in ph2md with its own monthly ledger and editorial gates.
@@ -134,6 +161,7 @@ def _run_release_locked(
                 kwargs["dry_run"] = True
         if stage_name == GenericStage.RENDERING and "astro" not in publish_targets:
             kwargs["astro_enabled"] = False
+        stage = source.stages[stage_name]()
         receipt = stage.run(runtime_ctx, machine, force_retry=rerun, **kwargs)
         _validate_stage_artifacts(stage_name, receipt, source.required_artifacts.get(stage_name, ()))
         completed.append(stage_name.value)
@@ -313,7 +341,7 @@ def _ensure_audit_ready(runtime_ctx: RuntimeContext, machine: JobStateMachine, *
 
     required_phase = "strict" if strict else "pre-plan"
     previous_phase = (machine.job.audit_report or {}).get("phase") or required_phase
-    if machine.job.audit_report is None or previous_phase != required_phase:
+    if strict or machine.job.audit_report is None or previous_phase != required_phase:
         report = run_audit(runtime_ctx, include_summaries=strict, period=machine.job.date)
         report["phase"] = required_phase
         machine.record_audit_report(report)

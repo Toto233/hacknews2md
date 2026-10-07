@@ -18,7 +18,11 @@ from publisher.sources.base import SourceDefinition
 class BrowserFrontFetchStage(FetchStage):
     """Allow explicit browser-/front recovery without changing the normal scraper."""
 
-    def execute(self, ctx, machine, *, front_ids: str | None = None) -> dict[str, object]:
+    def execute(self, ctx, machine, *, front_ids: str | None = None, restart: bool = False) -> dict[str, object]:
+        if restart:
+            from publisher.hn_restart import restart_fetch
+
+            return restart_fetch(ctx, machine, front_ids=front_ids)
         if front_ids is None:
             try:
                 return super().execute(ctx, machine)
@@ -77,4 +81,8 @@ HACKERNEWS_SOURCE = SourceDefinition(
         GenericStage.COVERING: ("cover_image",),
     },
     supports_domain_filter=True,
+    audit_required_stages=(
+        GenericStage.PLANNING, GenericStage.RENDERING,
+        GenericStage.COVERING, GenericStage.PUBLISHING,
+    ),
 )

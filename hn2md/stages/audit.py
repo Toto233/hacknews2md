@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import hashlib
 import json
 import re
 import sqlite3
@@ -35,7 +36,11 @@ VALID_DISCUSSION_SUMMARY_SOURCE_TYPES = {
     "external_hn_snippet",
     "human_supplied",
 }
-SHELL_CONTENT_MARKERS = ("enable javascript", "access denied", "sign in to continue")
+SHELL_CONTENT_MARKERS = (
+    "enable javascript", "access denied", "sign in to continue",
+    "verify you are human", "verifying you are human", "checking your browser",
+    "performing security verification",
+)
 
 
 def _has_substantive_body_beyond_shell_marker(article: str) -> bool:
@@ -126,8 +131,11 @@ def run_audit(
     llm_type: str | None = None,
     include_summaries: bool = True,
     period: str | None = None,
+    *,
+    story_ids: tuple[int, ...] | None = None,
+    summary_overrides: dict[int, dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
-    """Return a structured quality report for the requested publishing period."""
+    """Audit stored sources and optionally un-applied story drafts without DB writes."""
     period = period or datetime.now().strftime("%Y%m%d")
     if interactive:
         from src.core.audit_news import run_audit_one
@@ -144,6 +152,7 @@ def run_audit(
             "id",
             "title",
             "news_url",
+            "discuss_url",
             "article_content",
             "discussion_content",
             "content_summary",
@@ -157,22 +166,43 @@ def run_audit(
             column if column in columns else f"NULL AS {column}"
             for column in required
         ]
+        conditions = ""
+        parameters: list[Any] = [period]
+        if story_ids is not None:
+            if not story_ids:
+                return {"items": [], "issues": [], "blocking_count": 0}
+            conditions = f" AND id IN ({','.join('?' for _ in story_ids)})"
+            parameters.extend(story_ids)
         rows = conn.execute(
             f"SELECT {', '.join(select_exprs)} "
-            "FROM news WHERE strftime('%Y%m%d', created_at) = ? ORDER BY id",
-            (period,),
+            f"FROM news WHERE strftime('%Y%m%d', created_at) = ?{conditions} ORDER BY id",
+            parameters,
         ).fetchall()
 
     rows_by_id = {row["id"]: row for row in rows}
     issues: list[dict[str, Any]] = [
         _collect_warning_issue(warning)
         for warning in _load_collect_content_warnings(ctx, period)
+        if story_ids is None or warning.get("id") in story_ids
         if _warning_is_still_actionable(warning, rows_by_id)
     ]
     items: list[dict[str, Any]] = []
     short_summaries: list[sqlite3.Row] = []
     short_discussion_summaries: list[sqlite3.Row] = []
     for row in rows:
+        # Bind checks to original evidence, not previously applied summaries.
+        source_material = {key: row[key] for key in (
+            "id", "title", "news_url", "discuss_url", "article_content", "discussion_content",
+            "content_source_type", "content_source_url",
+        )}
+        source_fingerprint = hashlib.sha256(json.dumps(
+            source_material, ensure_ascii=False, sort_keys=True
+        ).encode("utf-8")).hexdigest()
+        if summary_overrides is not None and row["id"] in summary_overrides:
+            row = dict(row)
+            draft = summary_overrides[row["id"]]
+            for key in ("content_summary", "discuss_summary", "discuss_summary_source_type", "discuss_summary_source_url"):
+                row[key] = draft.get(key)
         article = (row["article_content"] or "").strip()
         discussion = (row["discussion_content"] or "").strip()
         summary = (row["content_summary"] or "").strip()
@@ -185,6 +215,7 @@ def run_audit(
         source_type = (row["content_source_type"] or "").strip()
         item = {
             "id": row["id"],
+            "source_fingerprint": source_fingerprint,
             "title": row["title"],
             "news_url": row["news_url"],
             "article_length": len(article),

@@ -596,6 +596,78 @@ def test_record_screenshot_waiver_requires_failed_capture_and_exact_user_decisio
     assert "do not match" in wrong_url.output
 
 
+def test_repair_screenshot_replaces_invalid_capture_or_records_omission(tmp_path, monkeypatch) -> None:
+    monkeypatch.chdir(tmp_path)
+    db_path = tmp_path / "data" / "hacknews.db"
+    init_database(str(db_path))
+    image_dir = tmp_path / "output" / "images" / "20260627"
+    image_dir.mkdir(parents=True)
+    blocked = image_dir / "verification.png"
+    replacement = image_dir / "official.png"
+    blocked.write_bytes(b"\x89PNG\r\n\x1a\nblocked")
+    replacement.write_bytes(b"\x89PNG\r\n\x1a\nreplacement")
+    urls = ["https://example.com/blocked", "https://example.com/other"]
+    with sqlite3.connect(db_path) as conn:
+        for story_id, url in enumerate(urls, start=1):
+            conn.execute(
+                "INSERT INTO news (id, title, news_url, screenshot, created_at) "
+                "VALUES (?, 'Story', ?, ?, '2026-06-27 10:00:00')",
+                (story_id, url, str(blocked)),
+            )
+
+    replacement_args = [
+        "repair-screenshot", "hackernews", "1", "--date", "2026-06-27",
+        "--url", urls[0], "--replacement-file", str(replacement),
+        "--replacement-url", "https://college.example.edu/research", "--reason", "Original is a verification page",
+    ]
+    denied = CliRunner().invoke(main, replacement_args)
+    assert denied.exit_code != 0
+    assert "--user-confirmed" in denied.output
+    accepted = CliRunner().invoke(main, [*replacement_args, "--user-confirmed"])
+    assert accepted.exit_code == 0, accepted.output
+
+    omit_args = [
+        "repair-screenshot", "hackernews", "2", "--date", "2026-06-27",
+        "--url", urls[1], "--omit", "--reason", "Original is a verification page", "--user-confirmed",
+    ]
+    omitted = CliRunner().invoke(main, omit_args)
+    assert omitted.exit_code == 0, omitted.output
+    with sqlite3.connect(db_path) as conn:
+        rows = conn.execute("SELECT id, screenshot FROM news ORDER BY id").fetchall()
+    assert rows == [(1, str(replacement)), (2, None)]
+    assert blocked.exists()  # Preserve the invalid capture as evidence.
+    machine, _ = JobStateMachine.load_or_create(tmp_path / "output" / "jobs", "20260627")
+    assert machine.job.screenshot_waivers[0]["news_id"] == 2
+    assert machine.job.screenshot_waivers[0]["invalid_capture_path"] == str(blocked)
+    assert machine.job.continuation_notes[0]["replacement_url"] == "https://college.example.edu/research"
+
+
+def test_correct_url_escape_only_removes_terminal_backslash(tmp_path, monkeypatch) -> None:
+    monkeypatch.chdir(tmp_path)
+    db_path = tmp_path / "data" / "hacknews.db"
+    init_database(str(db_path))
+    old_url = "https://example.com/article/\\"
+    new_url = "https://example.com/article/"
+    with sqlite3.connect(db_path) as conn:
+        conn.execute(
+            "INSERT INTO news (id, title, news_url, content_source_url, created_at) "
+            "VALUES (1, 'Story', ?, ?, '2026-06-27 10:00:00')",
+            (old_url, old_url),
+        )
+    args = [
+        "correct-url-escape", "hackernews", "1", "--date", "2026-06-27",
+        "--old-url", old_url, "--new-url", new_url,
+    ]
+    invalid = CliRunner().invoke(main, [*args[:-1], "https://other.example.com/article/"])
+    assert invalid.exit_code != 0
+    corrected = CliRunner().invoke(main, args)
+    assert corrected.exit_code == 0, corrected.output
+    with sqlite3.connect(db_path) as conn:
+        assert conn.execute("SELECT news_url, content_source_url FROM news WHERE id = 1").fetchone() == (
+            new_url, new_url,
+        )
+
+
 def test_record_astro_verifies_remote_head_and_persists_evidence(tmp_path, monkeypatch) -> None:
     monkeypatch.chdir(tmp_path)
     astro_repo = tmp_path / "astro"
@@ -1005,3 +1077,20 @@ def test_filter_domain_normalizes_url_with_port(tmp_path, monkeypatch) -> None:
             "SELECT domain FROM filtered_domains WHERE domain='example.com'"
         ).fetchone()
     assert filter_row == ("example.com",)
+
+
+def test_restart_fetch_forwards_explicit_rerun(tmp_path, monkeypatch) -> None:
+    monkeypatch.chdir(tmp_path)
+    with patch("publisher.cli.run_release", return_value={}) as run:
+        result = CliRunner().invoke(main, ["fetch", "hackernews", "--restart"])
+    assert result.exit_code == 0, result.output
+    assert run.call_args.kwargs["rerun"] is True
+    assert run.call_args.kwargs["stage_kwargs"]["FETCHING"]["restart"] is True
+
+
+def test_restart_fetch_rejects_historical_period(tmp_path, monkeypatch) -> None:
+    monkeypatch.chdir(tmp_path)
+    with patch("publisher.cli.run_release") as run:
+        result = CliRunner().invoke(main, ["fetch", "hackernews", "--date", "2026-06-27", "--restart"])
+    assert result.exit_code != 0
+    run.assert_not_called()

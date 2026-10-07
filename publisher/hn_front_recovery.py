@@ -14,7 +14,7 @@ from src.db.connection import get_db
 from src.security.url_validator import SecurityError, validate_url
 
 
-def fetch_browser_front_ids(raw_ids: str) -> list[dict[str, str]]:
+def fetch_browser_front_ids(raw_ids: str, *, ignore_history: bool = False) -> list[dict[str, str]]:
     """Resolve ordered /front IDs through HN's API, retaining normal filters."""
     ids = [part.strip() for part in raw_ids.split(",")]
     if not 10 <= len(ids) <= 30 or len(set(ids)) != len(ids):
@@ -45,7 +45,7 @@ def fetch_browser_front_ids(raw_ids: str) -> list[dict[str, str]]:
                 validate_url(news_url)
             except (SecurityError, ValueError):
                 continue
-            if is_url_in_history(news_url, cursor):
+            if not ignore_history and is_url_in_history(news_url, cursor):
                 continue
             domain = extract_domain(news_url)
             if domain and is_domain_filtered(domain, cursor):

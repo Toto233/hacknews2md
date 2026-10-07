@@ -14,6 +14,7 @@ logger = structlog.get_logger(__name__)
 CONSENT_DISMISS_WAIT_SECONDS = 3
 REJECT_ALL_LABELS = (
     "reject all",
+    "reject all cookies",
     "i reject all (except strictly necessary)",
     "reject all optional cookies",
     "decline all",

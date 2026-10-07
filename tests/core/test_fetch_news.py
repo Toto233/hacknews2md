@@ -278,3 +278,16 @@ class TestFilteredDomainManagement:
         import src.core.fetch_news as mod
         result = mod.remove_filtered_domain("nonexistent.com")
         assert result is False
+
+
+def test_explicit_ignore_history_keeps_domain_filters(fetch_news_db, sample_hn_html):
+    from src.core.fetch_news import fetch_news
+    response = Mock(text=sample_hn_html)
+    with patch("src.core.fetch_news.requests.get", return_value=response):
+        baseline = fetch_news()
+        with sqlite3.connect(fetch_news_db) as conn:
+            conn.execute("INSERT INTO news_history (id, news_url) VALUES (?, ?)", (1, baseline[0]["news_url"]))
+        assert baseline[0] not in fetch_news()
+        assert baseline[0] in fetch_news(ignore_history=True)
+        with patch("src.core.fetch_news.is_domain_filtered", return_value=True):
+            assert fetch_news(ignore_history=True) == []

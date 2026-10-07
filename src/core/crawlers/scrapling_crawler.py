@@ -4,6 +4,7 @@ import logging
 import re
 from urllib.parse import urljoin
 
+from src.core.github_visuals import is_github_page_url
 from src.security.url_validator import SecurityError, validate_url
 
 logger = logging.getLogger(__name__)
@@ -76,7 +77,15 @@ class ScraplingCrawler:
                 source = self._resolve_url(url, source)
                 if source.startswith("http") and source not in images:
                     images.append(source)
-            for img in page.css("img")[:10]:
+            # GitHub's page chrome contains avatars and badges before the
+            # README. The sharing card above and images inside the article are
+            # the useful visuals for a repository recap.
+            article_images = (
+                page.css(".markdown-body img")
+                if is_github_page_url(url)
+                else page.css("img")[:10]
+            )
+            for img in article_images[:10]:
                 src = img.attrib.get("src") or img.attrib.get("data-src")
                 if not src:
                     continue

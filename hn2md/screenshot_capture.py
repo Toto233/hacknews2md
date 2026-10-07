@@ -14,6 +14,7 @@ import time
 from typing import Any, Callable
 
 from hn2md.context import RuntimeContext
+from src.core.github_visuals import has_saved_github_preview, is_github_page_url
 from src.db.connection import get_db
 
 
@@ -134,7 +135,7 @@ def capture_missing_screenshots(
         conn.row_factory = sqlite3.Row
         rows = conn.execute(
             """
-            SELECT id, title, news_url
+            SELECT id, title, news_url, largest_image
             FROM news
             WHERE strftime('%Y%m%d', created_at) = ?
               AND coalesce(screenshot, '') = ''
@@ -143,12 +144,15 @@ def capture_missing_screenshots(
             """,
             (period,),
         ).fetchall()
+    github_rows = [row for row in rows if is_github_page_url(row["news_url"])]
+    rows = [row for row in rows if not is_github_page_url(row["news_url"])]
 
     batch_started_at = time.monotonic()
     progress: dict[str, Any] = {
         "stage": "CAPTURING",
         "status": "running" if rows else "no_pending_work",
         "requested": len(rows),
+        "github_skipped": len(github_rows),
         "completed": 0,
         "captured": 0,
         "started_at": time.time(),
@@ -171,6 +175,11 @@ def capture_missing_screenshots(
     batch_duration_ms = round((time.monotonic() - batch_started_at) * 1000)
     captured = 0
     warnings: list[dict[str, Any]] = []
+    missing_github_previews = [
+        {"id": row["id"], "news_url": row["news_url"], "reason": "github_social_preview_missing"}
+        for row in github_rows
+        if not has_saved_github_preview(row["largest_image"], row["id"])
+    ]
     with get_db(str(ctx.db_path)) as conn:
         for result in results:
             screenshot = result.get("screenshot")
@@ -204,6 +213,8 @@ def capture_missing_screenshots(
     summary = {
         "requested": len(rows),
         "captured": captured,
+        "github_skipped": len(github_rows),
+        "missing_github_previews": missing_github_previews,
         "status": "no_pending_work" if not rows else "completed",
         "timed_out": sum(result.get("reason") == "screenshot_timeout" for result in results),
         "attempts": SCREENSHOT_ATTEMPTS,

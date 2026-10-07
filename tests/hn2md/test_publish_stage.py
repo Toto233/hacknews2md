@@ -88,6 +88,42 @@ def test_publish_blocks_when_a_story_has_no_screenshot(tmp_path) -> None:
         PublishStage().execute(ctx, machine, markdown_file=str(md), dry_run=True)
 
 
+def test_publish_accepts_github_card_without_screenshot_but_not_an_avatar(tmp_path) -> None:
+    db_path = tmp_path / "data" / "hacknews.db"
+    init_database(str(db_path))
+    preview = tmp_path / "GitHubPreview_1.png"
+    preview.write_bytes(b"preview")
+    with sqlite3.connect(db_path) as conn:
+        conn.execute(
+            "INSERT INTO news (id, title, news_url, largest_image, created_at) "
+            "VALUES (1, 'Repo', 'https://github.com/owner/repo', ?, datetime('now', 'localtime'))",
+            (str(preview),),
+        )
+    ctx = RuntimeContext(
+        project_root=tmp_path,
+        db_path=db_path,
+        output_dir=tmp_path / "output",
+        job_dir=tmp_path / "output" / "jobs",
+        markdown_dir=tmp_path / "output" / "markdown",
+        images_dir=tmp_path / "output" / "images",
+        codex_dir=tmp_path / "output" / "codex",
+        config_path=tmp_path / "config" / "config.json",
+    )
+    md = tmp_path / "article.md"
+    md.write_text("# safe", encoding="utf-8")
+    machine = type("M", (), {"job": type("J", (), {"stages": {}})()})()
+
+    with patch("src.utils.db_utils.get_illegal_keywords", return_value=[]):
+        assert PublishStage().execute(ctx, machine, markdown_file=str(md), dry_run=True)["dry_run"] is True
+
+    avatar = tmp_path / "avatar.png"
+    avatar.write_bytes(b"avatar")
+    with sqlite3.connect(db_path) as conn:
+        conn.execute("UPDATE news SET largest_image=? WHERE id=1", (str(avatar),))
+    with pytest.raises(NonRetryableStageError, match="GitHub sharing preview image is missing"):
+        PublishStage().execute(ctx, machine, markdown_file=str(md), dry_run=True)
+
+
 def test_publish_accepts_only_exact_user_approved_screenshot_waiver(tmp_path) -> None:
     db_path = tmp_path / "data" / "hacknews.db"
     init_database(str(db_path))

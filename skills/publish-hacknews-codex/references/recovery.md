@@ -37,6 +37,27 @@ Reuse explicit approval only for the same blocking-issue fingerprint. For a new 
 
 “继续” is approval only when answering the specific risk presented. Non-exemptible summary minima remain repair requirements. A missing screenshot is not an audit exemption: only the explicit, exact-source user waiver recorded with `record-screenshot-waiver` after a failed capture can allow that one omission, as described in the main publishing skill.
 
+## Invalid capture saved as a screenshot
+
+If visual inspection shows that an existing screenshot is a verification or error page, preserve the file as evidence. Obtain the user's exact-story decision, then use the canonical repair command to replace its DB reference with a verified capture from the approved source, or clear it and record a one-run waiver. `--url` is the story's exact stored URL; `--replacement-url` names the page actually shown in the new image. For replacement, capture that approved page with the existing screenshot handler, inspect the saved image, and pass its path under the current period's image directory.
+
+```powershell
+.\scripts\publisher.ps1 repair-screenshot hackernews <id> --date YYYY-MM-DD --url "<exact story URL>" --replacement-file "<verified image>" --replacement-url "<approved page URL>" --reason "<reason>" --user-confirmed
+.\scripts\publisher.ps1 repair-screenshot hackernews <id> --date YYYY-MM-DD --url "<exact story URL>" --omit --reason "<reason>" --user-confirmed
+```
+
+Choose one command, not both. The invalid image remains on disk; the replacement source or omission is recorded in the run ledger. Confirm that the rendered article uses the replacement or omits the invalid image. This branch does not waive any other source's screenshot.
+
+## Terminal URL escape in a fetched story
+
+If the stored article URL ends with an accidental backslash, verify the clean target and correct only that terminal escape before rendering. The command requires an exact story/date/old-URL match, validates the clean URL, refreshes the collection context, and invalidates the prior audit. It is not a general link-rewriting command.
+
+```powershell
+.\scripts\publisher.ps1 correct-url-escape hackernews <id> --date YYYY-MM-DD --old-url "<stored URL ending in backslash>" --new-url "<same URL without backslash>"
+```
+
+Rerun the relevant audit after correction; do not use a direct database edit.
+
 ## Stale lock
 
 The application recovers dead/expired locks. For a verified stale lock, use `publisher.ps1 unlock hackernews`. Use `--terminate` only for a confirmed stuck task-owned process; never force-delete a lock or terminate another user's run.

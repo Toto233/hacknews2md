@@ -104,6 +104,46 @@ def test_capture_missing_screenshots_uses_requested_period(tmp_path: Path) -> No
         assert conn.execute("SELECT screenshot FROM news WHERE id=2").fetchone() == (None,)
 
 
+def test_capture_skips_github_even_when_its_preview_is_missing(tmp_path: Path) -> None:
+    ctx = _ctx(tmp_path)
+    with sqlite3.connect(ctx.db_path) as conn:
+        conn.execute("UPDATE news SET news_url='https://github.com/owner/repo' WHERE id=1")
+
+    with patch("hn2md.screenshot_capture._capture_one_in_process") as capture:
+        result = capture_missing_screenshots(ctx, concurrency=1)
+
+    capture.assert_not_called()
+    assert result["requested"] == 0
+    assert result["github_skipped"] == 1
+    assert result["missing_github_previews"] == [
+        {"id": 1, "news_url": "https://github.com/owner/repo", "reason": "github_social_preview_missing"}
+    ]
+
+
+def test_capture_skips_github_but_captures_other_sources(tmp_path: Path) -> None:
+    ctx = _ctx(tmp_path)
+    preview = tmp_path / "GitHubPreview_2.png"
+    preview.write_bytes(b"preview")
+    with sqlite3.connect(ctx.db_path) as conn:
+        conn.execute(
+            "INSERT INTO news (id, title, news_url, largest_image, created_at) "
+            "VALUES (2, 'Repo', 'https://github.com/owner/repo', ?, datetime('now', 'localtime'))",
+            (str(preview),),
+        )
+
+    with patch(
+        "hn2md.screenshot_capture._capture_one_in_process",
+        return_value={"id": 1, "screenshot": "shot.png", "duration_ms": 10},
+    ) as capture:
+        result = capture_missing_screenshots(ctx, concurrency=1)
+
+    capture.assert_called_once()
+    assert result["requested"] == 1
+    assert result["captured"] == 1
+    assert result["github_skipped"] == 1
+    assert result["missing_github_previews"] == []
+
+
 def test_capture_stage_passes_its_run_period(tmp_path: Path) -> None:
     from hn2md.stages.screenshot import CaptureScreenshotsStage
 

@@ -187,6 +187,70 @@ def test_collect_stage_filters_decorative_images_before_saving(tmp_path) -> None
     assert row == ("article.jpg", None, None)
 
 
+def test_github_collection_saves_sharing_card_before_readme_images(tmp_path: Path) -> None:
+    ctx = _ctx(tmp_path)
+    _set_news_url(ctx, "https://github.com/owner/logo-maker")
+    crawler = MagicMock()
+    crawler.crawl_article = AsyncMock(return_value=(
+        "Readable repository README " * 10,
+        [
+            "https://raw.githubusercontent.com/owner/logo-maker/main/demo.png",
+            "https://opengraph.githubassets.com/hash/owner/logo-maker",
+        ],
+    ))
+    crawler.close = AsyncMock()
+    preview = tmp_path / "GitHubPreview_1.png"
+    preview.write_bytes(b"preview")
+    body = tmp_path / "demo.png"
+    body.write_bytes(b"body")
+
+    with (
+        patch("src.core.crawlers.scrapling_crawler.ScraplingCrawler", return_value=crawler),
+        patch("src.core.handlers.discussion_handler.get_discussion_content_async", new=AsyncMock(return_value="HN discussion")),
+        patch("src.core.handlers.image_handler.save_article_image", side_effect=[str(preview), str(body)]) as save_image,
+    ):
+        CollectStage().execute(ctx, object(), concurrency=1)
+
+    assert [call.args for call in save_image.call_args_list] == [
+        ("https://opengraph.githubassets.com/hash/owner/logo-maker", "https://github.com/owner/logo-maker", "GitHubPreview_1"),
+        ("https://raw.githubusercontent.com/owner/logo-maker/main/demo.png", "https://github.com/owner/logo-maker", "Story_2"),
+    ]
+    with sqlite3.connect(ctx.db_path) as conn:
+        assert conn.execute("SELECT screenshot, largest_image, image_2 FROM news WHERE id=1").fetchone() == (
+            None, str(preview), str(body)
+        )
+
+
+def test_github_collect_retries_missing_card_without_replacing_existing_text(tmp_path: Path) -> None:
+    ctx = _ctx(tmp_path)
+    _set_news_url(ctx, "https://github.com/owner/repo")
+    with sqlite3.connect(ctx.db_path) as conn:
+        conn.execute(
+            "UPDATE news SET article_content=?, content_source_type='human_supplied' WHERE id=1",
+            ("Reviewed repository content " * 10,),
+        )
+    crawler = MagicMock()
+    crawler.crawl_article = AsyncMock(return_value=(
+        "New page text must not overwrite the reviewed text " * 10,
+        ["https://opengraph.githubassets.com/hash/owner/repo"],
+    ))
+    crawler.close = AsyncMock()
+    preview = tmp_path / "GitHubPreview_1.png"
+    preview.write_bytes(b"preview")
+
+    with (
+        patch("src.core.crawlers.scrapling_crawler.ScraplingCrawler", return_value=crawler),
+        patch("src.core.handlers.discussion_handler.get_discussion_content_async", new=AsyncMock(return_value="HN discussion")),
+        patch("src.core.handlers.image_handler.save_article_image", return_value=str(preview)),
+    ):
+        CollectStage().execute(ctx, object(), concurrency=1)
+
+    with sqlite3.connect(ctx.db_path) as conn:
+        assert conn.execute(
+            "SELECT article_content, content_source_type, largest_image FROM news WHERE id=1"
+        ).fetchone() == (("Reviewed repository content " * 10).strip(), "human_supplied", str(preview))
+
+
 def test_collect_stage_filters_tracking_and_rss_images_before_saving(tmp_path) -> None:
     ctx = _ctx(tmp_path)
     crawler = MagicMock()
@@ -252,13 +316,19 @@ def test_collect_stage_routes_youtube_urls_to_youtube_handler(tmp_path) -> None:
 def test_collect_stage_routes_github_blob_pdf_to_pdf_handler(tmp_path) -> None:
     ctx = _ctx(tmp_path)
     _set_news_url(ctx, "https://github.com/deepseek-ai/DeepSpec/blob/main/DSpark_paper.pdf")
+    preview = tmp_path / "GitHubPreview_1.png"
+    preview.write_bytes(b"preview")
 
     with (
         patch(
             "src.core.handlers.pdf_handler.get_pdf_content",
             new=AsyncMock(return_value="PDF extracted text " * 10),
         ) as pdf_handler,
-        patch("src.core.crawlers.scrapling_crawler.ScraplingCrawler") as crawler_cls,
+        patch(
+            "hn2md.stages.collect._crawl_article_with_scrapling",
+            new=AsyncMock(return_value=("", ["https://opengraph.githubassets.com/hash/deepseek-ai/DeepSpec"])),
+        ) as crawl_page,
+        patch("src.core.handlers.image_handler.save_article_image", return_value=str(preview)),
         patch(
             "src.core.handlers.discussion_handler.get_discussion_content_async",
             new=AsyncMock(return_value="HN discussion"),
@@ -268,12 +338,12 @@ def test_collect_stage_routes_github_blob_pdf_to_pdf_handler(tmp_path) -> None:
         result = CollectStage().execute(ctx, object(), concurrency=1)
 
     pdf_handler.assert_awaited_once_with("https://github.com/deepseek-ai/DeepSpec/blob/main/DSpark_paper.pdf")
-    crawler_cls.assert_not_called()
+    crawl_page.assert_awaited_once()
     assert result["collected"] == 1
 
     with sqlite3.connect(ctx.db_path) as conn:
-        row = conn.execute("SELECT article_content FROM news WHERE id=1").fetchone()
-    assert row == (("PDF extracted text " * 10).strip(),)
+        row = conn.execute("SELECT article_content, largest_image FROM news WHERE id=1").fetchone()
+    assert row == (("PDF extracted text " * 10).strip(), str(preview))
 
 
 def test_collect_stage_routes_fediverse_urls_to_fediverse_handler(tmp_path) -> None:
