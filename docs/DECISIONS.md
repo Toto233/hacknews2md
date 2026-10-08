@@ -26,6 +26,17 @@ This file records durable project decisions that should not be changed back and 
 
 ## Accepted decisions
 
+### 2026-10-08 — Make recap copy self-contained for technology readers
+
+- Status: Accepted
+- Issue: N/A (explicit user request to implement the assessed prompt improvements; no external issue requested)
+- Supersedes: N/A; extends the 2026-10-06 readability decision while preserving source fidelity, discussion attribution, summary lengths and publication gates.
+- Context: The user asked to apply useful lessons from Michael Lynch's [technical blogging anti-patterns](https://refactoringenglish.com/blog/anti-patterns-software-blogging/). Existing manual editing guidance covered direct leads and plain language but left audience assumptions and link-dependent context implicit. Automatic prompts still demanded impactful titles and prohibited all English abbreviations; the ranking prompt rewarded emotional hooks.
+- Decision: Write for interested Chinese technology readers without assuming specialist knowledge or prior recap reading. Make each item independently understandable using verified context, explain only necessary unfamiliar terms, and let specific facts carry the title and lead. Ground discussion summaries in substantive positions and their reasons. Remove generic prose while preserving meaningful qualifications. The repository publishing skill owns Codex manual editing; align automatic text/image-summary, title and ranking prompts with that direction, sharing their common summary style guidance within the prompt module. Preserve output formats and null/empty fallbacks.
+- Failure mode of alternative: Updating only API prompts leaves Codex's manual-plan route unchanged. Forcing all acronyms into Chinese or defining jargon through more jargon increases reading effort; adding generic background, hype or boilerplate caveats can obscure or distort the source. Blog-style personal anecdotes and rendering instructions do not belong in every news summary.
+- Consequences: Applies to future generation, without rewriting today's released artifacts or changing providers, transport or gates. Validate template formatting and existing callers offline with mocked LLMs, check skill routing and instruction consistency, and review bounded examples for context, jargon, attribution and insufficient evidence. These checks establish compatibility and editorial fit, not measured output-quality gains from an external model.
+- Validation: 23 existing mocked LLM/plan tests passed; all six prompt templates retain their parameter contracts, the ranking JSON example parses, the tag prompt is unchanged, and skill validation passed. Manual instruction walkthroughs covered a follow-up with missing background (verify context), a specialist abbreviation (explain only what understanding requires), a conditional benchmark claim (retain attribution and scope), and one-sided or sparse comments (do not invent opposition or pad to length). No live provider call or republication was used for validation.
+
 ### 2026-10-07 — Check stories incrementally before recap assembly and cover
 
 - Status: Accepted
