@@ -61,8 +61,15 @@ class ScraplingCrawler:
             logger.error("[SCRAPLING] Fetch failed for %s: %s", url[:60], exc)
             return "", []
 
-        # --- text content ---------------------------------------------------
-        content: str = page.get_all_text()
+        if page is None:
+            logger.warning("[SCRAPLING] Fetch returned no page for %s", url[:60])
+            return "", []
+
+        # Include text following inline tags; get_all_text() can omit node tails.
+        content = "\n".join(
+            str(node)
+            for node in page.xpath(".//text()[not(ancestor::script) and not(ancestor::style)]")
+        )
 
         # --- image URLs ------------------------------------------------------
         images: list[str] = []

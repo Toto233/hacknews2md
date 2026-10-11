@@ -131,6 +131,32 @@ def test_exact_draft_request_does_not_log_token_in_transport_error(monkeypatch) 
     assert "credential-marker" not in repr(log.mock_calls)
 
 
+@pytest.mark.parametrize("content_type", ["text/plain", "text/plain; charset=ISO-8859-1"])
+def test_exact_draft_readback_decodes_utf8_despite_latin1_headers(monkeypatch, content_type) -> None:
+    expected = {
+        "news_item": [{"title": "中文新闻标题", "content": "<p>正文与图片说明：实验结果。</p>"}],
+    }
+    response = requests.Response()
+    response.status_code = 200
+    response._content = json.dumps(expected, ensure_ascii=False).encode("utf-8")
+    response.headers["Content-Type"] = content_type
+    response.encoding = requests.utils.get_encoding_from_headers(response.headers)
+    token_manager = Mock()
+    token_manager.get_access_token.return_value = "offline-token"
+    request = Mock(return_value=response)
+    monkeypatch.setattr("publisher_shared.wechat.draft.requests.post", request)
+    monkeypatch.setattr(
+        "requests.sessions.Session.request",
+        Mock(side_effect=AssertionError("Draft readback tests must stay offline")),
+    )
+
+    assert DraftManager(token_manager, Mock()).get_draft("draft-123") == expected
+    request.assert_called_once_with(
+        "https://api.weixin.qq.com/cgi-bin/draft/get",
+        params={"access_token": "offline-token"}, json={"media_id": "draft-123"}, timeout=30,
+    )
+
+
 def test_converter_escapes_metadata_headings_links_and_image_attributes() -> None:
     converted = convert_markdown_to_html(
         '---\ntitle: </title><script>alert(1)</script>\n---\n'

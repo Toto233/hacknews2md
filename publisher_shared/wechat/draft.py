@@ -42,6 +42,7 @@ class DraftManager:
                 timeout=30,
             )
             response.raise_for_status()
+            response.encoding = "utf-8"
             data = response.json()
             if isinstance(data, dict) and isinstance(data.get("news_item"), list):
                 return data

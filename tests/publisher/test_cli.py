@@ -1094,3 +1094,28 @@ def test_restart_fetch_rejects_historical_period(tmp_path, monkeypatch) -> None:
         result = CliRunner().invoke(main, ["fetch", "hackernews", "--date", "2026-06-27", "--restart"])
     assert result.exit_code != 0
     run.assert_not_called()
+
+
+def test_review_run_scopes_explicit_restart_without_discarding_history(tmp_path, monkeypatch) -> None:
+    monkeypatch.chdir(tmp_path)
+    job_dir = tmp_path / "output/jobs"
+    job_dir.mkdir(parents=True)
+    cutoff = "2026-06-27T12:00:00"
+    ledger = {"stages": {"FETCHING": {"success": True, "started_at": cutoff,
+        "output_summary": {"ignore_history": True, "database_backup": "db.bak", "ledger_backup": "job.bak"}}}}
+    (job_dir / "publish_job_20260627.json").write_text(json.dumps(ledger), encoding="utf-8")
+    with patch("hn2md.stages.post_publish_audit.run_post_publish_audit", return_value={"findings": [], "blocking_count": 0}) as run:
+        result = CliRunner().invoke(main, ["review-run", "hackernews", "--date", "2026-06-27", "--json"])
+    assert result.exit_code == 0, result.output
+    assert run.call_args.kwargs["superseded_before"] == cutoff
+
+
+def test_review_cutoff_requires_successful_backed_up_restart(tmp_path) -> None:
+    from publisher.review_scope import restart_review_cutoff
+    receipt = {"success": False, "started_at": "2026-06-27T12:00:00", "output_summary": {"ignore_history": True}}
+    path = tmp_path / "publish_job_20260627.json"
+    path.write_text(json.dumps({"stages": {"FETCHING": receipt}}), encoding="utf-8")
+    assert restart_review_cutoff(tmp_path, "20260627") is None
+    receipt["success"] = True
+    path.write_text(json.dumps({"stages": {"FETCHING": receipt}}), encoding="utf-8")
+    assert restart_review_cutoff(tmp_path, "20260627") is None

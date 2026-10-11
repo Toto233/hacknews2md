@@ -35,18 +35,32 @@ Reuse explicit approval only for the same blocking-issue fingerprint. For a new 
 .\scripts\publisher.ps1 audit hackernews --approve
 ```
 
-“继续” is approval only when answering the specific risk presented. Non-exemptible summary minima remain repair requirements. A missing screenshot is not an audit exemption: only the explicit, exact-source user waiver recorded with `record-screenshot-waiver` after a failed capture can allow that one omission, as described in the main publishing skill.
+“继续” is approval only when answering the specific risk presented. Non-exemptible summary minima remain repair requirements. A screenshot omission is separate from an audit exemption: the known blocked-page policy or an explicit exact-source user waiver can satisfy only that story's visual gate, as described in the main publishing skill.
 
 ## Invalid capture saved as a screenshot
 
-If visual inspection shows that an existing screenshot is a verification or error page, preserve the file as evidence. Obtain the user's exact-story decision, then use the canonical repair command to replace its DB reference with a verified capture from the approved source, or clear it and record a one-run waiver. `--url` is the story's exact stored URL; `--replacement-url` names the page actually shown in the new image. For replacement, capture that approved page with the existing screenshot handler, inspect the saved image, and pass its path under the current period's image directory.
+If visual inspection shows an existing screenshot is a 403/access-denied or verification page, preserve the file and omit it through the maintained policy without another confirmation. Newly detected blocked pages are never saved as article images and are automatically recorded by capture; do not repeatedly retry them. The receipt is bound to this date, run ID, story ID and exact URL. A timeout, blank page or other unclassified failure does not qualify.
+
+For an already-saved invalid capture, choose the verified failure kind (`access_denied` or `verification_required`):
+
+```powershell
+.\scripts\publisher.ps1 repair-screenshot hackernews <id> --date YYYY-MM-DD --url "<exact story URL>" --omit --failure-kind access_denied --reason "<visually verified blocked-page evidence>"
+```
+
+If a valid screenshot of the same original page is already available, or recovery is requested, replace the invalid reference directly. Inspect the new image first, save it under the current period's image directory, and use the exact stored story URL for both URL options:
+
+```powershell
+.\scripts\publisher.ps1 repair-screenshot hackernews <id> --date YYYY-MM-DD --url "<exact story URL>" --replacement-file "<verified image>" --replacement-url "<same exact story URL>" --reason "<same-source recovery evidence>"
+```
+
+An alternate depicted source still needs the user's acceptance of the exact replacement page; an unclassified omission still needs an exact-story decision. Record that existing approval with:
 
 ```powershell
 .\scripts\publisher.ps1 repair-screenshot hackernews <id> --date YYYY-MM-DD --url "<exact story URL>" --replacement-file "<verified image>" --replacement-url "<approved page URL>" --reason "<reason>" --user-confirmed
 .\scripts\publisher.ps1 repair-screenshot hackernews <id> --date YYYY-MM-DD --url "<exact story URL>" --omit --reason "<reason>" --user-confirmed
 ```
 
-Choose one command, not both. The invalid image remains on disk; the replacement source or omission is recorded in the run ledger. Confirm that the rendered article uses the replacement or omits the invalid image. This branch does not waive any other source's screenshot.
+Choose the applicable branch once. The invalid image remains on disk; the replacement source or omission is recorded in the run ledger. Rerender before upload and confirm the article uses the replacement or omits the invalid image. This branch does not waive any other source's screenshot or its content checks.
 
 ## Terminal URL escape in a fetched story
 

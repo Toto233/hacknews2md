@@ -144,6 +144,25 @@ def test_visual_gate_precedes_assembly_and_uses_scoped_waiver(editorial):
     assert reviewed_stories(ctx, machine)["ready"]
 
 
+def test_blocked_page_omission_does_not_waive_source_or_editorial_checks(editorial):
+    from publisher.visual_policy import blocked_capture_waiver
+
+    ctx, machine, paths = editorial
+    check_all(editorial)
+    with get_db(str(ctx.db_path)) as conn:
+        conn.execute("UPDATE news SET screenshot=NULL WHERE id=1")
+    machine.job.screenshot_waivers = [blocked_capture_waiver(
+        ctx.period, machine.job.run_id, 1, "https://example.test/1",
+        "verification_required", "Rendered source requires human verification",
+    )]
+    assert reviewed_stories(ctx, machine)["ready"]
+    with get_db(str(ctx.db_path)) as conn:
+        conn.execute("UPDATE news SET article_content='' WHERE id=1")
+    assert not check_story(ctx, machine, paths[0])["ready"]
+    assert not reviewed_stories(ctx, machine)["ready"]
+    assert check_story(ctx, machine, paths[1])["ready"]
+
+
 def test_keyword_review_is_available_before_render_and_reused(editorial):
     ctx, machine, paths = editorial
     with get_db(str(ctx.db_path)) as conn:

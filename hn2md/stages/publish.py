@@ -16,6 +16,7 @@ from hn2md.stages.script_loader import load_project_function
 from src.core.github_visuals import has_saved_github_preview, is_github_page_url
 from src.db.connection import get_db
 from src.utils.deployment import load_deployment_settings
+from publisher.visual_policy import screenshot_waiver_authorized
 
 logger = logging.getLogger(__name__)
 
@@ -85,9 +86,7 @@ def _require_screenshots_for_publish(
     applicable = {
         (entry.get("period"), entry.get("news_id"), entry.get("news_url")): entry
         for entry in (waivers or [])
-        if entry.get("approved_by") == "user"
-        and entry.get("run_id") == run_id
-        and entry.get("reason")
+        if screenshot_waiver_authorized(entry, run_id)
     }
     waived = [
         applicable[(period, row["id"], row["news_url"])]
@@ -104,7 +103,7 @@ def _require_screenshots_for_publish(
             f"Mandatory screenshot fallback is incomplete. Rerun capture-screenshots for: {details}"
         )
     if waived:
-        logger.warning("[PUBLISH] User-approved screenshot waiver(s): %s", waived)
+        logger.warning("[PUBLISH] Scoped screenshot omission(s): %s", waived)
     return waived
 
 

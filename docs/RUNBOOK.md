@@ -22,7 +22,7 @@ Hacker News `/front` 返回 419 时，按 [419 抓取恢复说明](HN_FETCH_419.
 .\scripts\publisher.ps1 audit hackernews --phase pre-plan --json
 ```
 
-图片和截图分别核对。GitHub 页面在采集阶段优先保存 GitHub Open Graph 分享预览图，并只从页面 Markdown 正文取其他图片；截图阶段不再对其启动浏览器。若分享图下载失败，发布前会报出 ID 和 URL；用 `collect hackernews --rerun` 补采图片，不以头像或其他正文图片冒充分享图。其他有来源 URL 的新闻仍须保存截图；失败时可定向重试 `capture-screenshots hackernews --rerun`。只有用户明确同意省略某条失败截图，才能为该日期、故事 ID 和精确 URL 记录一次性豁免。不能用假图或删条目绕过门禁。可见的候选替代来源，应先给用户原文和替代页的直接链接以便核对。
+图片和截图分别核对。GitHub 页面在采集阶段优先保存 GitHub Open Graph 分享预览图，并只从页面 Markdown 正文取其他图片；截图阶段不再对其启动浏览器。若分享图下载失败，发布前会报出 ID 和 URL；用 `collect hackernews --rerun` 补采图片，不以头像或其他正文图片冒充分享图。其他来源默认须有有效截图。浏览器实际呈现的403／拒绝访问或验证页自动省略，不保存错误页、不继续重试，账本绑定日期、run_id、故事 ID、精确 URL 和原因；续跑复用记录，最终交付列出省略项。HTTP客户端的403不能单独决定浏览器截图结果。超时和未分类失败仍定向重试，未解决须取得用户对该项省略的明确决定。已保存的错误图保留，确认403／验证页可直接省略；同一原文的有效截图可直接恢复；替换为其他来源仍须用户接受。命令见[恢复指南](../skills/publish-hacknews-codex/references/recovery.md#invalid-capture-saved-as-a-screenshot)。截图省略不豁免正文、来源、编辑或摘要检查，不能用假图或删条目绕过门禁。
 
 ## 计划、审计与渲染
 
@@ -50,6 +50,10 @@ python .\scripts\publish_today_wechat.py --no-pause
 ## Astro 镜像
 
 Astro 仓库不可用、已有预暂存改动或推送失败，不应阻断已验收的微信草稿。记录 `astro_skip_reason`；先查独立仓库状态，再用 `repair-astro hackernews --date YYYY-MM-DD` 补齐缺失文章，并用 `record-astro` 验证已推送的提交。只暂存本次生成的文章，不清理其他人的 Git 状态。
+
+## HackerNews 发布收尾
+
+收尾规则由 [发布技能第 7 节](../skills/publish-hacknews-codex/SKILL.md#7-brief-completion-check) 维护。使用 `review-run hackernews --brief` 获取精简结果；完整检查证据仍保存到原有审计文件，只有具体异常需要展开。
 
 ## Product Hunt 月报
 

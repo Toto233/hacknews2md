@@ -667,9 +667,13 @@ def _check_environment_compatibility(
     stages: dict[str, Any],
     date_str: str,
     receipt_history: dict[str, Any] | None = None,
+    *,
+    superseded_before: str | None = None,
 ) -> list[dict[str, Any]]:
     issues: list[dict[str, str]] = []
     for stage_name, receipt in _iter_stage_receipts(stages, receipt_history):
+        if _receipt_superseded(receipt, superseded_before):
+            continue
         error = str(receipt.get("error") or "").strip()
         if not error:
             continue
@@ -787,6 +791,21 @@ def _read_existing_finding_keys(path: Path) -> tuple[set[str], list[int]]:
     return keys, malformed_lines
 
 
+def _read_snapshot_issue_keys(path: Path) -> set[str]:
+    """Compare against the previous conclusion, including recurring anomalies."""
+    try:
+        snapshot = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, UnicodeError, json.JSONDecodeError):
+        return set()
+    findings = snapshot.get("findings") if isinstance(snapshot, dict) else None
+    if not isinstance(findings, list):
+        return set()
+    return {
+        _finding_key(finding) for finding in findings
+        if isinstance(finding, dict) and finding.get("severity") in {"warning", "blocking"}
+    }
+
+
 def _write_current_snapshot(
     path: Path,
     date_str: str,
@@ -872,12 +891,28 @@ def _receipt_warning_key(stage_name: str, warning_key: str, warning: Any) -> str
     return json.dumps([stage_name, warning_key, repr(warning)], ensure_ascii=False)
 
 
+def _receipt_superseded(receipt: dict[str, Any], cutoff: str | None) -> bool:
+    """Only explicitly dated receipts can be superseded by a fresh restart."""
+    finished = receipt.get("finished_at")
+    if not isinstance(finished, str) or not isinstance(cutoff, str):
+        return False
+    if not all("T" in value or " " in value for value in (finished, cutoff)):
+        return False
+    try:
+        return datetime.fromisoformat(finished) < datetime.fromisoformat(cutoff)
+    except (ValueError, TypeError):
+        # Missing, malformed or incomparable time zones must not hide blockers.
+        return False
+
+
 def _check_stage_receipts(
     stages: dict[str, Any],
     date_str: str,
     db_path: Path | None = None,
     receipt_history: dict[str, Any] | None = None,
     skipped_stories: list[dict[str, Any]] | None = None,
+    *,
+    superseded_before: str | None = None,
 ) -> list[dict[str, Any]]:
     """Surface run-time problems from stage receipts for post-run follow-up."""
     findings: list[dict[str, Any]] = []
@@ -888,6 +923,29 @@ def _check_stage_receipts(
 
     for stage_name, receipt in _iter_stage_receipts(stages, receipt_history):
         receipts_by_stage.setdefault(stage_name, []).append(receipt)
+
+        if _receipt_superseded(receipt, superseded_before):
+            if receipt.get("success") is False or receipt.get("error"):
+                findings.append(_finding(
+                    date_str, "resolution", "info",
+                    f"{stage_name} historical error superseded by explicit restart",
+                    {"stage": stage_name, "error": receipt.get("error"),
+                     "finished_at": receipt.get("finished_at"),
+                     "resolution": "superseded_by_explicit_restart"},
+                ))
+            old_output = receipt.get("output_summary")
+            if isinstance(old_output, dict):
+                for key in warning_keys:
+                    warnings = old_output.get(key)
+                    if warnings:
+                        findings.append(_finding(
+                            date_str, "resolution", "info",
+                            f"{stage_name} historical {key} superseded by explicit restart",
+                            {"stage": stage_name, "warning_key": key, "warnings": warnings,
+                             "finished_at": receipt.get("finished_at"),
+                             "resolution": "superseded_by_explicit_restart"},
+                        ))
+            continue
 
         if receipt.get("success") is False:
             latest_receipt = stages.get(stage_name)
@@ -1075,13 +1133,15 @@ def _check_stage_receipts(
                 )
             )
             continue
+        historical_retry = _receipt_superseded(latest, superseded_before)
         findings.append(
             _finding(
                 date_str,
                 "stage_retry",
-                "warning",
+                "info" if historical_retry else "warning",
                 f"{stage_name} retried {retry_count} time(s)",
-                {"stage": stage_name, "retry_count": retry_count, "error": latest.get("error")},
+                {"stage": stage_name, "retry_count": retry_count, "error": latest.get("error"),
+                 **({"resolution": "superseded_by_explicit_restart"} if historical_retry else {})},
             )
         )
     return findings
@@ -1097,6 +1157,8 @@ def run_post_publish_audit(
     dry_run: bool = False,
     verbose: bool = False,
     date_str: str | None = None,
+    *,
+    superseded_before: str | None = None,
 ) -> dict[str, Any]:
     """Run post-publish audit, append findings to JSONL, return summary.
 
@@ -1104,6 +1166,11 @@ def run_post_publish_audit(
     explicit resolutions. A separate latest-snapshot JSON always records the
     full current conclusion. Pass ``verbose=True`` to also persist all other
     info findings to JSONL.
+    ``new_findings`` contains warnings and blockers absent from the previous
+    snapshot, including a previously resolved anomaly that recurs;
+    unchanged active issues remain in ``findings`` and the blocking count.
+    ``superseded_before`` scopes warnings to an explicitly restarted selection;
+    earlier receipts remain historical evidence, including their Media IDs.
 
     Returns::
 
@@ -1151,10 +1218,15 @@ def run_post_publish_audit(
 
     # Run all checks
     all_findings.extend(
-        _check_stage_receipts(stages, date_str, db_path, receipt_history, skipped_stories)
+        _check_stage_receipts(
+            stages, date_str, db_path, receipt_history, skipped_stories,
+            superseded_before=superseded_before,
+        )
     )
     all_findings.extend(_check_page_preparation(stages, date_str))
-    all_findings.extend(_check_environment_compatibility(stages, date_str, receipt_history))
+    all_findings.extend(_check_environment_compatibility(
+        stages, date_str, receipt_history, superseded_before=superseded_before,
+    ))
     all_findings.extend(_check_wechat_media_id(receipt, date_str, dry_run))
     for stage_name, historical_receipt in _iter_stage_receipts(stages, receipt_history):
         if stage_name != "PUBLISHING":
@@ -1162,10 +1234,21 @@ def run_post_publish_audit(
         output_summary = historical_receipt.get("output_summary") or {}
         if not isinstance(output_summary, dict):
             continue
-        all_findings.extend(_check_image_preflight(output_summary, date_str))
-        all_findings.extend(
-            _check_keyword_warnings(output_summary, date_str, keyword_decisions)
-        )
+        process_findings = _check_image_preflight(output_summary, date_str)
+        process_findings.extend(_check_keyword_warnings(output_summary, date_str, keyword_decisions))
+        if _receipt_superseded(historical_receipt, superseded_before):
+            for finding in process_findings:
+                if finding["severity"] not in {"warning", "blocking"}:
+                    continue
+                all_findings.append(_finding(
+                    date_str, "resolution", "info", finding["message"],
+                    {**finding.get("details", {}), "stage": stage_name,
+                     "original_check": finding["check"],
+                     "finished_at": historical_receipt.get("finished_at"),
+                     "resolution": "superseded_by_explicit_restart"},
+                ))
+        else:
+            all_findings.extend(process_findings)
     all_findings.extend(
         _check_story_completeness(db_path, receipt, date_str, skipped_stories)
     )
@@ -1195,6 +1278,12 @@ def run_post_publish_audit(
         _recommendations_from_findings(all_findings),
     )
     daily_summary = _build_daily_summary(date_str, ledger, all_findings, recommendations)
+    previous_issues = _read_snapshot_issue_keys(snapshot_path)
+    new_findings = [
+        finding for finding in all_findings
+        if finding.get("severity") in {"warning", "blocking"}
+        and _finding_key(finding) not in previous_issues
+    ]
     snapshot_written = _write_current_snapshot(
         snapshot_path,
         date_str,
@@ -1216,6 +1305,7 @@ def run_post_publish_audit(
 
     return {
         "findings": all_findings,
+        "new_findings": new_findings,
         "blocking_count": blocking_count,
         "recommendations": recommendations,
         "daily_summary": daily_summary,

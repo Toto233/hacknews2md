@@ -137,9 +137,11 @@ def test_codex_skill_uses_publisher_for_future_domain_filters() -> None:
 def test_codex_skill_requires_source_grounded_editorial_review_before_plan_import() -> None:
     skill = Path("skills/publish-hacknews-codex/SKILL.md").read_text(encoding="utf-8")
 
-    review = skill.index("Before import, check the complete draft against its evidence")
+    review = skill.index(".\\scripts\\publisher.ps1 check-story hackernews --item-file")
+    readiness = skill.index(".\\scripts\\publisher.ps1 story-status hackernews")
+    assembly = skill.index(".\\scripts\\publisher.ps1 assemble-plan hackernews")
     plan_import = skill.index(".\\scripts\\publisher.ps1 plan hackernews --manual-plan")
-    assert review < plan_import
+    assert review < readiness < assembly < plan_import
     assert "numerical comparisons, causal direction, and uncertainty" in skill
     assert "Ground discussion summaries in actual HN comments" in skill
     assert "Automated lengths/schema checks do not certify factual fidelity" in skill

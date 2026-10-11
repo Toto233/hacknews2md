@@ -6,20 +6,23 @@ generates an LLM summary from the screenshot image.
 """
 
 import base64
-import logging
 import os
 import time
 from dataclasses import dataclass
 from datetime import datetime
+from pathlib import Path
+from typing import Any
 
+import structlog
 from selenium import webdriver
+from src.core.handlers.browser_capture_status import detect_browser_capture_status
 from src.core.handlers.browser_page_prep import dismiss_cookie_consent
 from src.core.handlers.browser_support import build_headless_chrome_options
 from src.llm.llm_business import generate_summary_from_image
 from src.security.url_validator import SecurityError, validate_url
 from src.utils.filename import sanitize_filename_stem
 
-logger = logging.getLogger(__name__)
+logger = structlog.get_logger(__name__)
 
 
 PAGE_LOAD_TIMEOUT_SECONDS = int(os.getenv("HN2MD_SCREENSHOT_PAGE_LOAD_TIMEOUT_SECONDS", "12"))
@@ -28,10 +31,17 @@ RENDER_WAIT_SECONDS = float(os.getenv("HN2MD_SCREENSHOT_RENDER_WAIT_SECONDS", "3
 
 @dataclass(frozen=True)
 class ScreenshotCapture:
-    """Saved screenshot and the non-blocking preparation action before capture."""
+    """Saved page, or an identified access block without taking a screenshot.
+
+    ``reason`` is ``access_denied`` or ``verification_required`` only for a
+    recognized block; other failures keep it unset. ``evidence_path`` remains
+    optional for callers holding historical evidence images.
+    """
 
     path: str | None
     page_preparation_action: str
+    reason: str | None = None
+    evidence_path: str | None = None
 
 
 def capture_page_screenshot(url: str, title: str) -> ScreenshotCapture:
@@ -43,11 +53,11 @@ def capture_page_screenshot(url: str, title: str) -> ScreenshotCapture:
 
     Returns:
         Screenshot metadata, including an optional absolute image path.
+        Recognized access/verification pages are skipped without saving PNGs.
     """
     today = datetime.now()
-    date_dir = os.path.join("output/images", f"{today.year:04d}{today.month:02d}{today.day:02d}")
-    if not os.path.exists(date_dir):
-        os.makedirs(date_dir)
+    date_dir = Path("output/images") / f"{today.year:04d}{today.month:02d}{today.day:02d}"
+    date_dir.mkdir(parents=True, exist_ok=True)
 
     clean_title = sanitize_filename_stem(title)
     ext = ".png"
@@ -56,54 +66,73 @@ def capture_page_screenshot(url: str, title: str) -> ScreenshotCapture:
     base_filename = clean_title
     while True:
         filename = f"{base_filename}{ext}" if index == 1 else f"{base_filename}_{index}{ext}"
-        image_save_path = os.path.join(date_dir, filename)
-        if not os.path.exists(image_save_path):
+        image_save_path = date_dir / filename
+        if not image_save_path.exists():
             break
         index += 1
 
-    logger.info(f"[SCREENSHOT] preparing | '{title[:40]}...' | path:{image_save_path}")
+    logger.info("screenshot_preparing", title=title[:40], path=str(image_save_path))
 
     options = build_headless_chrome_options()
 
     driver = None
     saved_screenshot_path = None
     page_preparation_action = "not_attempted"
+    reason = None
+    evidence_path = None
 
     # SSRF protection: validate URL before passing to Selenium
     try:
         validate_url(url)
     except (SecurityError, ValueError) as e:
-        logger.warning(f"[SCREENSHOT] URL validation failed | {e} | url={url[:80]}")
+        logger.warning("screenshot_url_rejected", error=str(e), url=url[:80])
         return ScreenshotCapture(path=None, page_preparation_action=page_preparation_action)
 
     try:
-        logger.debug(f"[SCREENSHOT] init WebDriver | {url}")
+        logger.debug("screenshot_browser_starting", url=url[:120])
         driver = webdriver.Chrome(options=options)
         # A blocked or perpetually loading page must not hold the entire
-        # collection batch open; screenshots are optional publish assets.
+        # collection batch open; screenshot policy is owned by the publisher.
         driver.set_page_load_timeout(PAGE_LOAD_TIMEOUT_SECONDS)
-        logger.debug(f"[SCREENSHOT] navigating | {url}")
+        logger.debug("screenshot_navigating", url=url[:120])
         driver.get(url)
-        logger.debug("[SCREENSHOT] waiting %.1fs for rendering", RENDER_WAIT_SECONDS)
+        logger.debug("screenshot_render_wait", seconds=RENDER_WAIT_SECONDS)
         time.sleep(RENDER_WAIT_SECONDS)
         consent = dismiss_cookie_consent(driver, url)
         page_preparation_action = consent.action
-        logger.info("[SCREENSHOT] consent=%s | %s", consent.action, url[:80])
-        driver.save_screenshot(image_save_path)
-        saved_screenshot_path = os.path.abspath(image_save_path)
-        logger.info(f"[SCREENSHOT] OK | {saved_screenshot_path}")
+        logger.info("screenshot_page_prepared", action=consent.action, url=url[:80])
+        reason = detect_browser_capture_status(driver)
+        if reason is not None:
+            logger.info("screenshot_access_blocked", reason=reason, url=url)
+        else:
+            saved_screenshot_path = _save_screenshot(driver, image_save_path)
+            if saved_screenshot_path is not None:
+                logger.info("screenshot_saved", path=saved_screenshot_path)
     except Exception as e:
-        logger.error(f"[SCREENSHOT] failed | err:{e}")
+        logger.error("screenshot_failed", error=str(e))
         saved_screenshot_path = None
     finally:
         if driver:
-            logger.debug("[SCREENSHOT] closing WebDriver")
-            driver.quit()
+            logger.debug("screenshot_browser_closing")
+            try:
+                driver.quit()
+            except Exception as exc:
+                logger.warning("screenshot_browser_close_failed", error=str(exc))
 
     return ScreenshotCapture(
         path=saved_screenshot_path,
         page_preparation_action=page_preparation_action,
+        reason=reason,
+        evidence_path=evidence_path,
     )
+
+
+def _save_screenshot(driver: Any, image_path: Path) -> str | None:
+    """Only expose a saved artifact after Selenium and the file agree."""
+    if not driver.save_screenshot(str(image_path)) or not image_path.is_file():
+        logger.warning("screenshot_save_failed", path=str(image_path))
+        return None
+    return str(image_path.resolve())
 
 
 def save_page_screenshot(url: str, title: str) -> str | None:
@@ -146,7 +175,7 @@ def get_summary_from_screenshot(
         )
         _ = generate_summary_from_image(base64_image_data, image_prompt, llm_type)
     except Exception as e:
-        logger.error(f"Error in get_summary_from_screenshot for {news_url}: {e}")
+        logger.error("screenshot_summary_failed", url=news_url[:120], error=str(e))
         return None
 
     return saved_screenshot_path

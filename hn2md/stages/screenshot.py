@@ -7,6 +7,7 @@ from hn2md.context import RuntimeContext
 from hn2md.screenshot_capture import capture_missing_screenshots
 from hn2md.stages.base import BaseStage
 from hn2md.state import JobStateMachine
+from publisher.visual_policy import apply_blocked_capture_policy
 
 
 class CaptureScreenshotsStage(BaseStage):
@@ -22,6 +23,10 @@ class CaptureScreenshotsStage(BaseStage):
         concurrency: int = 4,
     ) -> dict[str, object]:
         progress_path = ctx.job_dir / f"capture_progress_{machine.job.date}.json"
-        return capture_missing_screenshots(
-            ctx, concurrency=concurrency, progress_path=progress_path, period=machine.job.date
+        summary = capture_missing_screenshots(
+            ctx, concurrency=concurrency, progress_path=progress_path, period=machine.job.date,
+            waivers=getattr(machine.job, "screenshot_waivers", []),
+            run_id=getattr(machine.job, "run_id", None),
         )
+        apply_blocked_capture_policy(machine, summary)
+        return summary

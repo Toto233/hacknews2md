@@ -404,11 +404,22 @@ def audit(
 @click.argument("source_name")
 @click.option("--date", "date_value", default=None, help="YYYY-MM-DD or YYYYMMDD")
 @click.option("--json", "json_output", is_flag=True, help="Print structured run review JSON")
+@click.option("--brief", is_flag=True, help="Print compact completion JSON and active issue summaries")
 @click.option("--verbose", is_flag=True, help="Include info-level findings in JSONL output")
-def review_run(source_name: str, date_value: str | None, json_output: bool, verbose: bool) -> None:
-    """Review a completed publish run for follow-up fixes and optimization opportunities."""
+def review_run(
+    source_name: str, date_value: str | None, json_output: bool, brief: bool, verbose: bool
+) -> None:
+    """Verify publish results and record anomalies after the requested attempts."""
+    if brief and json_output:
+        raise click.UsageError("Choose --brief or --json, not both")
     _source, ctx = _load_date_source(source_name, date_value)
     from hn2md.stages.post_publish_audit import run_post_publish_audit
+    from publisher.review_scope import restart_review_cutoff
+
+    review_options: dict[str, Any] = {}
+    cutoff = restart_review_cutoff(ctx.job_dir, ctx.period)
+    if cutoff:
+        review_options["superseded_before"] = cutoff
 
     result = run_post_publish_audit(
         job_dir=ctx.job_dir,
@@ -417,8 +428,13 @@ def review_run(source_name: str, date_value: str | None, json_output: bool, verb
         date_str=ctx.period,
         dry_run=False,
         verbose=verbose,
+        **review_options,
     )
-    if json_output:
+    if brief:
+        from publisher.review_summary import summarize_run_review
+
+        click.echo(json_mod.dumps(summarize_run_review(result), ensure_ascii=False, indent=2))
+    elif json_output:
         click.echo(json_mod.dumps(result, ensure_ascii=False, indent=2))
     else:
         click.echo(f"Run review: {len(result['findings'])} finding(s), {result['blocking_count']} blocking")
@@ -438,8 +454,6 @@ def review_run(source_name: str, date_value: str | None, json_output: bool, verb
                 f"  [{recommendation.get('status')}] {recommendation.get('code')}: "
                 f"{recommendation.get('title')} ({recommendation.get('occurrence_count')} run(s))"
             )
-        if daily_summary.get("compact_safe"):
-            click.echo(daily_summary.get("compact_message"))
     if result.get("blocking_count", 0):
         raise click.ClickException("run review found blocking follow-up item(s)")
 
@@ -901,6 +915,8 @@ def record_screenshot_waiver(
 @click.option("--replacement-file", type=click.Path(exists=True, dir_okay=False, path_type=Path))
 @click.option("--replacement-url", default=None, help="Source page shown in the replacement capture")
 @click.option("--omit", is_flag=True, help="Omit a captured error/verification page")
+@click.option("--failure-kind", type=click.Choice(["access_denied", "verification_required"]),
+              help="Classify a visually verified blocked page for policy-based omission")
 @click.option("--reason", required=True)
 @click.option("--user-confirmed", is_flag=True)
 def repair_screenshot(
@@ -911,12 +927,35 @@ def repair_screenshot(
     replacement_file: Path | None,
     replacement_url: str | None,
     omit: bool,
+    failure_kind: str | None,
     reason: str,
     user_confirmed: bool,
 ) -> None:
-    """Replace a captured error page or record one user-approved omission."""
-    if not user_confirmed:
+    """Repair a source screenshot; blocked pages use the maintained omission policy."""
+    ctx = _ensure_hackernews(source_name, date_value)
+    try:
+        with daily_lock(ctx.job_dir / f".lock_{ctx.period}"):
+            _repair_screenshot_locked(
+                ctx, news_id, news_url, replacement_file, replacement_url,
+                omit, failure_kind, reason, user_confirmed,
+            )
+    except LockError as exc:
+        raise click.ClickException(str(exc)) from exc
+
+
+def _repair_screenshot_locked(
+    ctx: PublisherContext, news_id: int, news_url: str,
+    replacement_file: Path | None, replacement_url: str | None,
+    omit: bool, failure_kind: str | None, reason: str, user_confirmed: bool,
+) -> None:
+    from publisher.visual_policy import blocked_capture_waiver, screenshot_waiver_authorized
+
+    same_source_replacement = replacement_file is not None and replacement_url == news_url
+    policy_omission = omit and failure_kind is not None
+    if not user_confirmed and not (same_source_replacement or policy_omission):
         raise click.ClickException("An explicit user decision is required: --user-confirmed")
+    if failure_kind and not omit:
+        raise click.ClickException("--failure-kind applies only to --omit")
     if not reason.strip():
         raise click.ClickException("A nonempty reason is required")
     if omit == (replacement_file is not None):
@@ -929,7 +968,6 @@ def repair_screenshot(
         except (SecurityError, ValueError) as exc:
             raise click.ClickException(f"Invalid replacement URL: {exc}") from exc
 
-    ctx = _ensure_hackernews(source_name, date_value)
     replacement_path: Path | None = None
     if replacement_file is not None:
         replacement_path = replacement_file.resolve()
@@ -950,9 +988,14 @@ def repair_screenshot(
         ).fetchone()
         if row is None or row["news_url"] != news_url:
             raise click.ClickException("Story ID, date and exact source URL do not match")
-        if not row["screenshot"]:
+        previous_omission = next((entry for entry in machine.job.screenshot_waivers
+                                  if entry.get("period") == ctx.period
+                                  and entry.get("news_id") == news_id
+                                  and entry.get("news_url") == news_url
+                                  and screenshot_waiver_authorized(entry, machine.job.run_id)), None)
+        if not row["screenshot"] and not (replacement_path and previous_omission):
             raise click.ClickException("Story has no captured screenshot to repair")
-        original_path = str(row["screenshot"])
+        original_path = str(row["screenshot"]) if row["screenshot"] else previous_omission.get("evidence_path")
         conn.execute(
             "UPDATE news SET screenshot = ? WHERE " + _date_where_clause(),
             (str(replacement_path) if replacement_path else None, news_id, ctx.period),
@@ -965,15 +1008,25 @@ def repair_screenshot(
         "news_url": news_url,
         "invalid_capture_path": original_path,
         "reason": reason.strip(),
-        "approved_by": "user",
+        "approved_by": "user" if user_confirmed else "source_recovery",
         "recorded_at": datetime.now().isoformat(),
     }
     if omit:
+        if policy_omission and not user_confirmed:
+            record = {
+                **blocked_capture_waiver(ctx.period, machine.job.run_id, news_id, news_url,
+                                         failure_kind, reason, original_path),
+                "invalid_capture_path": original_path,
+            }
         machine.job.screenshot_waivers = [
             existing for existing in machine.job.screenshot_waivers
             if not (existing.get("period") == ctx.period and existing.get("news_id") == news_id)
         ] + [record]
     else:
+        machine.job.screenshot_waivers = [
+            existing for existing in machine.job.screenshot_waivers
+            if not (existing.get("period") == ctx.period and existing.get("news_id") == news_id)
+        ]
         notes = machine.job.continuation_notes
         note_list = notes if isinstance(notes, list) else ([] if notes is None else [notes])
         note_list.append({**record, "replacement_path": str(replacement_path), "replacement_url": replacement_url})

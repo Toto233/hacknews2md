@@ -5,6 +5,8 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
+import pytest
+
 from src.utils.jsonl_writer import append_jsonl, read_jsonl
 
 
@@ -370,6 +372,66 @@ def test_post_publish_audit_jsonl_deduplicates_repeated_findings(tmp_path: Path)
     assert r1["jsonl_written"] > 0
     assert r2["jsonl_written"] == 0
     assert len(records) == r1["jsonl_written"]
+    assert r1["new_findings"]
+    assert all(f["severity"] in {"warning", "blocking"} for f in r1["new_findings"])
+    assert r2["new_findings"] == []
+    assert r2["findings"] == r1["findings"]
+
+
+def test_unchanged_blocker_is_still_active_without_becoming_a_new_anomaly(tmp_path: Path) -> None:
+    from hn2md.stages.post_publish_audit import run_post_publish_audit
+
+    job_dir = tmp_path / "jobs"
+    job_dir.mkdir()
+    _make_ledger(job_dir, "20260627", {"keyword_warnings": []})
+    first = run_post_publish_audit(job_dir, tmp_path / "test.db", tmp_path / "output", date_str="20260627")
+    repeated = run_post_publish_audit(job_dir, tmp_path / "test.db", tmp_path / "output", date_str="20260627")
+
+    assert first["blocking_count"] > 0
+    assert any(f["severity"] == "blocking" for f in first["new_findings"])
+    assert repeated["new_findings"] == []
+    assert repeated["blocking_count"] == first["blocking_count"]
+    assert any(f["severity"] == "blocking" for f in repeated["findings"])
+
+
+def test_resolved_anomaly_that_recurs_is_new_without_duplicating_trail(tmp_path: Path) -> None:
+    from hn2md.stages.post_publish_audit import run_post_publish_audit
+
+    job_dir = tmp_path / "jobs"
+    job_dir.mkdir()
+    receipt = {"wechat_media_id": "wx1", "keyword_warnings": [
+        {"keyword": "test", "line": 1, "sentence": "test line"},
+    ]}
+    _make_ledger(job_dir, "20260627", receipt)
+    run_post_publish_audit(job_dir, tmp_path / "test.db", tmp_path / "output", date_str="20260627")
+    _make_ledger(job_dir, "20260627", {"wechat_media_id": "wx1", "keyword_warnings": []})
+    cleared = run_post_publish_audit(job_dir, tmp_path / "test.db", tmp_path / "output", date_str="20260627")
+    assert not any(
+        f["check"] == "keyword_review" and f["severity"] in {"warning", "blocking"}
+        for f in cleared["findings"]
+    )
+
+    _make_ledger(job_dir, "20260627", receipt)
+    recurred = run_post_publish_audit(job_dir, tmp_path / "test.db", tmp_path / "output", date_str="20260627")
+    assert any(f["check"] == "keyword_review" for f in recurred["new_findings"])
+    recorded = read_jsonl(Path(recurred["jsonl_path"]))
+    assert sum(f["check"] == "keyword_review" for f in recorded) == 1
+
+
+@pytest.mark.parametrize("invalid_snapshot", ["[]", "{"])
+def test_invalid_previous_snapshot_does_not_hide_current_issues(
+    tmp_path: Path, invalid_snapshot: str,
+) -> None:
+    from hn2md.stages.post_publish_audit import run_post_publish_audit
+
+    job_dir = tmp_path / "jobs"
+    job_dir.mkdir()
+    _make_ledger(job_dir, "20260627", {"keyword_warnings": []})
+    first = run_post_publish_audit(job_dir, tmp_path / "test.db", tmp_path / "output", date_str="20260627")
+    Path(first["snapshot_path"]).write_text(invalid_snapshot, encoding="utf-8")
+    current = run_post_publish_audit(job_dir, tmp_path / "test.db", tmp_path / "output", date_str="20260627")
+    assert current["blocking_count"] > 0
+    assert any(f["severity"] == "blocking" for f in current["new_findings"])
 
 
 def test_post_publish_audit_tolerates_malformed_jsonl_line(tmp_path: Path) -> None:
@@ -1505,3 +1567,118 @@ def test_historical_recommendation_maturity_ignores_future_snapshots(tmp_path: P
 
     assert result[0]["status"] == "observation"
     assert result[0]["occurrence_dates"] == ["20260913", "20260914"]
+
+
+@pytest.fixture
+def restarted_review(tmp_path: Path, monkeypatch):
+    """Only local ledger/output fixtures; forbid accidental HTTP calls."""
+    from unittest.mock import Mock
+
+    monkeypatch.setattr("requests.get", Mock(side_effect=AssertionError("live HTTP forbidden")))
+    job_dir = tmp_path / "jobs"
+    job_dir.mkdir()
+    old_warning = {"id": 4538, "url": "https://example.com/removed", "action_required": "human_input"}
+    old_collect = {
+        "success": True, "finished_at": "2026-10-07T08:00:00",
+        "output_summary": {"content_warnings": [old_warning]},
+    }
+    current_collect = {"success": True, "finished_at": "2026-10-07T13:00:00", "output_summary": {}}
+    old_publish = {
+        "success": True, "finished_at": "2026-10-07T09:00:00",
+        "output_summary": {
+            "wechat_media_id": "old-media",
+            "skipped_images": ["https://example.com/old.png"],
+            "keyword_warnings": [{"keyword": "old", "sentence": "old context"}],
+        },
+    }
+    current_publish = {
+        "success": True, "finished_at": "2026-10-07T14:00:00",
+        "output_summary": {"wechat_media_id": "current-media"},
+    }
+    old_failure = {
+        "success": False, "finished_at": "2026-10-07T08:01:00",
+        "error": "Unexpected UTF-8 BOM", "output_summary": {},
+    }
+    ledger = {
+        "date": "20261007", "status": "DONE",
+        "stages": {"COLLECTING": current_collect, "PUBLISHING": current_publish},
+        "receipts": {"COLLECTING": [old_collect, current_collect],
+                     "PUBLISHING": [old_publish, current_publish], "CHECKING": [old_failure]},
+    }
+    path = job_dir / "publish_job_20261007.json"
+    path.write_text(json.dumps(ledger), encoding="utf-8")
+    return job_dir, tmp_path / "missing.db", tmp_path / "output", ledger, path
+
+
+def test_restart_cutoff_resolves_old_removed_story_and_process_warnings(restarted_review) -> None:
+    from hn2md.stages.post_publish_audit import run_post_publish_audit
+
+    job_dir, db_path, output_dir, ledger, path = restarted_review
+    original = path.read_bytes()
+    result = run_post_publish_audit(
+        job_dir, db_path, output_dir, date_str="20261007",
+        superseded_before="2026-10-07T12:00:00",
+    )
+    assert result["blocking_count"] == 0
+    assert path.read_bytes() == original
+    resolutions = [f for f in result["findings"] if f["check"] == "resolution"]
+    assert all(f["severity"] == "info" for f in resolutions)
+    assert all(f["details"]["resolution"] == "superseded_by_explicit_restart" for f in resolutions)
+    assert any(f["details"].get("warnings") == ledger["receipts"]["COLLECTING"][0]["output_summary"]["content_warnings"] for f in resolutions)
+    assert any(f["details"].get("error") == "Unexpected UTF-8 BOM" for f in resolutions)
+    assert {f["details"].get("original_check") for f in resolutions} >= {"image_preflight", "keyword_review"}
+    assert not any(f["check"] == "environment_compatibility" for f in result["findings"])
+    duplicate = next(f for f in result["findings"] if f["check"] == "duplicate_draft_risk")
+    assert duplicate["details"]["media_ids"] == ["current-media", "old-media"]
+
+
+def test_without_explicit_restart_cutoff_old_blockers_remain_active(restarted_review) -> None:
+    from hn2md.stages.post_publish_audit import run_post_publish_audit
+
+    job_dir, db_path, output_dir, _ledger, _path = restarted_review
+    result = run_post_publish_audit(job_dir, db_path, output_dir, date_str="20261007")
+    assert result["blocking_count"] == 2
+    assert any(f["check"] == "stage_warning" and f["severity"] == "blocking" for f in result["findings"])
+    assert any(f["check"] == "image_preflight" and f["severity"] == "warning" for f in result["findings"])
+    assert any(f["check"] == "keyword_review" and f["severity"] == "warning" for f in result["findings"])
+
+
+@pytest.mark.parametrize("finished_at", ["2026-10-07T13:00:00", "2026-10-07T12:00:00", None, "invalid", "2026-10-07", "2026-10-07T08:00:00+08:00"])
+def test_restart_cutoff_keeps_current_or_unverifiable_blockers(restarted_review, finished_at) -> None:
+    from hn2md.stages.post_publish_audit import run_post_publish_audit
+
+    job_dir, db_path, output_dir, ledger, path = restarted_review
+    # The same warning recurs after restart; the old receipt must not suppress it.
+    current = ledger["receipts"]["COLLECTING"][-1]
+    current["output_summary"] = ledger["receipts"]["COLLECTING"][0]["output_summary"]
+    current["finished_at"] = finished_at
+    path.write_text(json.dumps(ledger), encoding="utf-8")
+    result = run_post_publish_audit(
+        job_dir, db_path, output_dir, date_str="20261007",
+        superseded_before="2026-10-07T12:00:00",
+    )
+    assert result["blocking_count"] == 1
+    warning = next(f for f in result["findings"] if f["check"] == "stage_warning")
+    assert warning["details"]["warnings"][0]["id"] == 4538
+
+
+def test_invalid_restart_cutoff_does_not_hide_failures() -> None:
+    from hn2md.stages.post_publish_audit import _check_stage_receipts
+
+    receipt = {"success": False, "finished_at": "2026-10-07T08:00:00", "error": "missing source"}
+    findings = _check_stage_receipts({"COLLECTING": receipt}, "20261007", superseded_before="invalid")
+    assert findings[0]["check"] == "stage_failure" and findings[0]["severity"] == "blocking"
+
+
+def test_wholly_historical_retry_is_informational() -> None:
+    from hn2md.stages.post_publish_audit import _check_stage_receipts
+
+    receipt = {"success": False, "finished_at": "2026-10-07T08:00:00", "error": "old error", "retry_count": 2}
+    findings = _check_stage_receipts(
+        {}, "20261007", receipt_history={"COLLECTING": [receipt]},
+        superseded_before="2026-10-07T12:00:00",
+    )
+    assert all(f["severity"] == "info" for f in findings)
+    retry = next(f for f in findings if f["check"] == "stage_retry")
+    assert retry["details"]["resolution"] == "superseded_by_explicit_restart"
+    assert retry["details"]["retry_count"] == 2

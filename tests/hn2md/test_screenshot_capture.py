@@ -212,3 +212,46 @@ def test_screenshot_child_preserves_the_page_preparation_action() -> None:
         "screenshot": "shot.png",
         "page_preparation": {"action": "rejected"},
     }
+
+
+def test_blocked_page_is_not_retried_as_a_transient_failure(monkeypatch) -> None:
+    capture = __import__("unittest.mock", fromlist=["Mock"]).Mock(return_value={
+        "id": 1, "screenshot": None, "reason": "access_denied", "evidence_path": "blocked.png",
+    })
+    monkeypatch.setattr("hn2md.screenshot_capture._capture_one_attempt", capture)
+    result = _capture_one_in_process({"id": 1})
+    capture.assert_called_once()
+    assert result["attempts"] == 1
+    assert result["evidence_path"] == "blocked.png"
+
+
+def test_capture_rerun_skips_scoped_omissions_but_not_other_runs(tmp_path: Path) -> None:
+    from publisher.visual_policy import blocked_capture_waiver
+
+    ctx = _ctx(tmp_path)
+    period = time.strftime("%Y%m%d")
+    entry = blocked_capture_waiver(period, "run", 1, "https://example.com/story", "access_denied", "403")
+    with patch("hn2md.screenshot_capture._capture_one_in_process", return_value={
+        "id": 1, "screenshot": "shot.png", "duration_ms": 10,
+    }) as capture:
+        result = capture_missing_screenshots(ctx, waivers=[entry], run_id="run")
+        capture.assert_not_called()
+        assert result["waived_skipped"] == 1
+        assert result["requested"] == 0
+        result = capture_missing_screenshots(ctx, waivers=[entry], run_id="another-run")
+        capture.assert_called_once()
+        assert result["waived_skipped"] == 0
+
+
+def test_capture_preserves_blocked_source_evidence_without_publishing_it(tmp_path: Path) -> None:
+    ctx = _ctx(tmp_path)
+    with patch("hn2md.screenshot_capture._capture_one_in_process", return_value={
+        "id": 1, "screenshot": None, "reason": "verification_required", "evidence_path": "blocked.png",
+        "attempts": 1, "duration_ms": 10,
+    }):
+        result = capture_missing_screenshots(ctx)
+    assert result["captured"] == 0
+    assert result["items"][0]["news_url"] == "https://example.com/story"
+    assert result["items"][0]["evidence_path"] == "blocked.png"
+    with sqlite3.connect(ctx.db_path) as conn:
+        assert conn.execute("SELECT screenshot FROM news WHERE id=1").fetchone() == (None,)

@@ -35,8 +35,9 @@ Use collection receipts/`context_file` to inspect today's IDs, source types, art
 - `action_required=human_input_or_handler` requires source recovery, not an immediate whole-task pause; use the recovery reference. A nonempty extract or passing length check does not prove the source is complete.
 - Keep HN comments distinct from article/site comments. For Show HN, the author's submission can be an attributed `hn_submission` fallback; community comments cannot substitute for the article.
 - GitHub page URLs use their saved GitHub Open Graph sharing card plus up to two images from the page's Markdown body; the capture stage deliberately skips their browser screenshot. Verify the sharing card is present. If it is missing, rerun `collect` for that period and repair the card before upload; an arbitrary avatar or README image does not satisfy this visual gate. This rule applies to future runs, not previously published drafts.
-- Other source URLs need their screenshot before WeChat upload by default. Missing screenshots do not block planning. Retry failed captures with `capture-screenshots hackernews --rerun --concurrency 4`; if unresolved, report affected IDs/URLs and withhold upload. Only an explicit user decision to omit a specific failed screenshot permits a one-run exception: record the exact date, ID, URL and reason with `record-screenshot-waiver hackernews <id> --date YYYY-MM-DD --url "<exact URL>" --reason "<reason>" --user-confirmed`, then report the omission in the final handoff. Never fabricate a screenshot or remove a source merely to evade this gate.
-- A saved file can still show a verification/error page. Inspect suspect captures; for a user-approved replacement or omission of that invalid file, use the invalid-capture branch in [recovery commands](references/recovery.md) before rendering.
+- Other source URLs need a valid screenshot before WeChat upload by default. A rendered 403/access-denied or verification page is unusable: capture records `access_denied` or `verification_required`, skips saving that page and further retries, and automatically records an omission bound to this date, run ID, story ID and exact URL. Reruns reuse that receipt. Report omitted IDs/reasons in the final handoff; source, editorial and summary checks still apply. An HTTP client's 403 alone does not establish that a browser-rendered page is blocked.
+- Timeouts and unclassified capture failures retain the retry path: `capture-screenshots hackernews --rerun --concurrency 4`. If unresolved, report affected IDs/URLs and withhold upload unless the user explicitly accepts the exact-source omission; record it with `record-screenshot-waiver hackernews <id> --date YYYY-MM-DD --url "<exact URL>" --reason "<reason>" --user-confirmed`. Never fabricate a screenshot or remove a source merely to evade this gate.
+- A saved file can still show a verification/error page. Inspect suspect captures and use the invalid-capture branch in [recovery commands](references/recovery.md). A confirmed blocked page can be omitted without another question; a verified capture of the same original URL can replace it directly. Changing the depicted source still requires the user's acceptance. Preserve historical error images as evidence.
 
 When 用户说“补齐了”, use `set-content` as documented in the recovery reference; it refreshes context locally. Audit next without recrawling unrelated sources.
 
@@ -155,21 +156,23 @@ Do not run Astro build or include unrelated changes. Use command success/remote 
 
 After a successful draft, open today's image directory with Explorer if available. A UI failure is a reported convenience failure, not a publishing failure.
 
-## 7. Daily review and stable improvements
+## 7. Brief completion check
 
 Run once after the requested publication attempts reach their final outcome:
 
 ```powershell
-.\scripts\publisher.ps1 review-run hackernews --json
+.\scripts\publisher.ps1 review-run hackernews --brief
 ```
 
-It writes `output/reviews/run_review_{YYYYMMDD}.jsonl` and `output/reviews/run_review_latest_{YYYYMMDD}.json`. Inspect direct causes, summary ranges, story completeness, screenshots/images, keyword decisions, WeChat Media ID, and Astro evidence. Separate previews, user-requested revisions, content repairs and failure retries. Generic rerun counts do not establish repeated causes; explain conclusions that conflict with direct evidence.
+Read the compact result: requested target outcomes, story count, active blockers/warnings and `new_issue_count`. It writes the full evidence to `output/reviews/run_review_{YYYYMMDD}.jsonl` and `output/reviews/run_review_latest_{YYYYMMDD}.json`; use the existing verified WeChat/Astro receipts and unchanged story checks. When requested targets are verified, blockers are zero and there is no new anomaly, give the final handoff and stop. Known warnings remain visible; an unchanged blocker still means partial completion.
 
-If a later continuation only repairs a target such as Astro push, append its new evidence to the same day's run notes; reuse the unchanged article review. A materially changed article needs an updated review, not another counted observation day.
+For a new anomaly, inspect only its matching check/details in the snapshot and record cause, resolution or remaining work in existing run notes. Distinguish an intended second draft, approved source exception and recovered retry from a new failure. Use existing recovery commands for an unfinished requested target, preserving successful writes. Once targets are verified, record non-blocking program improvements as follow-ups; code/test/skill development belongs to an explicit fix or optimization request. Read relevant snapshot entries when brief evidence is insufficient. For an explicitly requested full diagnostic report, `.\scripts\publisher.ps1 review-run hackernews --json` is an alternative to `--brief`; changing display format alone does not justify another check.
 
-Final handoff: draft ID/link, artifact paths, Astro status/commit or outstanding reason, story count and summary ranges, unresolved issues, and concise optimization advice when supported. Do not dump empty counters. Do not end with a compulsory `/compact` message or wait for compaction to continue; preserve plans/receipts so context can be compacted when needed.
+Repeat the check only after a material repair or changed publication evidence. If a continuation only repairs Astro push, append its evidence to the same day's run notes and reuse the unchanged article review. A materially changed article needs an updated review, not another counted observation day.
 
-Recommendations use one promotion path:
+Final handoff: draft ID/link, artifact paths, Astro status/commit or outstanding reason, story count and summary ranges, and unresolved issues when present. Keep ordinary completion to verified results; a requested retrospective or new material anomaly may justify concise follow-up advice. Do not end with a compulsory `/compact` message or wait for compaction to continue; preserve plans/receipts.
+
+For a requested retrospective or workflow improvement, recommendations use one promotion path:
 
 - `observation`: one or two distinct daily runs within the latest seven.
 - `candidate`: at least three distinct daily runs with the same cause. Repeated reviews of one day do not count as more days.

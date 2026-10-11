@@ -16,6 +16,7 @@ from typing import Any, Callable
 from hn2md.context import RuntimeContext
 from src.core.github_visuals import has_saved_github_preview, is_github_page_url
 from src.db.connection import get_db
+from publisher.visual_policy import BLOCKED_CAPTURE_REASONS, screenshot_waiver_authorized
 
 
 # Chrome startup regularly takes 25+ seconds on Windows. The page handler has
@@ -32,12 +33,15 @@ def _save_screenshot_in_child(url: str, title: str, result_queue: Any) -> None:
 
     try:
         capture = capture_page_screenshot(url, title)
-        result_queue.put(
-            {
-                "screenshot": capture.path,
-                "page_preparation": {"action": capture.page_preparation_action},
-            }
-        )
+        result = {
+            "screenshot": capture.path,
+            "page_preparation": {"action": capture.page_preparation_action},
+        }
+        if capture.reason:
+            result["reason"] = capture.reason
+        if capture.evidence_path:
+            result["evidence_path"] = capture.evidence_path
+        result_queue.put(result)
     except Exception as exc:
         result_queue.put({"screenshot": None, "reason": "screenshot_error", "error": str(exc)})
 
@@ -84,7 +88,7 @@ def _capture_one_in_process(row: sqlite3.Row) -> dict[str, Any]:
     for attempt in range(1, SCREENSHOT_ATTEMPTS + 1):
         result = _capture_one_attempt(row)
         result["attempts"] = attempt
-        if result.get("screenshot"):
+        if result.get("screenshot") or result.get("reason") in BLOCKED_CAPTURE_REASONS:
             return result
     return result
 
@@ -128,6 +132,9 @@ def capture_missing_screenshots(
     concurrency: int = 4,
     progress_path: Path | None = None,
     period: str | None = None,
+    *,
+    waivers: list[dict[str, Any]] | None = None,
+    run_id: str | None = None,
 ) -> dict[str, Any]:
     """Capture missing screenshots after collection; failures remain non-blocking."""
     period = period or time.strftime("%Y%m%d")
@@ -146,6 +153,13 @@ def capture_missing_screenshots(
         ).fetchall()
     github_rows = [row for row in rows if is_github_page_url(row["news_url"])]
     rows = [row for row in rows if not is_github_page_url(row["news_url"])]
+    waived_keys = {
+        (entry.get("period"), entry.get("news_id"), entry.get("news_url"))
+        for entry in (waivers or []) if screenshot_waiver_authorized(entry, run_id)
+    }
+    waived_rows = [row for row in rows if (period, row["id"], row["news_url"]) in waived_keys]
+    rows = [row for row in rows if (period, row["id"], row["news_url"]) not in waived_keys]
+    source_urls = {row["id"]: row["news_url"] for row in rows}
 
     batch_started_at = time.monotonic()
     progress: dict[str, Any] = {
@@ -210,10 +224,16 @@ def capture_missing_screenshots(
         }
         for result in results
     ]
+    for item, result in zip(items, results):
+        # Preserve actionable failure evidence without bloating normal success receipts.
+        if result.get("reason") in BLOCKED_CAPTURE_REASONS:
+            item.update(news_url=source_urls[item["id"]], evidence_path=result.get("evidence_path"),
+                        attempts=result.get("attempts"))
     summary = {
         "requested": len(rows),
         "captured": captured,
         "github_skipped": len(github_rows),
+        "waived_skipped": len(waived_rows),
         "missing_github_previews": missing_github_previews,
         "status": "no_pending_work" if not rows else "completed",
         "timed_out": sum(result.get("reason") == "screenshot_timeout" for result in results),
