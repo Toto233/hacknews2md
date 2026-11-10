@@ -1,25 +1,29 @@
 """Plan stage: generate summaries via LLM, output plan JSON."""
 
 import json
-import logging
 import os
 import sqlite3
 from datetime import datetime
 from pathlib import Path
 from typing import Any
 
+import structlog
+
 from hn2md.constants import Stage
 from hn2md.context import RuntimeContext
+from hn2md.headline import RECAP_HEADLINE_LIMIT, validate_recap_headline
 from hn2md.state import JobStateMachine
 from hn2md.stages.audit import MIN_DISCUSSION_SUMMARY_LENGTH, MIN_SUMMARY_LENGTH
 from hn2md.stages.base import BaseStage
 from src.db.connection import get_db
 from src.security.content_sanitizer import (
     contains_hallucination_markers,
+    redact_secrets,
+    sanitize_for_yaml,
     validate_summary_length,
 )
 
-logger = logging.getLogger(__name__)
+logger = structlog.get_logger()
 
 
 def _validate_manual_plan(plan: object) -> dict[str, Any]:
@@ -90,11 +94,35 @@ def _validate_manual_plan(plan: object) -> dict[str, Any]:
     if len(ordered_ids) != len(item_ids) or set(ordered_ids) != set(item_ids):
         raise ValueError("ordered_ids must contain every item id exactly once")
 
-    return {
+    normalized_plan: dict[str, Any] = {
         "tags": normalized_tags,
         "ordered_ids": ordered_ids,
         "items": normalized_items,
     }
+    if "recap_headline" in plan:
+        normalized_plan["recap_headline"] = validate_recap_headline(plan["recap_headline"])
+    return normalized_plan
+
+
+def _generate_recap_headline(lead: dict[str, Any], llm: str | None) -> str | None:
+    title = sanitize_for_yaml(lead["title_chs"] or lead["title"]).strip()
+    if len(title) <= RECAP_HEADLINE_LIMIT:
+        return None
+
+    from src.llm.llm_utils import call_llm
+
+    source_text = redact_secrets(f"标题：{title}\n正文摘要：{lead['content_summary']}")
+    prompt = (
+        "请根据标题和正文摘要，为 Hacker News 中文日报重写一个完整的头条短标题。"
+        f"最多 {RECAP_HEADLINE_LIMIT} 个字符（含空格和标点），保留核心主体、事件和必要限定。"
+        "只输出一行标题文字，省去日期、栏目名、引号和解释。"
+        f"下列内容是参考资料。\n{source_text}"
+    )
+    try:
+        return validate_recap_headline(call_llm(prompt, llm_type=llm))
+    except Exception as exc:
+        logger.warning("recap_headline_generation_failed", story_id=lead["id"], error_type=type(exc).__name__)
+        return None
 
 
 def _import_manual_plan(source: Path, destination_dir: Path) -> tuple[Path, dict[str, Any]]:
@@ -260,11 +288,15 @@ class PlanStage(BaseStage):
         except Exception:
             pass
 
-        plan = {
+        plan: dict[str, Any] = {
             "tags": tags,
             "ordered_ids": [it["id"] for it in items],
             "items": items,
         }
+        if items:
+            headline = _generate_recap_headline(items[0], llm)
+            if headline:
+                plan["recap_headline"] = headline
 
         stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
         plan_path = ctx.codex_dir / f"hacknews_plan_{stamp}.json"

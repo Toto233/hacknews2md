@@ -101,6 +101,40 @@ def test_generate_markdown_astro_file_has_single_terminal_newline(tmp_path) -> N
     assert not astro_text.endswith("\n\n")
 
 
+@pytest.mark.parametrize(
+    ("lead", "short_headline", "expected_prefix"),
+    [
+        ("甲" * 34, "额外标题", "甲" * 34 + " | "),
+        ("甲" * 35, "完整短标题", "完整短标题 | "),
+        ("甲" * 35, None, ""),
+    ],
+)
+def test_render_uses_complete_recap_title_for_wechat_and_astro(
+    tmp_path, lead, short_headline, expected_prefix,
+) -> None:
+    ctx = _ctx(tmp_path)
+    plan_path = _plan(tmp_path)
+    if short_headline is not None:
+        plan = json.loads(plan_path.read_text(encoding="utf-8"))
+        plan["recap_headline"] = short_headline
+        plan_path.write_text(json.dumps(plan, ensure_ascii=False), encoding="utf-8")
+    with sqlite3.connect(ctx.db_path) as conn:
+        conn.execute("UPDATE news SET title_chs=? WHERE id=2", (lead,))
+
+    result = generate_markdown(
+        db_path=ctx.db_path,
+        output_dir=ctx.markdown_dir,
+        plan_file=plan_path,
+        astro_blog_dir=tmp_path / "astro",
+        now=datetime(2026, 6, 22, 12, 30),
+    )
+
+    for target in ("markdown_file", "astro_file"):
+        markdown = Path(result[target]).read_text(encoding="utf-8")
+        assert markdown.splitlines()[1] == f'title: "{expected_prefix}Hacker News 摘要 (2026-06-22)"'
+        assert f"## 1. {lead}" in markdown
+
+
 def test_render_stage_uses_applying_plan_receipt(tmp_path) -> None:
     ctx = _ctx(tmp_path)
     plan = _plan(tmp_path)

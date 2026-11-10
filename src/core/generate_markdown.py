@@ -11,6 +11,7 @@ from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any
 
+from hn2md.headline import format_recap_title
 from src.db.connection import get_db
 from src.integrations.markdown_to_html_converter import convert_markdown_to_html
 from src.security.content_sanitizer import quote_yaml_scalar, sanitize_for_yaml
@@ -91,10 +92,7 @@ def generate_markdown(
     rows = _load_rows(Path(db_path), ordered_ids)
     current = now or datetime.now()
     first = rows[0]
-    prefix = sanitize_for_yaml(first[2] or first[1] or "")
-    suffix = f" | Hacker News 摘要 ({current.strftime('%Y-%m-%d')})"
-    prefix = prefix[: max(0, 64 - len(suffix))]
-    title = prefix + suffix
+    title = format_recap_title(first[2] or first[1] or "", plan.get("recap_headline"), current.date())
     digest = (first[5] or "")[:120]
     pub_datetime = current.strftime("%Y-%m-%d %H:%M:%S") + f".{int(current.microsecond / 1000):03d}+08:00"
 

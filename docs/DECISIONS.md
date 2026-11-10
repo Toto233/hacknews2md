@@ -37,6 +37,17 @@ This file records durable project decisions that should not be changed back and 
 
 ## Accepted decisions
 
+### 2026-11-10 — Rewrite a recap headline that exceeds its character budget
+
+- Status: Accepted
+- Issue: N/A (explicit local optimization request).
+- Supersedes: N/A.
+- Context: The November 10 title combined the lead story with a dated suffix and cut the lead in the middle of a clause at the 64-character limit.
+- Decision: Keep the checked lead title when it fits. For a longer lead, Codex writes a separate `recap_headline` in the manual selection file. Automated planning uses the configured model to rewrite the selected lead from its title and summary. Both routes share the same character budget and render a complete headline with the dated suffix. An older plan without a short title or an automated run without a usable model response renders the dated recap label.
+- Failure mode of alternative: Slicing at the character limit can split the meaning mid-clause. Shortening the story heading itself removes detail from the article and invalidates its existing check. Calling a provider from manual import or rendering adds a new failure point to an offline stage.
+- Consequences: The short title is saved in the plan for reuse by WeChat and Astro. Codex checks the wording and reviews the rendered title before upload. The existing provider configuration and story checks apply.
+- Validation: 48 focused offline tests passed. They cover the 34-character boundary, the November 10 lead, manual import without provider calls, automatic rewriting after ranking, fallback behavior and matching WeChat and Astro titles.
+
 ### 2026-10-08 — Make recap copy self-contained for technology readers
 
 - Status: Accepted

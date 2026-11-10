@@ -19,11 +19,13 @@ from hn2md.state import (
     _replace_with_retry,
 )
 from hn2md.context import RuntimeContext
+from hn2md.headline import RECAP_HEADLINE_LIMIT
 from hn2md.stages.audit import run_audit
 from hn2md.stages.plan import _validate_manual_plan
 from hn2md.stages.publish import _keyword_locations, _require_screenshots_for_publish
 from publisher.context import PublisherContext
 from src.db.connection import get_db
+from src.security.content_sanitizer import sanitize_for_yaml
 from src.utils.db_utils import get_illegal_keywords
 
 logger = structlog.get_logger()
@@ -241,6 +243,15 @@ def assemble_plan(
     if not isinstance(ids, list) or not ids or any(type(value) is not int for value in ids):
         raise ValueError("ordered_ids must be a non-empty list of integer IDs")
     items = [read_json(_review_path(ctx, machine, story_id))["item"] for story_id in ids]
-    plan = require_reviewed_plan(ctx, machine, {"tags": selection.get("tags"), "ordered_ids": ids, "items": items})
+    candidate: dict[str, Any] = {"tags": selection.get("tags"), "ordered_ids": ids, "items": items}
+    if "recap_headline" in selection:
+        candidate["recap_headline"] = selection["recap_headline"]
+    plan = require_reviewed_plan(ctx, machine, candidate)
+    lead_title = sanitize_for_yaml(items[0]["title_chs"]).strip()
+    if len(lead_title) > RECAP_HEADLINE_LIMIT and "recap_headline" not in plan:
+        raise ValueError(
+            f"Lead story {ids[0]} exceeds {RECAP_HEADLINE_LIMIT} characters. "
+            f"Add a complete recap_headline of at most {RECAP_HEADLINE_LIMIT} characters to the selection file."
+        )
     _atomic_json(output_file, plan)
     return {"plan_file": str(output_file), "story_count": len(items), "ordered_ids": ids, "tags": plan["tags"]}

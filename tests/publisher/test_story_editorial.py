@@ -129,6 +129,28 @@ def test_assembly_copies_only_current_checked_text_and_exact_selection(editorial
         assemble_plan(ctx, machine, selection, output)
 
 
+def test_assembly_requires_a_short_recap_headline_for_an_overlong_lead(editorial):
+    ctx, machine, paths = editorial
+    lead = json.loads(paths[1].read_text(encoding="utf-8"))
+    lead["title_chs"] = "Foldable Flight 收录 109 款纸飞机，可以按手边的纸来选"
+    write_json(paths[1], lead)
+    check_all(editorial)
+    selection = {"ordered_ids": [2, 1], "tags": ["甲", "乙", "丙", "丁"]}
+    selection_path = write_json(ctx.project_root / "selection.json", selection)
+    output = ctx.project_root / "plan.json"
+
+    with pytest.raises(ValueError, match="recap_headline of at most 34"):
+        assemble_plan(ctx, machine, selection_path, output)
+    assert not output.exists()
+
+    selection["recap_headline"] = "Foldable Flight 收录 109 款纸飞机"
+    write_json(selection_path, selection)
+    assemble_plan(ctx, machine, selection_path, output)
+    plan = json.loads(output.read_text(encoding="utf-8"))
+    assert plan["recap_headline"] == selection["recap_headline"]
+    assert plan["items"][0]["title_chs"] == lead["title_chs"]
+
+
 def test_visual_gate_precedes_assembly_and_uses_scoped_waiver(editorial):
     ctx, machine, paths = editorial
     check_all(editorial)

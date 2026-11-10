@@ -57,7 +57,10 @@ def _write_plan(tmp_path: Path, plan: object) -> Path:
 
 
 def test_manual_plan_imports_without_external_llm(tmp_path) -> None:
-    source = _write_plan(tmp_path, _valid_plan())
+    plan = _valid_plan()
+    plan["items"][1]["title_chs"] = "超长头条" * 12
+    plan["recap_headline"] = "一条完整的日报标题"
+    source = _write_plan(tmp_path, plan)
     stage = PlanStage()
 
     with (
@@ -65,6 +68,7 @@ def test_manual_plan_imports_without_external_llm(tmp_path) -> None:
         patch("src.llm.llm_business.translate_title", side_effect=AssertionError("LLM called")) as title,
         patch("src.llm.llm_evaluator.evaluate_news_attraction", side_effect=AssertionError("LLM called")) as rank,
         patch("src.llm.llm_tag_extractor.extract_tags_with_llm", side_effect=AssertionError("LLM called")) as tags,
+        patch("src.llm.llm_utils.call_llm", side_effect=AssertionError("LLM called")) as rewrite,
     ):
         result = stage.execute(_ctx(tmp_path), object(), manual_plan_file=str(source))
 
@@ -72,11 +76,12 @@ def test_manual_plan_imports_without_external_llm(tmp_path) -> None:
     assert result["story_count"] == 2
     imported = Path(result["plan_file"])
     assert imported.parent == _ctx(tmp_path).codex_dir
-    assert json.loads(imported.read_text(encoding="utf-8"))["ordered_ids"] == [2, 1]
+    assert json.loads(imported.read_text(encoding="utf-8")) == plan
     summary.assert_not_called()
     title.assert_not_called()
     rank.assert_not_called()
     tags.assert_not_called()
+    rewrite.assert_not_called()
 
 
 def test_manual_plan_preserves_discussion_summary_source_fields(tmp_path) -> None:
@@ -92,18 +97,34 @@ def test_manual_plan_preserves_discussion_summary_source_fields(tmp_path) -> Non
     assert imported["items"][0]["discuss_summary_source_url"] == "https://news.ycombinator.com/item?id=1"
 
 
-def test_automatic_plan_reads_the_run_period_not_system_today(tmp_path) -> None:
+@pytest.mark.parametrize(
+    ("title_chs", "model_response", "expected_headline"),
+    [
+        ("标题", "", None),
+        ("甲" * 34, "", None),
+        ("甲" * 35, "一条完整短标题", "一条完整短标题"),
+        ("甲" * 35, "乙" * 35, None),
+        ("甲" * 35, TimeoutError("mocked provider timeout"), None),
+    ],
+)
+def test_automatic_plan_rewrites_only_long_leads_in_the_run_period(
+    tmp_path, title_chs, model_response, expected_headline,
+) -> None:
     ctx = _ctx(tmp_path)
     init_database(str(ctx.db_path))
     with sqlite3.connect(ctx.db_path) as conn:
-        for news_id, created_at in ((1, "2000-01-02 10:00:00"), (2, "2000-01-03 10:00:00")):
+        for news_id, created_at in (
+            (1, "2000-01-02 09:00:00"),
+            (2, "2000-01-03 10:00:00"),
+            (3, "2000-01-02 10:00:00"),
+        ):
             conn.execute(
                 "INSERT INTO news (id, title, title_chs, news_url, content_summary, discuss_summary, created_at) "
                 "VALUES (?, ?, ?, ?, ?, ?, ?)",
                 (
                     news_id,
                     f"Story {news_id}",
-                    f"标题 {news_id}",
+                    title_chs if news_id == 3 else "乙" * 35,
                     f"https://example.com/{news_id}",
                     "正文摘要。" * 60,
                     "讨论摘要。" * 40,
@@ -115,14 +136,27 @@ def test_automatic_plan_reads_the_run_period_not_system_today(tmp_path) -> None:
     with (
         patch("src.llm.llm_business.generate_summary", side_effect=AssertionError("LLM called")),
         patch("src.llm.llm_business.translate_title", side_effect=AssertionError("LLM called")),
-        patch("src.llm.llm_evaluator.evaluate_news_attraction", return_value=([], None)),
+        patch("src.llm.llm_evaluator.evaluate_news_attraction", return_value=([(3, 10), (1, 5)], None)),
         patch("src.llm.llm_tag_extractor.extract_tags_with_llm", return_value=["标签1", "标签2", "标签3", "标签4"]),
+        patch("src.llm.llm_utils.call_llm") as rewrite,
     ):
-        result = PlanStage().execute(ctx, machine)
+        if isinstance(model_response, Exception):
+            rewrite.side_effect = model_response
+        else:
+            rewrite.return_value = model_response
+        result = PlanStage().execute(ctx, machine, llm="grok")
 
     plan = json.loads(Path(result["plan_file"]).read_text(encoding="utf-8"))
-    assert result["story_count"] == 1
-    assert plan["ordered_ids"] == [1]
+    assert result["story_count"] == 2
+    assert plan["ordered_ids"] == [3, 1]
+    assert plan["items"][0]["title_chs"] == title_chs
+    assert plan.get("recap_headline") == expected_headline
+    if len(title_chs) > 34:
+        rewrite.assert_called_once()
+        assert rewrite.call_args.kwargs == {"llm_type": "grok"}
+        assert title_chs in rewrite.call_args.args[0]
+    else:
+        rewrite.assert_not_called()
 
 
 @pytest.mark.parametrize(
@@ -131,6 +165,8 @@ def test_automatic_plan_reads_the_run_period_not_system_today(tmp_path) -> None:
         (lambda plan: plan["items"].append(dict(plan["items"][0])), "duplicate"),
         (lambda plan: plan.update(ordered_ids=[1]), "ordered_ids"),
         (lambda plan: plan.update(tags=["只有一个"]), "four"),
+        (lambda plan: plan.update(recap_headline="超" * 35), "at most 34"),
+        (lambda plan: plan.update(recap_headline="甲\n乙"), "single-line"),
         (lambda plan: plan["items"][0].update(title_chs=""), "title_chs"),
         (lambda plan: plan["items"][0].update(content_summary="太短"), "content_summary"),
         (lambda plan: plan["items"][0].update(discuss_summary="太短"), "discuss_summary"),

@@ -98,7 +98,7 @@ The compact result reports only that story's blockers, lengths and pending keywo
 
 Only after `ready: true` (all per-story editorial/source/summary/keyword checks and the final screenshot/sharing-card gate) choose article order, four tags and the cover topic. Until then, spend work on outstanding stories, not recap assembly, ranking, rendering or ImageGen. Source images/screenshots can be collected earlier; this defers the generated cover, not source evidence.
 
-Create a selection file containing only `{"tags": ["标签1", "标签2", "标签3", "标签4"], "ordered_ids": [2870]}`. It must cover every retained story once. Assembly copies the checked text unchanged; it calls no LLM:
+Create a selection file with four `tags` and `ordered_ids` covering every retained story once. The recap title uses the first story's Chinese title plus the fixed dated suffix. If the lead exceeds 34 characters including spaces and punctuation, use Codex to write a complete `recap_headline` of at most 34 characters. Use the checked lead summary to retain the subject, event and necessary qualifications. Enter only the short title, without the suffix. Assembly validates it and copies the checked stories unchanged. It calls no external LLM.
 
 ```powershell
 .\scripts\publisher.ps1 assemble-plan hackernews --selection-file "<selection.json>" --output ".\output\codex\hacknews_plan_YYYYMMDD_HHMMSS.json"
@@ -110,7 +110,7 @@ Create a selection file containing only `{"tags": ["标签1", "标签2", "标签
 
 Manual import/apply require current story receipts. Strict audit remains a deterministic consistency check before render, cover and upload, not another full editorial rewrite. `summary_too_short` and `discussion_summary_too_short` cannot use `--approve`; repair/check only the affected story, reassemble, then rerun invalidated stages. Reuse unchanged passed items and an accepted cover when its topic/copy remain valid. An unchanged, fingerprint-approved source exception may leave raw `blocking_count` nonzero; let the application enforce exemption validity.
 
-Inspect generated `markdown_file` and `html_file`: order, four tags, links, paragraphs and source attribution must match the accepted plan; final HTML image references must resolve and preserve the intended image count. For full publication, inspect `astro_file` or the explicit skip reason. For a WeChat-only rerender use `render hackernews --target wechat --rerun`.
+Inspect the rendered frontmatter title before uploading. Read the entire title with the suffix and apply the same contextual keyword review as for the story text. Check order, four tags, links, paragraphs, source attribution and image references in the generated `markdown_file` and `html_file`. For full publication, inspect `astro_file` or the explicit skip reason. For a WeChat-only rerender use `render hackernews --target wechat --rerun`.
 
 ## 4. Cover
 
