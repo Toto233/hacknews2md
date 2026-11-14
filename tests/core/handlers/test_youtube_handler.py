@@ -73,6 +73,7 @@ class _Transcript:
 
 
 def _install_fake_transcript_api(monkeypatch, transcript_list) -> None:
+    monkeypatch.setattr("src.core.handlers.youtube_handler.validate_url", lambda url: url)
     class FakeYouTubeTranscriptApi:
         def list(self, video_id):
             assert video_id == "abc123"

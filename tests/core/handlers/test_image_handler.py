@@ -4,9 +4,12 @@ from concurrent.futures import ThreadPoolExecutor
 from io import BytesIO
 
 import pytest
+import requests
 from PIL import Image
 
 from src.core.handlers.image_handler import (
+    ArticleImageResult,
+    download_article_image,
     get_extension_from_content_type,
     is_low_signal_article_image_url,
     save_article_image,
@@ -158,14 +161,21 @@ class _ImageResponse:
 
     def __init__(self, payload: bytes) -> None:
         self.payload = payload
+        self.closed = False
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *exc_info) -> None:
+        self.closed = True
 
     def iter_content(self, chunk_size: int):
         yield self.payload
 
 
-def _png_payload() -> bytes:
+def _png_payload(size: tuple[int, int] = (120, 120)) -> bytes:
     output = BytesIO()
-    Image.new("RGB", (120, 120), "white").save(output, "PNG")
+    Image.new("RGB", size, "white").save(output, "PNG")
     return output.getvalue()
 
 
@@ -193,3 +203,62 @@ def test_save_article_image_converts_from_temp_file_and_keeps_unique_paths(monke
     assert all(path.endswith(".png") for path in paths)
     assert all("(" not in path and ")" not in path for path in paths)
     assert not list((tmp_path / "output" / "images").rglob("*.part"))
+
+
+@pytest.mark.parametrize("url, decorative", [
+    ("https://analytics.brave.com/piwik.php?idsite=2&rec=1", True),
+    ("https://brave.com/static-assets/images/playstore.en.png", True),
+    ("https://folklore.org/images/rightarrow.gif", True),
+    ("https://example.com/vidframe_min_top-1024x33.png", True),
+    ("https://example.com/images/demo.gif", False),
+    ("https://example.com/thumbnail/1200x800/site-map.png", False),
+])
+def test_observed_decorative_urls(url: str, decorative: bool) -> None:
+    assert is_low_signal_article_image_url(url) == decorative
+
+
+@pytest.mark.parametrize("status, payload, expected", [
+    (429, b"", ArticleImageResult(reason="http_status", status_code=429)),
+    (200, b"corrupt image", ArticleImageResult(reason="decode_failed")),
+    (200, _png_payload((96, 120)), ArticleImageResult(reason="too_small")),
+])
+def test_download_article_image_records_rejection_and_cleans_up(monkeypatch, tmp_path, status, payload, expected) -> None:
+    from src.core.handlers import image_handler
+
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(image_handler, "validate_url", lambda _url: None)
+    response = _ImageResponse(payload)
+    response.status_code = status
+    monkeypatch.setattr(image_handler.requests, "get", lambda *args, **kwargs: response)
+
+    assert download_article_image("https://example.com/figure.webp", "https://example.com") == expected
+    assert response.closed
+    assert not any(path.is_file() for path in tmp_path.rglob("*"))
+
+
+def test_download_article_image_handles_stream_read_timeout(monkeypatch, tmp_path) -> None:
+    from src.core.handlers import image_handler
+
+    class TimedOutResponse(_ImageResponse):
+        def iter_content(self, chunk_size: int):
+            yield self.payload
+            try:
+                raise requests.packages.urllib3.exceptions.ReadTimeoutError(None, None, "timed out")
+            except requests.packages.urllib3.exceptions.ReadTimeoutError as exc:
+                raise requests.exceptions.ConnectionError(exc)
+
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(image_handler, "validate_url", lambda _url: None)
+    response = TimedOutResponse(b"part of an image")
+
+    def get(*args, **kwargs):
+        assert kwargs["timeout"] == (5, 15)
+        return response
+
+    monkeypatch.setattr(image_handler.requests, "get", get)
+
+    result = download_article_image("https://example.com/figure.webp", "https://example.com")
+
+    assert result.reason == "timeout"
+    assert response.closed
+    assert not any(path.is_file() for path in tmp_path.rglob("*"))

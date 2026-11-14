@@ -9,12 +9,15 @@ from datetime import datetime
 from typing import Any
 from urllib.parse import urlparse
 
+import structlog
+
 from hn2md.constants import Stage
 from hn2md.context import RuntimeContext
 from hn2md.state import JobStateMachine
 from hn2md.stages.base import BaseStage
 from src.db.connection import get_db
 
+logger = structlog.get_logger()
 MIN_ARTICLE_CONTENT_CHARS = 100
 HN_DISCUSSION_CONCURRENCY = 1
 HN_DISCUSSION_RETRY_DELAY_SECONDS = 8.0
@@ -40,12 +43,6 @@ def _is_youtube_url(url: str) -> bool:
     """Return True for YouTube video URLs handled by youtube_handler."""
     host = urlparse(url).netloc.lower()
     return host in {"youtube.com", "www.youtube.com", "youtu.be"}
-
-
-def _github_image_filter_url(url: str) -> str:
-    """Avoid rejecting a README image because its repository name says 'logo'."""
-    parsed = urlparse(url)
-    return parsed._replace(path=f"/{parsed.path.rsplit('/', 1)[-1]}").geturl()
 
 
 async def _fetch_discussion_with_retries(
@@ -87,7 +84,11 @@ async def _collect_item(row: sqlite3.Row, semaphore: asyncio.Semaphore, db_path:
     from src.core.content_quality import is_paywall_or_shell_content
     from src.core.handlers.article_handler_registry import resolve_article_handler
     from src.core.handlers.fediverse_handler import get_fediverse_content, is_fediverse_url
-    from src.core.handlers.image_handler import is_low_signal_article_image_url, save_article_image
+    from src.core.handlers.image_handler import (
+        ArticleImageResult,
+        download_article_image,
+        is_article_image_candidate,
+    )
     from src.core.github_visuals import (
         github_preview_filename,
         has_saved_github_preview,
@@ -104,6 +105,7 @@ async def _collect_item(row: sqlite3.Row, semaphore: asyncio.Semaphore, db_path:
         discussion_content = (row["discussion_content"] or "").strip()
         image_paths = [path for path in (row["largest_image"], row["image_2"], row["image_3"]) if path]
         image_warnings: list[dict[str, Any]] = []
+        image_skips: list[dict[str, Any]] = []
         content_warnings: list[dict[str, Any]] = []
         discussion_warnings: list[dict[str, Any]] = []
         screenshot = row["screenshot"]
@@ -207,51 +209,40 @@ async def _collect_item(row: sqlite3.Row, semaphore: asyncio.Semaphore, db_path:
                 candidate_image_urls = [
                     image_url
                     for image_url in image_urls
-                    if (
-                        github_page
-                        and is_github_social_preview_url(image_url)
-                    ) or not is_low_signal_article_image_url(
-                        _github_image_filter_url(image_url) if github_page else image_url
-                    )
+                    if is_article_image_candidate(image_url, github_page=github_page)
                 ]
                 if github_page:
                     candidate_image_urls.sort(key=lambda url: not is_github_social_preview_url(url))
                 for index, image_url in enumerate(candidate_image_urls[:3], 1):
+                    official_preview = github_page and is_github_social_preview_url(image_url)
+                    image_name = (
+                        github_preview_filename(row["id"]) if official_preview else f"{row['title']}_{index}"
+                    )
                     try:
-                        image_name = (
-                            github_preview_filename(row["id"])
-                            if github_page and is_github_social_preview_url(image_url)
-                            else f"{row['title']}_{index}"
-                        )
-                        saved = await asyncio.to_thread(
-                            save_article_image,
+                        result = await asyncio.to_thread(
+                            download_article_image,
                             image_url,
                             news_url,
                             image_name,
                         )
                     except Exception as exc:
-                        saved = None
-                        image_warnings.append(
-                            {
-                                "id": row["id"],
-                                "title": row["title"] or "",
-                                "image_url": image_url,
-                                "reason": "exception",
-                                "error": str(exc),
-                            }
-                        )
-                    if saved:
-                        saved_images.append(saved)
+                        logger.error("article_image_download_failed", story_id=row["id"], error_type=type(exc).__name__)
+                        result = ArticleImageResult(reason="exception")
+                    if result.path:
+                        saved_images.append(result.path)
+                        continue
+                    outcome = {
+                        "id": row["id"],
+                        "title": row["title"] or "",
+                        "image_url": image_url,
+                        "reason": result.reason,
+                    }
+                    if result.status_code is not None:
+                        outcome["status_code"] = result.status_code
+                    if result.reason == "too_small" and not official_preview:
+                        image_skips.append(outcome)
                     else:
-                        if not image_warnings or image_warnings[-1].get("image_url") != image_url:
-                            image_warnings.append(
-                                {
-                                    "id": row["id"],
-                                    "title": row["title"] or "",
-                                    "image_url": image_url,
-                                    "reason": "save_failed",
-                                }
-                            )
+                        image_warnings.append(outcome)
                 if saved_images:
                     image_paths = saved_images
 
@@ -304,6 +295,7 @@ async def _collect_item(row: sqlite3.Row, semaphore: asyncio.Semaphore, db_path:
             "content_source_url": content_source_url,
             "content_source_doi": content_source_doi,
             "image_warnings": image_warnings,
+            "image_skips": image_skips,
             "content_warnings": content_warnings,
             "discussion_warnings": discussion_warnings,
             "collected": collected,
@@ -439,6 +431,7 @@ class CollectStage(BaseStage):
             for item in items
             for warning in item.get("image_warnings", [])
         ]
+        image_skips = [skip for item in items for skip in item.get("image_skips", [])]
         content_warnings = [
             warning
             for item in items
@@ -468,6 +461,7 @@ class CollectStage(BaseStage):
             "concurrency": concurrency,
             "context_file": str(context_path),
             "image_warnings": image_warnings,
+            "image_skips": image_skips,
             "content_warnings": content_warnings,
             "discussion_warnings": discussion_warnings,
         }

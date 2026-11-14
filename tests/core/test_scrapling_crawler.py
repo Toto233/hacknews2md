@@ -118,6 +118,22 @@ def test_crawl_handles_page_without_text(monkeypatch: pytest.MonkeyPatch) -> Non
     ) == ("", [])
 
 
+def test_article_images_after_decorations_reach_collection(monkeypatch: pytest.MonkeyPatch) -> None:
+    parser = pytest.importorskip("scrapling.parser")
+    decorations = ''.join(
+        f'<img src="https://emoji.discourse-cdn.com/apple/emoji-{number}.png">' for number in range(12)
+    )
+    images = '<img src="/walkthrough.gif"><img src="/benchmark-1200x800.png">'
+    page = parser.Adaptor(text=f"<html><body>{decorations}<article>{images}</article></body></html>")
+    monkeypatch.setattr(_FakeFetcher, "get", lambda *_args, **_kwargs: page)
+
+    _, candidates = asyncio.run(
+        scrapling_crawler.ScraplingCrawler(max_images=2).crawl_article("https://example.com/article")
+    )
+
+    assert candidates == ["https://example.com/walkthrough.gif", "https://example.com/benchmark-1200x800.png"]
+
+
 def test_github_crawl_uses_social_card_and_readme_images_not_page_chrome(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

@@ -19,12 +19,14 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import sqlite3
 from datetime import datetime
 from pathlib import Path
 from typing import Any
 
 from hn2md.stages.audit import MIN_DISCUSSION_SUMMARY_LENGTH, MIN_SUMMARY_LENGTH
+from src.core.github_visuals import has_saved_github_preview, is_github_page_url, is_github_social_preview_url
 from src.db.connection import get_db
 from src.utils.jsonl_writer import append_jsonl
 
@@ -606,27 +608,95 @@ def _split_resolved_discussion_warnings(
     return active, resolved
 
 
-def _image_warning_resolution(db_path: Path | None, warning: dict[str, Any]) -> str | None:
+def _image_warning_resolution(
+    db_path: Path | None,
+    warning: dict[str, Any],
+    date_str: str | None,
+    published_sections: list[set[str]],
+    rewritten_images: dict[str, str],
+) -> str | None:
     """Return the visual fallback that makes an image-download warning non-actionable."""
     if db_path is None or warning.get("id") is None:
         return None
+    story_id = warning["id"]
     try:
-        with get_db(str(db_path)) as conn:
+        with get_db(str(db_path), read_only=True) as conn:
+            params = (story_id, date_str, date_str)
             row = conn.execute(
-                "SELECT screenshot FROM news WHERE id=?", (warning["id"],)
+                "SELECT news_url, discuss_url, largest_image, screenshot FROM news "
+                "WHERE id=? AND (? IS NULL OR strftime('%Y%m%d', created_at)=?)", params
             ).fetchone()
-    except Exception:
+            if row is None and date_str is not None:
+                row = conn.execute(
+                    "SELECT news_url, discuss_url, largest_image, screenshot FROM news_history "
+                    "WHERE id=? AND strftime('%Y%m%d', created_at)=?", (story_id, date_str)
+                ).fetchone()
+    except (OSError, sqlite3.Error):
         return None
-    return "screenshot_fallback_captured" if row and str(row[0] or "").strip() else None
+
+    if row is None:
+        return None
+    news_url, discuss_url, image_path, screenshot = row
+    try:
+        official_warning = is_github_page_url(news_url or "") and is_github_social_preview_url(
+            str(warning.get("image_url") or "")
+        )
+    except ValueError:
+        official_warning = False
+    if not official_warning:
+        return "screenshot_fallback_captured" if str(screenshot or "").strip() else None
+    if not published_sections or not has_saved_github_preview(image_path, story_id):
+        return None
+
+    rewritten_path = rewritten_images.get(image_path, image_path)
+    image_targets = {image_path, rewritten_path, rewritten_images.get(rewritten_path, rewritten_path)}
+    for section in published_sections:
+        if f"原文链接：{news_url}" not in section:
+            continue
+        if discuss_url and f"论坛讨论链接：{discuss_url}" not in section:
+            continue
+        for line in section:
+            if line.startswith("![") and line.endswith(")"):
+                target = line.rpartition("](")[-1][:-1]
+                if target in image_targets and Path(target).is_file():
+                    return "github_preview_restored"
+    return None
 
 
 def _split_resolved_image_warnings(
-    db_path: Path | None, warnings: list[Any]
+    db_path: Path | None, warnings: list[Any], *,
+    date_str: str | None = None, publish_output: dict[str, Any] | None = None,
 ) -> tuple[list[Any], dict[str, list[dict[str, Any]]]]:
+    published_sections: list[set[str]] = []
+    rewritten_images: dict[str, str] = {}
+    markdown_file = publish_output.get("markdown_file") if publish_output else None
+    if isinstance(markdown_file, (str, Path)) and markdown_file:
+        try:
+            markdown = Path(markdown_file).read_text(encoding="utf-8-sig")
+            published_sections = [
+                set(section.splitlines()) for section in re.split(r"(?m)^## \d+\. ", markdown)[1:]
+            ]
+        except (OSError, UnicodeError):
+            pass
+    if published_sections and publish_output:
+        for record_key, path_key in (("converted_images", "converted_path"), ("compressed_images", "compressed_path")):
+            records = publish_output.get(record_key)
+            if not isinstance(records, list):
+                continue
+            for record in records:
+                if not isinstance(record, dict):
+                    continue
+                original_path, new_path = record.get("original_path"), record.get(path_key)
+                if isinstance(original_path, str) and isinstance(new_path, str):
+                    rewritten_images[original_path] = new_path
+
     active: list[Any] = []
     resolved: dict[str, list[dict[str, Any]]] = {}
     for warning in warnings:
-        resolution = _image_warning_resolution(db_path, warning) if isinstance(warning, dict) else None
+        resolution = (
+            _image_warning_resolution(db_path, warning, date_str, published_sections, rewritten_images)
+            if isinstance(warning, dict) else None
+        )
         if resolution:
             resolved.setdefault(resolution, []).append(warning)
         else:
@@ -884,7 +954,7 @@ def _receipt_warning_key(stage_name: str, warning_key: str, warning: Any) -> str
     if isinstance(warning, dict):
         identity = {
             key: warning.get(key)
-            for key in ("id", "url", "image_url", "reason", "action_required")
+            for key in ("id", "url", "image_url", "reason", "action_required", "status_code")
             if warning.get(key) is not None
         }
         return json.dumps([stage_name, warning_key, identity], ensure_ascii=False, sort_keys=True)
@@ -920,6 +990,16 @@ def _check_stage_receipts(
     receipts_by_stage: dict[str, list[dict[str, Any]]] = {}
     seen_warning_keys: set[str] = set()
     skipped_stories = skipped_stories or []
+    publish_receipt = stages.get("PUBLISHING") or {}
+    publish_output = None
+    if (
+        isinstance(publish_receipt, dict)
+        and publish_receipt.get("success") is True
+        and not _receipt_superseded(publish_receipt, superseded_before)
+        and isinstance(publish_receipt.get("output_summary"), dict)
+        and not publish_receipt["output_summary"].get("dry_run")
+    ):
+        publish_output = publish_receipt["output_summary"]
 
     for stage_name, receipt in _iter_stage_receipts(stages, receipt_history):
         receipts_by_stage.setdefault(stage_name, []).append(receipt)
@@ -985,7 +1065,9 @@ def _check_stage_receipts(
                 continue
 
             if key == "image_warnings":
-                warnings, resolved_warnings = _split_resolved_image_warnings(db_path, warnings)
+                warnings, resolved_warnings = _split_resolved_image_warnings(
+                    db_path, warnings, date_str=date_str, publish_output=publish_output,
+                )
                 for resolution, resolved in resolved_warnings.items():
                     findings.append(
                         _finding(

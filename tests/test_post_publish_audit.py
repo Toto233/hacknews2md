@@ -784,6 +784,67 @@ def test_image_download_warning_is_resolved_when_screenshot_exists(tmp_path: Pat
     }
 
 
+@pytest.mark.parametrize("placement", ["same_story", "rewritten", "other_story", "omitted", "missing_file", "dry_run"])
+def test_archived_github_preview_warning_requires_card_in_published_story(tmp_path: Path, placement: str) -> None:
+    from PIL import Image
+
+    from hn2md.stages.post_publish_audit import _check_stage_receipts
+    from src.db.connection import get_db
+    from src.utils.db_utils import init_database
+
+    date = "20261112"
+    source = "https://github.com/aws/aws-emulator"
+    discuss_url = "https://news.ycombinator.com/item?id=50456631"
+    card = tmp_path / "GitHubPreview_4829.png"
+    if placement != "missing_file":
+        Image.new("RGB", (120, 120)).save(card)
+    db_path = tmp_path / "test.db"
+    init_database(str(db_path))
+    with get_db(str(db_path)) as conn:
+        conn.execute(
+            "INSERT INTO news_history (id, title, news_url, discuss_url, largest_image, screenshot, created_at) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?)",
+            (4829, "AWS Emulator", source, discuss_url, str(card), "old-screenshot.png", "2026-11-12 08:00:00"),
+        )
+
+    markdown = tmp_path / "published.md"
+    output_summary = {"markdown_file": str(markdown)}
+    rendered_card = card
+    if placement == "rewritten":
+        rendered_card = tmp_path / "GitHubPreview_4829_wechat.jpg"
+        Image.new("RGB", (120, 120)).save(rendered_card)
+        output_summary["compressed_images"] = [{"original_path": str(card), "compressed_path": str(rendered_card)}]
+    if placement == "dry_run":
+        output_summary["dry_run"] = True
+    image = f"![AWS Emulator]({rendered_card})\n\n"
+    markdown.write_text(
+        "## 1. AWS Emulator\n\n"
+        + (image if placement in {"same_story", "rewritten", "missing_file", "dry_run"} else "")
+        + f"原文链接：{source}\n\n论坛讨论链接：{discuss_url}\n\n"
+        + "## 2. Other story\n\n"
+        + (image if placement == "other_story" else ""),
+        encoding="utf-8",
+    )
+    warning = {"id": 4829, "image_url": "https://opengraph.githubassets.com/old/aws/aws-emulator", "reason": "save_failed"}
+    collecting_history = {"success": True, "output_summary": {"image_warnings": [warning]}}
+    findings = _check_stage_receipts(
+        {
+            "COLLECTING": {"success": True, "output_summary": {"image_warnings": []}},
+            "PUBLISHING": {"success": True, "output_summary": output_summary},
+        },
+        date,
+        db_path,
+        {"COLLECTING": [collecting_history]},
+    )
+    assert len(findings) == 1
+    assert findings[0]["details"]["warnings"] == [warning]
+    if placement in {"same_story", "rewritten"}:
+        assert findings[0]["severity"] == "info"
+        assert findings[0]["details"]["resolution"] == "github_preview_restored"
+    else:
+        assert findings[0]["severity"] == "warning"
+
+
 def test_post_publish_review_reports_cookie_dismissals_as_info(tmp_path: Path) -> None:
     from datetime import datetime
 

@@ -37,6 +37,16 @@ This file records durable project decisions that should not be changed back and 
 
 ## Accepted decisions
 
+### 2026-11-14 — Filter decorative images early and verify recovered GitHub previews
+
+- Status: Accepted
+- Issue: N/A. The user requested the image optimization from the daily review.
+- Context: The November 11, 12 and 14 reviews recorded navigation GIFs, Discourse emoji, tracking pixels and small thumbnails as download failures. On November 12 the AWS Emulator's official GitHub card was recovered and rendered, but two historical download warnings stayed active because review only checked for a screenshot.
+- Decision: Apply the same conservative URL filter before the crawler's candidate limit and before collection selects up to three images. Recognize observed decorative filenames, dedicated emoji and tracking hosts, and explicit dimensions below the existing 100-pixel minimum. Keep content GIFs eligible. Record actual HTTP status, transport, decode and file failures. Record undersized body images as skips and undersized required GitHub cards as warnings. Resolve official GitHub download warnings when the matching date and story record has the saved card and the successful publication's Markdown embeds it in that story. A recorded WeChat conversion or compression can provide the embedded copy.
+- Failure mode of alternative: Decorative images can crowd out useful figures before downloads begin. Treating every GIF as decorative loses article visuals. Checking only for a local card or screenshot can hide a card that is absent from the finished article.
+- Consequences: The existing GitHub sharing-card gate and ordinary screenshot fallback still apply. The three-download limit remains per story. Requests use a five-second connect timeout and a fifteen-second read timeout. Historical receipts retain their original failure records.
+- Validation: 163 focused offline tests passed. Read-only replay of the three dated reviews identified 15 decorative URLs and retained the four failed Maya and Google content-image URLs as candidates. Both historical AWS Emulator warnings resolved against the saved November 12 Markdown and archived story. No new dependency was added.
+
 ### 2026-11-10 — Rewrite a recap headline that exceeds its character budget
 
 - Status: Accepted

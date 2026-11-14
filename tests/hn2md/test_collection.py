@@ -7,6 +7,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 from hn2md.context import RuntimeContext
 from hn2md.stages.collect import CollectStage, _fetch_discussion_with_retries, write_collection_context
+from src.core.handlers.image_handler import ArticleImageResult
 
 
 def _ctx(tmp_path: Path) -> RuntimeContext:
@@ -92,7 +93,7 @@ def test_collect_stage_collects_full_context_and_writes_snapshot(tmp_path) -> No
             "src.core.handlers.discussion_handler.get_discussion_content_async",
             new=AsyncMock(return_value="HN discussion"),
         ),
-        patch("src.core.handlers.image_handler.save_article_image", side_effect=["one.png", "two.png"]),
+        patch("src.core.handlers.image_handler.download_article_image", side_effect=[ArticleImageResult(path="one.png"), ArticleImageResult(path="two.png")]),
         patch("src.core.handlers.screenshot_handler.save_page_screenshot", return_value="shot.png"),
     ):
         result = CollectStage().execute(ctx, object(), concurrency=2)
@@ -125,7 +126,9 @@ def test_collect_stage_collects_full_context_and_writes_snapshot(tmp_path) -> No
 def test_collect_stage_reports_image_save_failures_in_receipt_summary(tmp_path) -> None:
     ctx = _ctx(tmp_path)
     crawler = MagicMock()
-    crawler.crawl_article = AsyncMock(return_value=("Readable article body " * 10, ["https://img/fail.jpg"]))
+    crawler.crawl_article = AsyncMock(
+        return_value=("Readable article body " * 10, ["https://img/fail.jpg", "https://img/small.jpg"])
+    )
     crawler.close = AsyncMock()
 
     with (
@@ -134,7 +137,10 @@ def test_collect_stage_reports_image_save_failures_in_receipt_summary(tmp_path) 
             "src.core.handlers.discussion_handler.get_discussion_content_async",
             new=AsyncMock(return_value="HN discussion"),
         ),
-        patch("src.core.handlers.image_handler.save_article_image", return_value=None),
+        patch(
+            "src.core.handlers.image_handler.download_article_image",
+            side_effect=[ArticleImageResult(reason="http_status", status_code=429), ArticleImageResult(reason="too_small")],
+        ),
         patch("src.core.handlers.screenshot_handler.save_page_screenshot", return_value="shot.png"),
     ):
         result = CollectStage().execute(ctx, object(), concurrency=2)
@@ -144,8 +150,12 @@ def test_collect_stage_reports_image_save_failures_in_receipt_summary(tmp_path) 
             "id": 1,
             "title": "Story",
             "image_url": "https://img/fail.jpg",
-            "reason": "save_failed",
+            "reason": "http_status",
+            "status_code": 429,
         }
+    ]
+    assert result["image_skips"] == [
+        {"id": 1, "title": "Story", "image_url": "https://img/small.jpg", "reason": "too_small"}
     ]
 
 
@@ -159,6 +169,9 @@ def test_collect_stage_filters_decorative_images_before_saving(tmp_path) -> None
                 "https://assets.apnews.com/ap-logo-176-by-208.svg",
                 "https://img.shields.io/badge/Postgres-18.3-brightgreen",
                 "https://static.example.com/getitongoogleplay-badge-web-color-english.png",
+                "https://neil.fraser.name/news/tree-node.gif",
+                "https://emoji.discourse-cdn.com/apple/wink.png?v=16",
+                "https://cdn.example.com/thumbnail/96x96/sample.png",
                 "https://cdn.example.com/article-photo.jpg",
             ],
         )
@@ -171,7 +184,9 @@ def test_collect_stage_filters_decorative_images_before_saving(tmp_path) -> None
             "src.core.handlers.discussion_handler.get_discussion_content_async",
             new=AsyncMock(return_value="HN discussion"),
         ),
-        patch("src.core.handlers.image_handler.save_article_image", return_value="article.jpg") as save_image,
+        patch(
+            "src.core.handlers.image_handler.download_article_image", return_value=ArticleImageResult(path="article.jpg"),
+        ) as save_image,
         patch("src.core.handlers.screenshot_handler.save_page_screenshot", return_value="shot.png"),
     ):
         result = CollectStage().execute(ctx, object(), concurrency=1)
@@ -207,7 +222,7 @@ def test_github_collection_saves_sharing_card_before_readme_images(tmp_path: Pat
     with (
         patch("src.core.crawlers.scrapling_crawler.ScraplingCrawler", return_value=crawler),
         patch("src.core.handlers.discussion_handler.get_discussion_content_async", new=AsyncMock(return_value="HN discussion")),
-        patch("src.core.handlers.image_handler.save_article_image", side_effect=[str(preview), str(body)]) as save_image,
+        patch("src.core.handlers.image_handler.download_article_image", side_effect=[ArticleImageResult(path=str(preview)), ArticleImageResult(path=str(body))]) as save_image,
     ):
         CollectStage().execute(ctx, object(), concurrency=1)
 
@@ -241,7 +256,7 @@ def test_github_collect_retries_missing_card_without_replacing_existing_text(tmp
     with (
         patch("src.core.crawlers.scrapling_crawler.ScraplingCrawler", return_value=crawler),
         patch("src.core.handlers.discussion_handler.get_discussion_content_async", new=AsyncMock(return_value="HN discussion")),
-        patch("src.core.handlers.image_handler.save_article_image", return_value=str(preview)),
+        patch("src.core.handlers.image_handler.download_article_image", return_value=ArticleImageResult(path=str(preview))),
     ):
         CollectStage().execute(ctx, object(), concurrency=1)
 
@@ -271,7 +286,7 @@ def test_collect_stage_filters_tracking_and_rss_images_before_saving(tmp_path) -
     with (
         patch("src.core.crawlers.scrapling_crawler.ScraplingCrawler", return_value=crawler),
         patch("src.core.handlers.discussion_handler.get_discussion_content_async", new=AsyncMock(return_value="HN discussion")),
-        patch("src.core.handlers.image_handler.save_article_image", return_value="article.jpg") as save_image,
+        patch("src.core.handlers.image_handler.download_article_image", return_value=ArticleImageResult(path="article.jpg")) as save_image,
         patch("src.core.handlers.screenshot_handler.save_page_screenshot", return_value="shot.png"),
     ):
         result = CollectStage().execute(ctx, object(), concurrency=1)
@@ -328,7 +343,7 @@ def test_collect_stage_routes_github_blob_pdf_to_pdf_handler(tmp_path) -> None:
             "hn2md.stages.collect._crawl_article_with_scrapling",
             new=AsyncMock(return_value=("", ["https://opengraph.githubassets.com/hash/deepseek-ai/DeepSpec"])),
         ) as crawl_page,
-        patch("src.core.handlers.image_handler.save_article_image", return_value=str(preview)),
+        patch("src.core.handlers.image_handler.download_article_image", return_value=ArticleImageResult(path=str(preview))),
         patch(
             "src.core.handlers.discussion_handler.get_discussion_content_async",
             new=AsyncMock(return_value="HN discussion"),
@@ -432,7 +447,7 @@ def test_collect_stage_routes_openai_urls_to_official_handler(tmp_path) -> None:
         ) as handler,
         patch("src.core.crawlers.scrapling_crawler.ScraplingCrawler") as crawler_cls,
         patch("src.core.handlers.discussion_handler.get_discussion_content_async", new=AsyncMock(return_value="HN discussion")),
-        patch("src.core.handlers.image_handler.save_article_image", return_value="openai-hero.jpg") as save_image,
+        patch("src.core.handlers.image_handler.download_article_image", return_value=ArticleImageResult(path="openai-hero.jpg")) as save_image,
     ):
         result = CollectStage().execute(ctx, object(), concurrency=1)
 
@@ -500,7 +515,7 @@ def test_collect_stage_falls_back_after_official_handler_failure(tmp_path) -> No
         ) as handler,
         patch("src.core.crawlers.scrapling_crawler.ScraplingCrawler", return_value=crawler),
         patch("src.core.handlers.discussion_handler.get_discussion_content_async", new=AsyncMock(return_value="HN discussion")),
-        patch("src.core.handlers.image_handler.save_article_image", return_value="qwen-hero.jpg"),
+        patch("src.core.handlers.image_handler.download_article_image", return_value=ArticleImageResult(path="qwen-hero.jpg")),
     ):
         result = CollectStage().execute(ctx, object(), concurrency=1)
 

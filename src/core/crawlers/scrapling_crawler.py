@@ -65,6 +65,8 @@ class ScraplingCrawler:
             logger.warning("[SCRAPLING] Fetch returned no page for %s", url[:60])
             return "", []
 
+        from src.core.handlers.image_handler import is_article_image_candidate
+
         # Include text following inline tags; get_all_text() can omit node tails.
         content = "\n".join(
             str(node)
@@ -73,6 +75,7 @@ class ScraplingCrawler:
 
         # --- image URLs ------------------------------------------------------
         images: list[str] = []
+        github_page = is_github_page_url(url)
         try:
             # Prefer the publisher-selected sharing image as a fallback. Many
             # sites lazy-load article images or protect their CDN URLs, while
@@ -82,22 +85,25 @@ class ScraplingCrawler:
                 if not source:
                     continue
                 source = self._resolve_url(url, source)
-                if source.startswith("http") and source not in images:
+                if source.startswith("http") and source not in images and is_article_image_candidate(
+                    source, github_page=github_page,
+                ):
                     images.append(source)
             # GitHub's page chrome contains avatars and badges before the
             # README. The sharing card above and images inside the article are
             # the useful visuals for a repository recap.
-            article_images = (
-                page.css(".markdown-body img")
-                if is_github_page_url(url)
-                else page.css("img")[:10]
-            )
-            for img in article_images[:10]:
+            article_images = page.css(".markdown-body img" if github_page else "img")
+            max_candidates = min(self._max_images, len(images) + 10)
+            for img in article_images:
+                if len(images) >= max_candidates:
+                    break
                 src = img.attrib.get("src") or img.attrib.get("data-src")
                 if not src:
                     continue
                 src = self._resolve_url(url, src)
-                if src.startswith("http") and src not in images:
+                if src.startswith("http") and src not in images and is_article_image_candidate(
+                    src, github_page=github_page,
+                ):
                     images.append(src)
         except Exception as exc:
             logger.warning("[SCRAPLING] Image extraction failed: %s", exc)
