@@ -52,6 +52,8 @@ Raw `blocking_count > 0` and command exit status do not establish whether an exc
 
 Use `draft-plan` for navigation and bounded input. Read a story's full `context_file` entry when excerpts do not support its claims. Complete its source comparison, draft and check before moving on; batch independent story work only when useful, with each returned story checked separately. Pass bounded IDs and evidence rather than full chat history. The main agent owns DB/ledger writes and publication.
 
+For a truncated HN excerpt, disputed claim or unclear reply, use `discussion_archive_file` to read the relevant comment IDs and their parent context. Check the archive's `complete` flag before treating it as the whole discussion.
+
 Save each item as `output/codex/stories_YYYYMMDD/story_<id>.json`. It needs no order, tags or cover:
 
 ```json
@@ -96,7 +98,7 @@ The compact result reports only that story's blockers, lengths and pending keywo
 .\scripts\publisher.ps1 story-status hackernews
 ```
 
-Only after `ready: true` (all per-story editorial/source/summary/keyword checks and the final screenshot/sharing-card gate) choose article order, four tags and the cover topic. Until then, spend work on outstanding stories, not recap assembly, ranking, rendering or ImageGen. Source images/screenshots can be collected earlier; this defers the generated cover, not source evidence.
+Only after `ready: true` (all per-story editorial/source/summary/keyword checks and the final screenshot/sharing-card gate) choose article order, four tags and the cover topic. `story-status` reports `title_chs_length` and `needs_recap_headline` for each ready item so you can tell before assembly whether the chosen lead needs `recap_headline`. Until then, spend work on outstanding stories, not recap assembly, ranking, rendering or ImageGen. Source images/screenshots can be collected earlier; this defers the generated cover, not source evidence.
 
 Create a selection file with four `tags` and `ordered_ids` covering every retained story once. The recap title uses the first story's Chinese title plus the fixed dated suffix. If the lead exceeds 34 characters including spaces and punctuation, use Codex to write a complete `recap_headline` of at most 34 characters. Use the checked lead summary to retain the subject, event and necessary qualifications. Enter only the short title, without the suffix. Assembly validates it and copies the checked stories unchanged. It calls no external LLM.
 

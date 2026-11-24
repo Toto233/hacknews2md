@@ -169,7 +169,14 @@ def reviewed_stories(ctx: PublisherContext, machine: JobStateMachine) -> dict[st
             if not valid:
                 raise ValueError("missing/failed/stale check; rerun check-story for this ID")
             _, pending = _keyword_reviews(ctx, machine, item)
-            status.update(title_chs=item["title_chs"], ready=not pending, pending_keyword_reviews=pending)
+            title_chs_length = len(sanitize_for_yaml(item["title_chs"]).strip())
+            status.update(
+                title_chs=item["title_chs"],
+                title_chs_length=title_chs_length,
+                needs_recap_headline=title_chs_length > RECAP_HEADLINE_LIMIT,
+                ready=not pending,
+                pending_keyword_reviews=pending,
+            )
             drafts[story_id] = item
         except (ValueError, KeyError, TypeError, AttributeError) as exc:
             status["reason"] = str(exc)

@@ -5,7 +5,7 @@ description: Generate or edit WeChat 21:9 article covers with standard ImageGen,
 
 # WeChat Cover ImageGen
 
-Deliver a balanced image-and-type WeChat cover using the standard built-in `image_gen.imagegen` tool. The publishing workflow owns registration and upload; this skill owns the visual artifact.
+Deliver a balanced image-and-type WeChat cover using the current harness's built-in standard ImageGen tool (such as Codex `image_gen.imagegen` or Antigravity `image-generator`). The publishing workflow owns registration and upload; this skill owns the visual artifact.
 
 ## Choose the copy
 
@@ -21,7 +21,7 @@ Read [the prompt template](references/prompt-template.md) when composing the ima
 
 The output contract is:
 
-- 21:9 horizontal cover; 2100 × 900 is a prompt target, not a guaranteed tool output size.
+- 21:9 horizontal cover; 2100 × 900 is a prompt target, not a guaranteed tool output size. If the built-in ImageGen tool's widest supported ratio is 16:9 (or outputs JPEG), compose with generous top/bottom breathing room and apply a pure center-crop (no drawn or overlaid text) to a 21:9 PNG while preserving the generated original.
 - Exact `DISPLAY_TITLE` is the only visible text unless the user requests more.
 - Design the full 21:9 image as the primary composition. Put the recognizable subject or visual metaphor in the middle region and the title in a left or right text zone, with enough inner margin to remain legible.
 - Keep image and text in balance: the title is large enough for mobile reading but does not cover the subject or turn the whole cover into a wall of type.

@@ -4,7 +4,9 @@
 
 One repository and one Python distribution own both sources. `publisher/` owns the HackerNews orchestration entry; `hn2md/` and `src/` implement its stages and integrations. `ph2md/` owns Product Hunt monthly data, editing, state and receipts. `publisher_shared/wechat/` owns shared Markdown conversion and WeChat transport. New daily HackerNews workflow behavior belongs in `publisher/`; Product Hunt workflow behavior belongs in `ph2md/`.
 
-Daily commands run from this repository through `./scripts/publisher.ps1 <command> <source>`, which selects the configured runtime. For HackerNews start with `.\scripts\publisher.ps1 status hackernews` and the maintained [publishing skill](skills/publish-hacknews-codex/SKILL.md). Codex publishing uses its manual-plan route; a bare automated `release` is not a substitute for that editorial work.
+Daily commands run from this repository through `./scripts/publisher.ps1 <command> <source>`, which selects the configured runtime. For HackerNews start with `.\scripts\publisher.ps1 status hackernews` and the maintained [publishing skill](skills/publish-hacknews-codex/SKILL.md). Interactive agent publishing (shared across Codex, Antigravity, and other harnesses) uses its manual-plan route; a bare automated `release` is not a substitute for that editorial work. Keep `AGENTS.md`, `skills/`, and `scripts/` as the single source of truth across harnesses instead of creating parallel harness-specific workflows.
+
+For sandboxed harnesses, separate offline workspace commands (`status`, `audit`, `check-story`, `story-status`, `assemble-plan`, `plan`, `apply`, `cover`, `review-run`, `ph2md doctor/audit/preview`) from commands that require outbound network or external Astro repository access (`fetch`, `collect`, `capture-screenshots`, `render` with Astro, `publish`, `record-astro`, `ph2md fetch/render/publish`).
 
 Read task-specific guidance when it applies:
 

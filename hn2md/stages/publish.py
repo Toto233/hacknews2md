@@ -107,6 +107,16 @@ def _require_screenshots_for_publish(
     return waived
 
 
+def _is_sentence_boundary(text: str, pos: int) -> bool:
+    """Return True if text[pos] is a sentence terminator rather than a decimal point."""
+    ch = text[pos]
+    if ch not in ".!?。！？":
+        return False
+    if ch == "." and pos > 0 and pos + 1 < len(text) and text[pos - 1].isdigit() and text[pos + 1].isdigit():
+        return False
+    return True
+
+
 def _sentence_for_keyword(line: str, keyword: str) -> str:
     """Return the full sentence containing keyword within a markdown line."""
     stripped = line.strip()
@@ -116,13 +126,13 @@ def _sentence_for_keyword(line: str, keyword: str) -> str:
 
     start = 0
     for pos in range(index - 1, -1, -1):
-        if stripped[pos] in ".!?。！？":
+        if _is_sentence_boundary(stripped, pos):
             start = pos + 1
             break
 
     end = len(stripped)
     for pos in range(index + len(keyword), len(stripped)):
-        if stripped[pos] in ".!?。！？":
+        if _is_sentence_boundary(stripped, pos):
             end = pos + 1
             break
 
@@ -177,6 +187,14 @@ def _keyword_locations(markdown_content: str, keywords: list[str], markdown_file
                 legacy = warning.setdefault("legacy_sentences", [])
                 if legacy_sentence not in legacy:
                     legacy.append(legacy_sentence)
+            if not is_image and re.match(r"^#{1,6}\s", line.strip()):
+                heading_match = re.fullmatch(r"(.+?)\s+\([^()]+\)", visible)
+                if heading_match:
+                    base_heading = heading_match.group(1).strip()
+                    if keyword in base_heading and base_heading != sentence:
+                        legacy = warning.setdefault("legacy_sentences", [])
+                        if base_heading not in legacy:
+                            legacy.append(base_heading)
     return locations
 
 
